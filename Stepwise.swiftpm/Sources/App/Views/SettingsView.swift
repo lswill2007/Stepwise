@@ -4,6 +4,7 @@ struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @State private var path: [String] = []
+    @State private var showConsent = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -51,11 +52,25 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Text("API Key 保存在本机钥匙串中，只会发送给对应服务商的接口地址。")
-                        .font(.caption).foregroundStyle(.secondary)
+                    LabeledContent("发送题目给 AI 服务商") {
+                        Text(store.aiConsent == true ? "已同意" : "未同意")
+                            .foregroundStyle(store.aiConsent == true ? Color.green : Color.orange)
+                    }
+                    Button("查看数据发送说明", systemImage: "hand.raised") { showConsent = true }
+                    Link(destination: AppInfo.privacyPolicyURL) {
+                        Label("隐私政策", systemImage: "doc.text")
+                    }
+                    Link(destination: AppInfo.supportURL) {
+                        Label("帮助与反馈", systemImage: "questionmark.circle")
+                    }
+                } header: {
+                    Text("数据与隐私")
+                } footer: {
+                    Text("API Key 保存在本机钥匙串中，只会发送给对应服务商的接口地址。Stepwise 不收集任何数据。")
                 }
             }
             .navigationTitle("设置")
+            .sheet(isPresented: $showConsent) { ConsentView() }
             .navigationDestination(for: String.self) { id in
                 ProviderEditView(providerID: id)
             }

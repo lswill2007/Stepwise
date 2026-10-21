@@ -25,6 +25,7 @@ struct ImportView: View {
     @State private var progressText = ""
     @State private var task: Task<Void, Never>?
     @State private var showSettings = false
+    @State private var showConsent = false
 
     private static let examples = ["每个小问单独作为一道题", "只要选择题", "忽略答案和解析部分", "保留原题号"]
 
@@ -146,6 +147,10 @@ struct ImportView: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showConsent, onDismiss: {
+                // 刚同意就接着开始拆分
+                if store.aiConsent == true { start() }
+            }) { ConsentView() }
             .fileImporter(isPresented: $showFilePicker,
                           allowedContentTypes: [.pdf, .image, .plainText, .text, .rtf, .commaSeparatedText],
                           allowsMultipleSelection: false) { result in
@@ -218,6 +223,11 @@ struct ImportView: View {
 
     private func start() {
         guard let source = currentMaterial else { return }
+        // 拆分需要把题目发给 AI，先确认用户已同意
+        guard store.aiConsent == true else {
+            showConsent = true
+            return
+        }
         working = true
         progressText = "正在拆分…"
         task = Task {
@@ -228,7 +238,7 @@ struct ImportView: View {
                 store.addSet(newSet)
                 dismiss()
             } catch {
-                if !(error is CancellationError) {
+                if !(error is CancellationError) && !(error is ConsentRequired) {
                     store.errorMessage = error.localizedDescription
                 }
             }

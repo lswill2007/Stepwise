@@ -46,14 +46,25 @@ struct RootView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
+        .sheet(isPresented: $store.showConsent, onDismiss: {
+            // 同意后如果还没有填写任何 Key，接着引导去设置
+            if store.aiConsent == true && !store.providers.contains(where: \.hasKey) { showSettings = true }
+        }) {
+            ConsentView()
+        }
         .alert("出错了", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("好") { store.errorMessage = nil }
         } message: {
             Text(store.errorMessage ?? "")
         }
         .onAppear {
-            // 第一次打开且还没有任何 Key 时，直接引导去设置
-            if !store.providers.contains(where: \.hasKey) { showSettings = true }
+            if store.aiConsent == nil {
+                // 第一次打开：先说明数据会发送到哪里
+                store.showConsent = true
+            } else if !store.providers.contains(where: \.hasKey) {
+                // 还没有任何 Key 时，直接引导去设置
+                showSettings = true
+            }
         }
     }
 }

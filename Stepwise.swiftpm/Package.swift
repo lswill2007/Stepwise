@@ -18,11 +18,11 @@ let products: [Product] = [
         teamIdentifier: "",
         displayVersion: "1.0",
         bundleVersion: "1",
-        appIcon: .placeholder(icon: .leaf),
+        appIcon: .asset("AppIcon"),
         accentColor: .presetColor(.indigo),
+        // 第一版只支持 iPad
         supportedDeviceFamilies: [
-            .pad,
-            .phone
+            .pad
         ],
         supportedInterfaceOrientations: [
             .portrait,
@@ -33,7 +33,8 @@ let products: [Product] = [
         capabilities: [
             .camera(purposeString: "用于扫描纸质题目")
         ],
-        appCategory: .education
+        appCategory: .education,
+        additionalInfoPlistContentFilePath: "Info-additional.plist"
     )
 ]
 #else
@@ -50,7 +51,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "AppModule",
-            path: "Sources/App"
+            path: "Sources/App",
+            resources: [
+                .process("Resources")
+            ]
         )
     ]
 )

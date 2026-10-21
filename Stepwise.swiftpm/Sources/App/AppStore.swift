@@ -32,6 +32,18 @@ final class AppStore: ObservableObject {
     @Published var pending: [UUID: PendingReply] = [:]
     @Published var errorMessage: String?
 
+    // MARK: 数据发送同意
+    /// 是否已同意把题目和作答发送给第三方 AI 服务商（nil 表示还没选择过）
+    @Published private(set) var aiConsent: Bool? = {
+        UserDefaults.standard.object(forKey: "aiConsent") as? Bool
+    }()
+    @Published var showConsent = false
+
+    func setAIConsent(_ value: Bool) {
+        aiConsent = value
+        UserDefaults.standard.set(value, forKey: "aiConsent")
+    }
+
     private var saveTask: Task<Void, Never>?
     private var replyTasks: [UUID: Task<Void, Never>] = [:]
 
@@ -135,6 +147,11 @@ final class AppStore: ObservableObject {
     }
 
     func makeClient() throws -> LLMClient {
+        // 没有同意数据发送说明之前，不向任何 AI 服务商发送内容
+        guard aiConsent == true else {
+            showConsent = true
+            throw ConsentRequired()
+        }
         guard let config = activeProvider else { throw LLMError(message: "请先在设置里选择一个模型服务商。") }
         return LLMClient(config: config, apiKey: config.apiKey)
     }
@@ -307,7 +324,7 @@ final class AppStore: ObservableObject {
         guard !isBusy(qID) else { return }
         let client: LLMClient
         do { client = try makeClient() } catch {
-            errorMessage = error.localizedDescription
+            if !(error is ConsentRequired) { errorMessage = error.localizedDescription }
             ImageStore.delete(userMessage.imageIDs)
             return
         }
@@ -446,4 +463,9 @@ final class AppStore: ObservableObject {
             ? (suggestedTitle ?? material.name) : title
         return QuestionSet(title: finalTitle, requirement: requirement, questions: questions)
     }
+}
+
+/// 需要先同意数据发送说明（会弹出说明页，不显示错误提示）
+struct ConsentRequired: LocalizedError {
+    var errorDescription: String? { "需要先同意数据发送说明才能使用 AI 功能。" }
 }
