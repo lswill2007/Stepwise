@@ -3,11 +3,16 @@ import SwiftUI
 @main
 struct StepwiseApp: App {
     @StateObject private var store = AppStore()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
+        }
+        // 退到后台时立即保存题库，避免被系统关闭时丢失最后的改动
+        .onChange(of: scenePhase) {
+            if scenePhase != .active { store.saveNow() }
         }
     }
 }

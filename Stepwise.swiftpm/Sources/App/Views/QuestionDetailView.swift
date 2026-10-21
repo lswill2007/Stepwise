@@ -5,8 +5,18 @@ struct QuestionDetailView: View {
     let setID: UUID
     let qID: UUID
 
-    @StateObject private var handwriting = HandwritingModel()
-    @State private var useHandwriting = false
+    @StateObject private var handwriting: HandwritingModel
+    @State private var useHandwriting: Bool
+    @State private var draftSaveTask: Task<Void, Never>?
+    @Environment(\.scenePhase) private var scenePhase
+
+    init(setID: UUID, qID: UUID) {
+        self.setID = setID
+        self.qID = qID
+        _handwriting = StateObject(wrappedValue: HandwritingModel(questionID: qID))
+        // 上次在这道题上手写过，就直接回到手写模式
+        _useHandwriting = State(initialValue: HandwritingModel.isAvailable && DrawingStore.exists(qID))
+    }
     @State private var draft = ""
     @State private var chatInput = ""
     @State private var showSettings = false
@@ -84,6 +94,8 @@ struct QuestionDetailView: View {
             .confirmationDialog("清空这道题的作答和对话记录，重新开始？", isPresented: $confirmReset, titleVisibility: .visible) {
                 Button("清空并重做", role: .destructive) {
                     store.resetQuestion(setID, qID)
+                    draftSaveTask?.cancel()
+                    draft = ""
                     handwriting.clear()
                 }
             }
@@ -92,7 +104,28 @@ struct QuestionDetailView: View {
             .onChange(of: useHandwriting) {
                 if useHandwriting { store.setFullScreen(true) }
             }
-            .onDisappear { saveDraft() }
+            // 打字停顿 1 秒自动保存草稿
+            .onChange(of: draft) {
+                draftSaveTask?.cancel()
+                draftSaveTask = Task {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    saveDraft()
+                }
+            }
+            // 退到后台 / 关闭 App 前立即保存
+            .onChange(of: scenePhase) {
+                if scenePhase != .active { saveEverything() }
+            }
+            // 检查通过后，写过的草稿已经作为作答记录保存，清掉
+            .onChange(of: q.status) {
+                if q.status == .passed {
+                    draftSaveTask?.cancel()
+                    draft = ""
+                    handwriting.clear()
+                }
+            }
+            .onDisappear { saveEverything() }
         }
     }
 
@@ -397,6 +430,13 @@ struct QuestionDetailView: View {
     }
 
     // MARK: - 辅助
+
+    private func saveEverything() {
+        draftSaveTask?.cancel()
+        saveDraft()
+        handwriting.saveNow()
+        store.saveNow()
+    }
 
     private func saveDraft() {
         let text = draft

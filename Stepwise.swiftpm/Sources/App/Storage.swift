@@ -111,3 +111,38 @@ enum ImageUtil {
         return ctx.makeImage() ?? image
     }
 }
+
+/// 每道题写了一半的手写笔迹（PencilKit 数据），保存在本机，切题或退出 App 都不会丢
+enum DrawingStore {
+    static let directory: URL = {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("drawings", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    private static func url(_ id: UUID) -> URL {
+        directory.appendingPathComponent(id.uuidString + ".drawing")
+    }
+
+    static func exists(_ id: UUID) -> Bool {
+        FileManager.default.fileExists(atPath: url(id).path)
+    }
+
+    static func load(_ id: UUID) -> Data? {
+        try? Data(contentsOf: url(id))
+    }
+
+    /// data 为 nil 表示没有笔迹，删除文件
+    static func save(_ data: Data?, for id: UUID) {
+        if let data {
+            try? data.write(to: url(id), options: .atomic)
+        } else {
+            try? FileManager.default.removeItem(at: url(id))
+        }
+    }
+
+    static func delete(_ ids: [UUID]) {
+        for id in ids { save(nil, for: id) }
+    }
+}

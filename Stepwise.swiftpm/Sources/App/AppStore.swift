@@ -67,6 +67,14 @@ final class AppStore: ObservableObject {
         return set
     }
 
+    /// 立即写盘（App 退到后台、切题时调用，避免最后几秒的改动丢失）
+    func saveNow() {
+        saveTask?.cancel()
+        if let data = try? JSONEncoder().encode(sets) {
+            try? data.write(to: Self.libraryURL, options: .atomic)
+        }
+    }
+
     private func scheduleSave() {
         saveTask?.cancel()
         let snapshot = sets
@@ -157,6 +165,7 @@ final class AppStore: ObservableObject {
         guard let s = set(id) else { return }
         for q in s.questions { cancelReply(q.id) }
         ImageStore.delete(s.questions.flatMap { q in q.imageIDs + q.messages.flatMap(\.imageIDs) })
+        DrawingStore.delete(s.questions.map(\.id))
         sets.removeAll { $0.id == id }
         if selectedSetID == id {
             selectedSetID = nil
@@ -176,7 +185,9 @@ final class AppStore: ObservableObject {
             q.messages = []
             q.status = .todo
             q.hintCount = 0
+            q.draftAnswer = ""
         }
+        DrawingStore.delete([qID])
     }
 
     func neighbor(of qID: UUID, in setID: UUID, offset: Int) -> UUID? {
