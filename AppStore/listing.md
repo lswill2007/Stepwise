@@ -68,7 +68,7 @@ Stepwise 是一位耐心的 AI 刷题老师：不直接给答案，而是一步�
 · 写到一半切到别的题或退出 App，笔迹和草稿都会自动保存
 
 【使用你自己的 AI】
-· 支持 OpenAI、Anthropic Claude、Google Gemini、DeepSeek、通义千问、Kimi、智谱 GLM、xAI Grok、OpenRouter、硅基流动，以及任何 OpenAI 兼容接口
+· 支持 OpenAI、Anthropic Claude、Google Gemini、DeepSeek、通义千问、Kimi、智谱 GLM、xAI Grok，以及 OpenRouter、AIHubMix、硅基流动等聚合平台（一个 Key 用几百个模型）和任何 OpenAI 兼容接口
 · 使用你自己申请的 API Key，费用由服务商按用量收取；做题时可以随时切换模型
 
 【隐私】
@@ -128,7 +128,7 @@ BUILT FOR MATH & SCIENCE
 • Unfinished answers and handwriting are saved automatically
 
 BRING YOUR OWN AI
-• Works with OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Qwen, Kimi, GLM, xAI Grok, OpenRouter and any OpenAI-compatible endpoint
+• Works with OpenAI, Anthropic Claude, Google Gemini, DeepSeek, Qwen, Kimi, GLM, xAI Grok, aggregators like OpenRouter and AIHubMix (hundreds of models with one key), and any OpenAI-compatible endpoint
 • Uses your own API key; usage is billed by your provider. Switch models at any time
 
 PRIVACY

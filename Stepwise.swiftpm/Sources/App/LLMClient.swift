@@ -155,6 +155,9 @@ struct LLMClient {
         let m = model.lowercased()
         switch config.apiProtocol {
         case .openAI:
+            if config.id != "openrouter" && config.isAggregator {
+                return Self.aggregatorFastParameters(model: model)
+            }
             switch config.id {
             case "openai":
                 // 只有推理模型接受 reasoning_effort
@@ -186,6 +189,28 @@ struct LLMClient {
             if m.contains("2.5-pro") {
                 return ["generationConfig": ["thinkingConfig": ["thinkingBudget": 128]]]
             }
+            return [:]
+        }
+    }
+
+    /// 聚合平台（OpenAI 兼容格式）：按模型所属厂商带上对应的少思考参数；平台不接受时会自动去掉重试
+    static func aggregatorFastParameters(model: String) -> [String: Any] {
+        let name = ModelInfo.baseName(model)
+        switch ModelInfo.family(model) {
+        case .openai:
+            let reasoning = name.hasPrefix("gpt-5") || name.hasPrefix("o1") || name.hasPrefix("o3") || name.hasPrefix("o4")
+            return reasoning ? ["reasoning_effort": "low"] : [:]
+        case .google:
+            // Gemini 的 OpenAI 兼容接口接受 reasoning_effort
+            return (name.contains("2.5") || name.contains("gemini-3")) ? ["reasoning_effort": "low"] : [:]
+        case .qwen:
+            return (name.hasPrefix("qwen3") || name.hasPrefix("qwq") || name.contains("plus") || name.contains("max"))
+                ? ["enable_thinking": false] : [:]
+        case .zhipu:
+            return (name.contains("4.5") || name.contains("4.6") || name.contains("glm-z")) ? ["thinking": ["type": "disabled"]] : [:]
+        case .moonshot, .doubao:
+            return name.contains("thinking") ? [:] : ["thinking": ["type": "disabled"]]
+        default:
             return [:]
         }
     }

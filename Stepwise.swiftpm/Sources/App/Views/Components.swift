@@ -59,7 +59,8 @@ struct ModelMenu: View {
             }
             ForEach(configured) { p in
                 Menu(p.name) {
-                    ForEach(p.allModels, id: \.self) { m in
+                    // 只列常用模型，聚合平台几百个模型放进菜单没法选
+                    ForEach(p.menuModels, id: \.self) { m in
                         Button {
                             store.select(provider: p.id, model: m)
                         } label: {
@@ -69,6 +70,10 @@ struct ModelMenu: View {
                                 Text(m)
                             }
                         }
+                    }
+                    if p.allModels.count > p.menuModels.count {
+                        Divider()
+                        Button("更多模型…（在设置里加星标为常用）", systemImage: "star", action: onOpenSettings)
                     }
                 }
             }

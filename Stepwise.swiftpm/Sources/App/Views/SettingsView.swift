@@ -82,6 +82,17 @@ struct SettingsView: View {
         }
     }
 
+    /// 某个服务商的常用模型（批改模型选择页里也能加星）
+    private func favoritesBinding(for providerID: String) -> Binding<[String]> {
+        Binding(
+            get: { store.providers.first { $0.id == providerID }?.favoriteModels ?? [] },
+            set: { newValue in
+                guard var p = store.providers.first(where: { $0.id == providerID }) else { return }
+                p.favoriteModels = newValue
+                store.updateProvider(p)
+            })
+    }
+
     // MARK: - 批改速度
 
     private var gradingSection: some View {
@@ -107,19 +118,12 @@ struct SettingsView: View {
             }
 
             if let id = store.gradingProviderID, let p = store.providers.first(where: { $0.id == id }) {
-                if p.allModels.isEmpty {
-                    TextField("模型名称", text: $store.gradingModel)
-                        .autocorrectionDisabled()
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        #endif
-                } else {
-                    Picker("模型", selection: $store.gradingModel) {
-                        ForEach(p.allModels, id: \.self) { Text($0).tag($0) }
-                        if !p.allModels.contains(store.gradingModel) && !store.gradingModel.isEmpty {
-                            Text(store.gradingModel).tag(store.gradingModel)
-                        }
-                    }
+                NavigationLink {
+                    ModelBrowser(title: "批改与提示模型", models: p.allModels,
+                                 selection: $store.gradingModel,
+                                 favorites: favoritesBinding(for: p.id))
+                } label: {
+                    LabeledContent("模型", value: store.gradingModel.isEmpty ? "未选择" : store.gradingModel)
                 }
                 if store.gradingProvider == nil {
                     Label("请选择一个模型，否则会继续使用当前模型", systemImage: "exclamationmark.triangle")
@@ -155,9 +159,13 @@ struct ProviderEditView: View {
         }
         .navigationTitle(config?.name ?? "")
         .onAppear {
-            config = store.providers.first { $0.id == providerID }
-            apiKey = Keychain.get(providerID) ?? ""
+            // 从模型选择页返回时不能用旧数据覆盖刚改的内容
+            if config == nil {
+                config = store.providers.first { $0.id == providerID }
+                apiKey = Keychain.get(providerID) ?? ""
+            }
         }
+        .onChange(of: config) { persist() }
         .onDisappear(perform: persist)
     }
 
@@ -180,15 +188,21 @@ struct ProviderEditView: View {
         }
 
         Section("模型") {
-            TextField("模型名称", text: c.model)
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                #endif
-            if !c.wrappedValue.allModels.isEmpty {
-                Picker("从列表选择", selection: c.model) {
-                    ForEach(c.wrappedValue.allModels, id: \.self) { Text($0).tag($0) }
+            NavigationLink {
+                ModelBrowser(title: c.wrappedValue.name, models: c.wrappedValue.allModels,
+                             selection: c.model,
+                             favorites: Binding(get: { c.wrappedValue.favoriteModels ?? [] },
+                                                set: { c.wrappedValue.favoriteModels = $0 }),
+                             onFetch: apiKey.isEmpty ? nil : { await fetchModelsAsync() })
+            } label: {
+                LabeledContent("模型") {
+                    Text(c.wrappedValue.model.isEmpty ? "选择模型" : c.wrappedValue.model)
+                        .lineLimit(1).truncationMode(.middle)
                 }
+            }
+            if let favorites = c.wrappedValue.favoriteModels, !favorites.isEmpty {
+                Text("常用：" + favorites.joined(separator: "、"))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             Button {
                 fetchModels()
@@ -200,7 +214,10 @@ struct ProviderEditView: View {
             }
             .disabled(fetching || apiKey.isEmpty)
             if !c.wrappedValue.fetchedModels.isEmpty {
-                Text("已获取 \(c.wrappedValue.fetchedModels.count) 个模型").font(.caption).foregroundStyle(.secondary)
+                let all = c.wrappedValue.fetchedModels
+                let chat = all.filter { !ModelInfo.isNonChat($0) }.count
+                Text(chat == all.count ? "已获取 \(all.count) 个模型" : "已获取 \(all.count) 个模型，其中 \(chat) 个可以用来做题")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
 
@@ -261,19 +278,27 @@ struct ProviderEditView: View {
     }
 
     private func fetchModels() {
-        guard let config else { return }
         fetching = true
         Task {
-            defer { fetching = false }
-            do {
-                let models = try await LLMClient(config: config, apiKey: apiKey).listModels()
-                self.config?.fetchedModels = models
-                if self.config?.model.isEmpty == true, let first = models.first { self.config?.model = first }
-                persist()
-                testResult = models.isEmpty ? "服务商没有返回模型列表，请手动填写模型名称。" : nil
-            } catch {
-                testResult = error.localizedDescription
+            await fetchModelsAsync()
+            fetching = false
+        }
+    }
+
+    private func fetchModelsAsync() async {
+        guard let config else { return }
+        do {
+            let models = try await LLMClient(config: config, apiKey: apiKey).listModels()
+            self.config?.fetchedModels = models
+            // 还没选模型时，默认选第一个能对话的模型（聚合平台按字母排序，第一个可能是绘图模型）
+            if self.config?.model.isEmpty == true,
+               let first = models.first(where: { !ModelInfo.isNonChat($0) }) ?? models.first {
+                self.config?.model = first
             }
+            persist()
+            testResult = models.isEmpty ? "服务商没有返回模型列表，请手动填写模型名称。" : nil
+        } catch {
+            testResult = error.localizedDescription
         }
     }
 
