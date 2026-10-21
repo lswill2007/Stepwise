@@ -26,16 +26,22 @@ struct RootView: View {
         NavigationSplitView(columnVisibility: $store.columnVisibility) {
             SidebarView(showImport: $showImport, showSettings: $showSettings)
         } content: {
-            if let setID = store.selectedSetID, store.set(setID) != nil {
+            if store.isMistakeBook {
+                MistakeBookView()
+            } else if let setID = store.selectedSetID, store.set(setID) != nil {
                 QuestionListView(setID: setID)
             } else {
                 ContentUnavailableView("选择或导入题集", systemImage: "tray",
                                        description: Text("在左侧选择一个题集，或点击 + 导入题目文件"))
             }
         } detail: {
-            if let setID = store.selectedSetID, let qID = store.selectedQuestionID, store.question(setID, qID) != nil {
-                QuestionDetailView(setID: setID, qID: qID)
-                    .id(qID)
+            // 错题本里的题来自不同题集，按题目找到它所在的题集
+            if let qID = store.selectedQuestionID,
+               let setID = store.isMistakeBook ? store.setID(containing: qID) : store.selectedSetID,
+               store.question(setID, qID) != nil {
+                QuestionDetailView(setID: setID, qID: qID, fromMistakeBook: store.isMistakeBook)
+                    // 同一道题从错题本和从题集打开是两种模式，要重新创建页面
+                    .id("\(qID)-\(store.isMistakeBook)")
             } else {
                 ContentUnavailableView("选择一道题开始", systemImage: "pencil.and.list.clipboard")
             }

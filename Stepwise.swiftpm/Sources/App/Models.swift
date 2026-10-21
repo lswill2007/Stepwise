@@ -51,6 +51,17 @@ struct Question: Codable, Identifiable, Equatable {
     var hintCount = 0
     var messages: [ChatMessage] = []
     var isGenerated = false
+
+    // 以下字段都是可选的：旧版本保存的数据里没有它们，也能正常读取
+
+    /// 加入错题本的时间；nil 表示不在错题本里
+    var starredAt: Date?
+    /// 错题复习进行到第几轮（每检查一次或请求一次提示算一轮）；nil 表示没有在复习
+    var reviewRounds: Int?
+    /// 重新练习之前的作答记录（每次重新练习保存一份）
+    var previousAttempts: [[ChatMessage]]?
+
+    var isStarred: Bool { starredAt != nil }
 }
 
 struct QuestionSet: Codable, Identifiable, Equatable {

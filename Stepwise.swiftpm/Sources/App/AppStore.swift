@@ -8,6 +8,13 @@ struct PendingReply: Equatable {
     var startedAt = Date()
 }
 
+/// 错题复习的结果（只在本次打开 App 期间显示）
+enum ReviewOutcome: Equatable {
+    case mastered(rounds: Int)   // 2 轮内做对，已移出错题本
+    case keep(rounds: Int)       // 用了 3 轮以上，留在错题本
+    case revealed                // 看了完整答案，留在错题本
+}
+
 /// AI 请求的用途，决定用哪个模型、是否用快速模式
 enum RequestPurpose {
     case check, hint, solution, chat, split
@@ -22,6 +29,15 @@ final class AppStore: ObservableObject {
     @Published var sets: [QuestionSet] = [] { didSet { scheduleSave() } }
     @Published var selectedSetID: UUID?
     @Published var selectedQuestionID: UUID?
+    /// 错题复习结果提示
+    @Published var reviewOutcomes: [UUID: ReviewOutcome] = [:]
+
+    /// 左侧“错题本”这一项的固定 id
+    static let mistakeBookID = UUID(uuidString: "00000000-0000-0000-0000-00000000E001")!
+    /// 错题本里几轮内做对就移出
+    static let masteryRounds = 2
+
+    var isMistakeBook: Bool { selectedSetID == Self.mistakeBookID }
     /// 左侧两栏（题集、题目列表）是否显示；.detailOnly 为全屏做题
     @Published var columnVisibility: NavigationSplitViewVisibility = .all
 
@@ -86,9 +102,15 @@ final class AppStore: ObservableObject {
         .appendingPathComponent("library.json")
 
     init() {
-        if let data = try? Data(contentsOf: Self.libraryURL),
-           let decoded = try? JSONDecoder().decode([QuestionSet].self, from: data) {
-            sets = decoded.map(Self.cleaned)
+        if let data = try? Data(contentsOf: Self.libraryURL) {
+            if let decoded = try? JSONDecoder().decode([QuestionSet].self, from: data) {
+                sets = decoded.map(Self.cleaned)
+            } else {
+                // 读不出来时先把原文件备份，绝不能让之后的保存把题库覆盖掉
+                let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+                let backup = Self.libraryURL.deletingLastPathComponent().appendingPathComponent("library-backup-\(stamp).json")
+                try? data.write(to: backup)
+            }
         }
         loadProviders()
         activeProviderID = UserDefaults.standard.string(forKey: "activeProvider") ?? "anthropic"
@@ -241,8 +263,65 @@ final class AppStore: ObservableObject {
             q.status = .todo
             q.hintCount = 0
             q.draftAnswer = ""
+            q.reviewRounds = nil
         }
+        reviewOutcomes[qID] = nil
         DrawingStore.delete([qID])
+    }
+
+    // MARK: - 错题本
+
+    /// 错题本里的所有题，按加入时间从新到旧
+    var starredEntries: [(setID: UUID, question: Question)] {
+        sets.flatMap { set in set.questions.filter(\.isStarred).map { (set.id, $0) } }
+            .sorted { ($0.question.starredAt ?? .distantPast) > ($1.question.starredAt ?? .distantPast) }
+    }
+
+    /// 某道题属于哪个题集
+    func setID(containing qID: UUID) -> UUID? {
+        sets.first { $0.questions.contains { $0.id == qID } }?.id
+    }
+
+    func toggleStar(_ setID: UUID, _ qID: UUID) {
+        mutate(setID, qID) { q in
+            if q.isStarred {
+                q.starredAt = nil
+                q.reviewRounds = nil
+            } else {
+                q.starredAt = Date()
+            }
+        }
+        reviewOutcomes[qID] = nil
+    }
+
+    /// 从错题本打开一道还没做完的题：从现在开始计轮数
+    func beginReviewIfNeeded(_ setID: UUID, _ qID: UUID) {
+        guard let q = question(setID, qID), q.isStarred, !q.status.isDone, q.reviewRounds == nil else { return }
+        mutate(setID, qID) { $0.reviewRounds = 0 }
+    }
+
+    /// 已经做完的错题重新练一遍：之前的作答记录折叠保存，题目恢复成未作答
+    func startReview(_ setID: UUID, _ qID: UUID) {
+        cancelReply(qID)
+        mutate(setID, qID) { q in
+            if !q.messages.isEmpty {
+                q.previousAttempts = (q.previousAttempts ?? []) + [q.messages]
+            }
+            q.messages = []
+            q.status = .todo
+            q.hintCount = 0
+            q.draftAnswer = ""
+            q.reviewRounds = 0
+        }
+        reviewOutcomes[qID] = nil
+        DrawingStore.delete([qID])
+    }
+
+    /// 复习中每完成一次检查或提示调用一次，返回已用轮数
+    private func countReviewRound(_ q: inout Question) -> Int? {
+        guard let r = q.reviewRounds else { return nil }
+        q.reviewRounds = r + 1
+        return r + 1
     }
 
     func neighbor(of qID: UUID, in setID: UUID, offset: Int) -> UUID? {
@@ -286,9 +365,21 @@ final class AppStore: ObservableObject {
                     text: verdict.feedback,
                     prompt: "<verdict>\(correct ? "correct" : "wrong")</verdict>\n\(verdict.feedback)")
                 q.messages.append(reply)
+                let rounds = self?.countReviewRound(&q)
                 if correct {
+                    let revealedBefore = q.status == .revealed
                     if q.status != .revealed { q.status = .passed }
                     q.draftAnswer = ""
+                    if let rounds {
+                        q.reviewRounds = nil
+                        if rounds <= AppStore.masteryRounds && !revealedBefore {
+                            // 错题本里 2 轮内做对：说明掌握了，移出错题本
+                            q.starredAt = nil
+                            self?.reviewOutcomes[qID] = .mastered(rounds: rounds)
+                        } else {
+                            self?.reviewOutcomes[qID] = revealedBefore ? .revealed : .keep(rounds: rounds)
+                        }
+                    }
                 } else if !q.status.isDone {
                     q.status = .wrong
                 }
@@ -305,6 +396,7 @@ final class AppStore: ObservableObject {
             self?.mutate(setID, qID) { q in
                 q.hintCount = level
                 q.messages.append(ChatMessage(role: .assistant, kind: .hint, text: full))
+                _ = self?.countReviewRound(&q)
             }
         }
     }
@@ -315,6 +407,11 @@ final class AppStore: ObservableObject {
             self?.mutate(setID, qID) { q in
                 q.messages.append(ChatMessage(role: .assistant, kind: .solution, text: full))
                 if q.status != .passed { q.status = .revealed }
+                // 复习中看了完整答案：这轮复习结束，题目留在错题本
+                if q.reviewRounds != nil {
+                    q.reviewRounds = nil
+                    self?.reviewOutcomes[qID] = .revealed
+                }
             }
         }
     }

@@ -4,15 +4,18 @@ struct QuestionDetailView: View {
     @EnvironmentObject var store: AppStore
     let setID: UUID
     let qID: UUID
+    /// 从错题本打开：上一题 / 下一题在错题本里切换，并按复习规则计轮数
+    let fromMistakeBook: Bool
 
     @StateObject private var handwriting: HandwritingModel
     @State private var useHandwriting: Bool
     @State private var draftSaveTask: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
 
-    init(setID: UUID, qID: UUID) {
+    init(setID: UUID, qID: UUID, fromMistakeBook: Bool = false) {
         self.setID = setID
         self.qID = qID
+        self.fromMistakeBook = fromMistakeBook
         _handwriting = StateObject(wrappedValue: HandwritingModel(questionID: qID))
         // 上次在这道题上手写过，就直接回到手写模式
         _useHandwriting = State(initialValue: HandwritingModel.isAvailable && DrawingStore.exists(qID))
@@ -42,6 +45,12 @@ struct QuestionDetailView: View {
                             .onGeometryChange(for: CGFloat.self) { proxy in
                                 proxy.frame(in: .named("detailScroll")).maxY
                             } action: { cardBottom = $0 }
+                        if fromMistakeBook && q.isStarred {
+                            reviewCard(q)
+                        }
+                        if let attempts = q.previousAttempts, !attempts.isEmpty {
+                            previousAttemptsSection(attempts)
+                        }
                         let split = Self.passIndex(in: q).map { $0 + 1 } ?? q.messages.count
                         ForEach(q.messages[..<split]) { message in
                             MessageRow(message: message, setID: setID)
@@ -103,7 +112,11 @@ struct QuestionDetailView: View {
                     handwriting.clear()
                 }
             }
-            .onAppear { draft = q.draftAnswer }
+            .onAppear {
+                draft = q.draftAnswer
+                // 从错题本打开还没做完的题：开始计复习轮数
+                if fromMistakeBook { store.beginReviewIfNeeded(setID, qID) }
+            }
             // 切到手写时自动收起左侧栏，书写区域更大
             .onChange(of: useHandwriting) {
                 if useHandwriting { store.setFullScreen(true) }
@@ -148,6 +161,17 @@ struct QuestionDetailView: View {
                 if let set = store.set(setID), let i = set.questions.firstIndex(where: { $0.id == qID }) {
                     Text("\(i + 1) / \(set.questions.count)").font(.callout).foregroundStyle(.secondary).monospacedDigit()
                 }
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { store.toggleStar(setID, qID) }
+                } label: {
+                    Label(q.isStarred ? "已加入错题本" : "错题", systemImage: q.isStarred ? "bookmark.fill" : "bookmark")
+                        .font(.callout.weight(.medium))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background((q.isStarred ? Color.red : Color.secondary).opacity(q.isStarred ? 0.15 : 0.1), in: Capsule())
+                        .foregroundStyle(q.isStarred ? Color.red : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(q.isStarred ? "移出错题本" : "加入错题本")
             }
             RichText(q.content, scale: 1.08)
             ForEach(q.imageIDs, id: \.self) { id in
@@ -329,9 +353,114 @@ struct QuestionDetailView: View {
         return q.messages.firstIndex { $0.kind == .verdictCorrect || $0.kind == .solution }
     }
 
+    // MARK: - 错题复习
+
+    /// 错题本里打开时的提示：已做完的题可以重新练习；复习中显示已用轮数
+    @ViewBuilder
+    private func reviewCard(_ q: Question) -> some View {
+        // 已做完、不在复习中的错题：随时可以重新练习（包括刚看完答案或用了 3 轮以上的）
+        if q.status.isDone && q.reviewRounds == nil {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.counterclockwise.circle.fill").font(.title2).foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(store.reviewOutcomes[qID] == nil ? "这道题之前已经做过" : "想再练一遍？").font(.headline)
+                    Text("重新做一遍来巩固：\(AppStore.masteryRounds) 轮之内做对，就会从错题本移出").font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    withAnimation { store.startReview(setID, qID) }
+                    draft = ""
+                    handwriting.clear()
+                } label: {
+                    Label("重新练习", systemImage: "play.fill").font(.headline)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+            }
+            .padding(14)
+            .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+        } else if let rounds = q.reviewRounds {
+            Label {
+                Text(rounds == 0
+                     ? "错题复习中 · \(AppStore.masteryRounds) 轮之内做对就移出错题本（检查一次或提示一次算一轮）"
+                     : "错题复习中 · 已用 \(rounds) 轮" + (rounds < AppStore.masteryRounds ? "，这一轮做对就移出错题本" : "，这次做对也会留在错题本里"))
+            } icon: {
+                Image(systemName: "bookmark.fill")
+            }
+            .font(.callout)
+            .foregroundStyle(.red)
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    /// 复习结果提示
+    @ViewBuilder
+    private func reviewOutcomeBanner() -> some View {
+        if let outcome = store.reviewOutcomes[qID] {
+            let (icon, text, color): (String, String, Color) = {
+                switch outcome {
+                case .mastered(let rounds):
+                    return ("checkmark.seal.fill", "\(rounds) 轮就做对了，已经掌握！这道题已移出错题本。", .green)
+                case .keep(let rounds):
+                    return ("bookmark.fill", "这次用了 \(rounds) 轮，先留在错题本里，下次再练一遍。", .orange)
+                case .revealed:
+                    return ("bookmark.fill", "这次看了完整答案，先留在错题本里，过几天再练一遍。", .orange)
+                }
+            }()
+            Label(text, systemImage: icon)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(color)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    /// 重新练习之前的作答记录，默认折叠
+    private func previousAttemptsSection(_ attempts: [[ChatMessage]]) -> some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Array(attempts.enumerated()), id: \.offset) { index, messages in
+                    Text("第 \(index + 1) 次作答").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    ForEach(messages) { message in
+                        MessageRow(message: message, setID: setID)
+                    }
+                }
+            }
+            .padding(.top, 8)
+        } label: {
+            Label("之前的作答记录（\(attempts.count) 次）", systemImage: "clock.arrow.circlepath")
+                .font(.callout)
+        }
+        .padding(14)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    // MARK: - 题目切换
+
+    /// 上一题 / 下一题：错题本里按错题本顺序，否则按题集顺序
+    private func neighborID(_ offset: Int) -> UUID? {
+        guard fromMistakeBook else { return store.neighbor(of: qID, in: setID, offset: offset) }
+        let ids = store.starredEntries.map(\.question.id)
+        guard let i = ids.firstIndex(of: qID) else {
+            // 当前题已经移出错题本：下一题就是错题本里的第一题
+            return offset > 0 ? ids.first : nil
+        }
+        let j = i + offset
+        return ids.indices.contains(j) ? ids[j] : nil
+    }
+
+    private var nextID: UUID? {
+        fromMistakeBook ? neighborID(1) : store.nextQuestion(after: qID, in: setID)
+    }
+
     private func passedBanner(_ q: Question) -> some View {
-        let next = store.nextQuestion(after: qID, in: setID)
-        return HStack(spacing: 12) {
+        let next = nextID
+        return VStack(spacing: 10) {
+            reviewOutcomeBanner()
+            HStack(spacing: 12) {
                 Image(systemName: q.status == .passed ? "party.popper.fill" : "book.fill")
                     .font(.title)
                     .foregroundStyle(q.status == .passed ? .green : .blue)
@@ -352,11 +481,12 @@ struct QuestionDetailView: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                 } else {
-                    Text("已是最后一题").font(.callout).foregroundStyle(.secondary)
+                    Text(fromMistakeBook ? "错题本里没有下一题了" : "已是最后一题").font(.callout).foregroundStyle(.secondary)
                 }
             }
             .padding(16)
             .background((q.status == .passed ? Color.green : Color.blue).opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+        }
     }
 
     private var followUpChips: some View {
@@ -420,13 +550,13 @@ struct QuestionDetailView: View {
             }
             ModelMenu { showSettings = true }
             Button {
-                if let id = store.neighbor(of: qID, in: setID, offset: -1) { store.selectedQuestionID = id }
+                if let id = neighborID(-1) { store.selectedQuestionID = id }
             } label: { Label("上一题", systemImage: "chevron.up") }
-                .disabled(store.neighbor(of: qID, in: setID, offset: -1) == nil)
+                .disabled(neighborID(-1) == nil)
             Button {
-                if let id = store.neighbor(of: qID, in: setID, offset: 1) { store.selectedQuestionID = id }
+                if let id = neighborID(1) { store.selectedQuestionID = id }
             } label: { Label("下一题", systemImage: "chevron.down") }
-                .disabled(store.neighbor(of: qID, in: setID, offset: 1) == nil)
+                .disabled(neighborID(1) == nil)
             Menu {
                 Button("编辑题目", systemImage: "square.and.pencil") { editingQuestion = true }
                 Button("清空记录重做", systemImage: "arrow.counterclockwise", role: .destructive) { confirmReset = true }

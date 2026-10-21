@@ -10,9 +10,33 @@ struct SidebarView: View {
     var body: some View {
         List(selection: Binding(get: { store.selectedSetID }, set: { id in
             store.selectedSetID = id
-            store.selectedQuestionID = store.set(id)?.questions.first(where: { !$0.status.isDone })?.id
-                ?? store.set(id)?.questions.first?.id
+            if id == AppStore.mistakeBookID {
+                store.selectedQuestionID = store.starredEntries.first?.question.id
+            } else {
+                store.selectedQuestionID = store.set(id)?.questions.first(where: { !$0.status.isDone })?.id
+                    ?? store.set(id)?.questions.first?.id
+            }
         })) {
+            if !store.sets.isEmpty {
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "bookmark.fill")
+                            .foregroundStyle(.red)
+                        Text("错题本").font(.headline)
+                        Spacer()
+                        let count = store.starredEntries.count
+                        if count > 0 {
+                            Text("\(count)")
+                                .font(.caption.weight(.semibold)).monospacedDigit()
+                                .padding(.horizontal, 8).padding(.vertical, 2)
+                                .background(Color.red.opacity(0.15), in: Capsule())
+                                .foregroundStyle(.red)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                    .tag(AppStore.mistakeBookID)
+                }
+            }
             ForEach(store.sets) { set in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(set.title).font(.headline).lineLimit(2)
@@ -83,6 +107,9 @@ struct QuestionListView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack(spacing: 6) {
                                     Text("第 \(q.label) 题").font(.subheadline.weight(.semibold))
+                                    if q.isStarred {
+                                        Image(systemName: "bookmark.fill").font(.caption).foregroundStyle(.red)
+                                    }
                                     if q.isGenerated {
                                         Text("AI 新题").font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
                                             .background(.purple.opacity(0.15), in: Capsule()).foregroundStyle(.purple)
@@ -114,5 +141,60 @@ struct StatusIcon: View {
         case .passed: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         case .revealed: Image(systemName: "eye.circle.fill").foregroundStyle(.blue)
         }
+    }
+}
+
+/// 错题本：所有标记为重点错题的题目，按题集分组
+struct MistakeBookView: View {
+    @EnvironmentObject var store: AppStore
+
+    var body: some View {
+        let entries = store.starredEntries
+        let groups = Dictionary(grouping: entries, by: \.setID)
+        // 题集顺序按其中最新加入的错题排列
+        let setOrder = entries.map(\.setID).reduce(into: [UUID]()) { if !$0.contains($1) { $0.append($1) } }
+
+        List(selection: $store.selectedQuestionID) {
+            ForEach(setOrder, id: \.self) { setID in
+                Section {
+                    ForEach(groups[setID] ?? [], id: \.question.id) { entry in
+                        let q = entry.question
+                        HStack(alignment: .top, spacing: 10) {
+                            StatusIcon(status: q.status)
+                                .padding(.top, 2)
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 6) {
+                                    Text("第 \(q.label) 题").font(.subheadline.weight(.semibold))
+                                    if let rounds = q.reviewRounds {
+                                        Text(rounds == 0 ? "复习中" : "复习中 · 已用 \(rounds) 轮")
+                                            .font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
+                                            .background(.orange.opacity(0.15), in: Capsule()).foregroundStyle(.orange)
+                                    }
+                                    if store.isBusy(q.id) { ProgressView().controlSize(.mini) }
+                                }
+                                Text(Tutor.plainPreview(q.content)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                        .tag(q.id)
+                        .contextMenu {
+                            Button("移出错题本", systemImage: "bookmark.slash") { store.toggleStar(entry.setID, q.id) }
+                        }
+                    }
+                } header: {
+                    Text(store.set(setID)?.title ?? "")
+                }
+            }
+        }
+        .overlay {
+            if entries.isEmpty {
+                ContentUnavailableView {
+                    Label("错题本是空的", systemImage: "bookmark")
+                } description: {
+                    Text("做题时点题目右上角的“错题”，把需要重点复习的题加进来。\n在错题本里 \(AppStore.masteryRounds) 轮之内做对，就会自动移出。")
+                }
+            }
+        }
+        .navigationTitle("错题本")
     }
 }
