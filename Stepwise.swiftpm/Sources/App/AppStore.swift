@@ -462,12 +462,31 @@ final class AppStore: ObservableObject {
             text += chunk.text.isEmpty ? "内容见上面的图片。" : "\n\n" + chunk.text
             parts.append(.text(text))
 
-            let parsed: (title: String?, items: [Tutor.SplitItem])
+            var parsed: (title: String?, items: [Tutor.SplitItem])
+            let system = Tutor.splitSystem(requirement: requirement, hasImages: !chunk.images.isEmpty, multiPart: chunks.count > 1)
             do {
-                let output = try await client.complete(
-                    system: Tutor.splitSystem(requirement: requirement, hasImages: !chunk.images.isEmpty, multiPart: chunks.count > 1),
-                    messages: [LLMMessage(role: .user, parts: parts)])
+                let output = try await client.complete(system: system, messages: [LLMMessage(role: .user, parts: parts)])
                 parsed = try Tutor.parseSplit(output)
+
+                // 选择题漏了选项：把这几道题指出来，让模型对照原文重新输出
+                let missing = parsed.items.filter { Tutor.looksLikeMissingOptions($0.content) }.map(\.label)
+                if !missing.isEmpty {
+                    progress(index + 1, chunks.count)
+                    let followUp: [LLMMessage] = [
+                        LLMMessage(role: .user, parts: parts),
+                        LLMMessage(role: .assistant, parts: [.text(output)]),
+                        LLMMessage(role: .user, parts: [.text(Tutor.missingOptionsFollowUp(labels: missing))])
+                    ]
+                    if let repairedText = try? await client.complete(system: system, messages: followUp),
+                       let repaired = try? Tutor.parseSplit(repairedText) {
+                        for fixed in repaired.items where Tutor.optionLetterCount(fixed.content) >= 2 {
+                            let key = Tutor.labelKey(fixed.label)
+                            guard let i = parsed.items.firstIndex(where: { Tutor.labelKey($0.label) == key }) else { continue }
+                            parsed.items[i].content = fixed.content
+                            if parsed.items[i].answer == nil { parsed.items[i].answer = fixed.answer }
+                        }
+                    }
+                }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {

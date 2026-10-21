@@ -21,6 +21,7 @@ struct QuestionDetailView: View {
     @State private var chatInput = ""
     @State private var showSettings = false
     @State private var confirmReset = false
+    @State private var editingQuestion = false
     @FocusState private var chatFocused: Bool
 
     /// 题目卡片底边在滚动区域中的位置，滚到快看不见时显示置顶的题目
@@ -91,6 +92,9 @@ struct QuestionDetailView: View {
             #endif
             .toolbar { toolbar(q) }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $editingQuestion) {
+                EditQuestionView(setID: setID, qID: qID)
+            }
             .confirmationDialog("清空这道题的作答和对话记录，重新开始？", isPresented: $confirmReset, titleVisibility: .visible) {
                 Button("清空并重做", role: .destructive) {
                     store.resetQuestion(setID, qID)
@@ -424,6 +428,7 @@ struct QuestionDetailView: View {
             } label: { Label("下一题", systemImage: "chevron.down") }
                 .disabled(store.neighbor(of: qID, in: setID, offset: 1) == nil)
             Menu {
+                Button("编辑题目", systemImage: "square.and.pencil") { editingQuestion = true }
                 Button("清空记录重做", systemImage: "arrow.counterclockwise", role: .destructive) { confirmReset = true }
             } label: { Label("更多", systemImage: "ellipsis.circle") }
         }
@@ -637,6 +642,78 @@ struct PendingRow: View {
         case .hint: return "正在想提示…"
         case .solution: return "正在写完整解答…"
         default: return "思考中…"
+        }
+    }
+}
+
+/// 手动修改题目内容（例如补上漏掉的选项），带公式预览
+struct EditQuestionView: View {
+    @EnvironmentObject var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    let setID: UUID
+    let qID: UUID
+
+    @State private var content = ""
+    @State private var answer = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextEditor(text: $content)
+                        .font(.body.monospaced())
+                        .frame(minHeight: 180)
+                        .autocorrectionDisabled()
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
+                } header: {
+                    Text("题目")
+                } footer: {
+                    Text("公式用 LaTeX：行内 $...$，单独一行 $$...$$。选择题的选项每个单独一行，例如 A. $x>0$")
+                }
+                Section("预览") {
+                    RichText(content, scale: 1.05)
+                }
+                Section {
+                    TextEditor(text: $answer)
+                        .font(.body.monospaced())
+                        .frame(minHeight: 100)
+                        .autocorrectionDisabled()
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
+                } header: {
+                    Text("参考答案（可选）")
+                } footer: {
+                    Text("只给 AI 判题用，做题时不会显示。")
+                }
+            }
+            .navigationTitle("编辑题目")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") {
+                        let newContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let newAnswer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+                        store.mutate(setID, qID) { q in
+                            q.content = newContent
+                            q.referenceAnswer = newAnswer.isEmpty ? nil : newAnswer
+                        }
+                        dismiss()
+                    }
+                    .disabled(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .onAppear {
+                if let q = store.question(setID, qID) {
+                    content = q.content
+                    answer = q.referenceAnswer ?? ""
+                }
+            }
         }
     }
 }

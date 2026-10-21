@@ -20,12 +20,13 @@ enum Tutor {
         你是题目整理助手。用户会提供一份题目文件的内容（文字或图片），请把其中每一道题目完整、准确地拆分出来。
 
         规则：
-        1. 每道题保留完整题干、选项、小问和已知条件，内容逐字照录，不要改写，不要解答。
+        1. 每道题保留完整题干、全部选项、小问和已知条件，内容逐字照录，不要改写，不要解答。
+        1a. 【选项绝对不能漏】选择题的选项是题目的一部分：A、B、C、D（以及 E、F 等更多选项）必须全部放进 <content>，紧跟在题干后面，每个选项单独一行，例如“A. $x>0$”。原文选项横排、两列排或排成表格时，也要拆成每行一个。不要省略选项，不要合并选项，也不要把选项放进 <answer>。
         2. 题号 label 使用原文的题号（如 1、二(3)），原文没有题号就按顺序编号。
         3. 如果原文附带该题的答案或解析，放进 <answer>，没有就省略 <answer>。答案部分本身不要当成题目。
         4. 默认一道大题和它的所有小问作为一道题；如果“拆分要求”另有说明，以拆分要求为准。
         5. 忽略页眉页脚、页码、试卷说明等不属于题目的内容。
-        6. 题中所有公式都转写成标准 LaTeX（行内 $...$，独立成行 $$...$$，化学式 $\\ce{...}$），保证和原题完全一致；选项每个单独一行。
+        6. 题中所有公式都转写成标准 LaTeX（行内 $...$，独立成行 $$...$$，化学式 $\\ce{...}$），保证和原题完全一致。
         7. 题目中的图形无法照录时，用一句话描述它在题中的作用，如“（见图：直角三角形 $ABC$，$\\angle C=90^\\circ$）”。
         """
         if hasImages {
@@ -44,7 +45,12 @@ enum Tutor {
         <title>根据内容起一个简短的题集名称</title>
         <question label="1"\(hasImages ? " page=\"1\"" : "")>
         <content>
-        完整题目
+        完整题干
+        A. 选项一
+        B. 选项二
+        C. 选项三
+        D. 选项四
+        （不是选择题就没有选项行）
         </content>
         <answer>
         原文附带的答案（没有就省略整个 answer 标签）
@@ -80,7 +86,12 @@ enum Tutor {
         let title = tag("title", in: text)
         var items: [SplitItem] = []
         for (index, block) in blocks("question", in: text).enumerated() {
-            let content = (tag("content", in: block.body) ?? block.body).trimmingCharacters(in: .whitespacesAndNewlines)
+            var content = (tag("content", in: block.body) ?? block.body).trimmingCharacters(in: .whitespacesAndNewlines)
+            // 模型有时把选项放在 <content> 外面（比如自己加一个 <options> 标签），拼回题干，不能丢
+            if tag("content", in: block.body) != nil {
+                let extra = textOutsideTags(["content", "answer"], in: block.body)
+                if !extra.isEmpty { content += "\n" + extra }
+            }
             guard !content.isEmpty else { continue }
             let label = displayLabel(block.attributes["label"].flatMap { $0.isEmpty ? nil : $0 } ?? "\(index + 1)")
             let answer = tag("answer", in: block.body).flatMap { $0.isEmpty ? nil : $0 }
@@ -229,8 +240,9 @@ enum Tutor {
         ]
         for (a, b) in replacements { s = s.replacingOccurrences(of: a, with: b) }
         s = s.replacingOccurrences(of: "\\\\[dt]?frac\\{([^{}]*)\\}\\{([^{}]*)\\}", with: "$1/$2", options: .regularExpression)
+        s = s.replacingOccurrences(of: "\\\\[dt]?frac(\\d)(\\d)", with: "$1/$2", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\\\(ce|text|mathrm|mathbf|vec|overline|boldsymbol)\\{([^{}]*)\\}", with: "$2", options: .regularExpression)
-        s = s.replacingOccurrences(of: "\\\\(sin|cos|tan|cot|log|ln|lg|lim|max|min)\\b", with: "$1", options: .regularExpression)
+        s = s.replacingOccurrences(of: "\\\\(sin|cos|tan|cot|sec|csc|log|ln|lg|lim|max|min|exp)(?![A-Za-z])", with: "$1", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\\\[a-zA-Z]+", with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: "[{}]", with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\*\\*", with: "", options: .regularExpression)
@@ -238,7 +250,49 @@ enum Tutor {
         return s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
     }
 
+    // MARK: - 选择题检查
+
+    /// 题干里出现了几个不同的大写选项字母（A. / B、/ (C) / D： 等）。小写 (a)(b) 是小问，不算。
+    static func optionLetterCount(_ content: String) -> Int {
+        guard let regex = try? NSRegularExpression(pattern: "(?:^|[\\s（(])[（(]?([A-H])[\\.．、:：\\)）]") else { return 0 }
+        let ns = content as NSString
+        let letters = regex.matches(in: content, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range(at: 1)) }
+        return Set(letters).count
+    }
+
+    /// 看起来是选择题但题干里没有选项（用于自动补全）
+    static func looksLikeMissingOptions(_ content: String) -> Bool {
+        guard optionLetterCount(content) < 2 else { return false }
+        let lower = content.lowercased()
+        let cues = ["（ ）", "（  ）", "（   ）", "（）", "( )", "(  )", "()",
+                    "下列", "以下哪", "哪一个", "哪一项", "哪个选项", "哪些", "选出", "选择正确", "正确的是", "错误的是", "不正确的是",
+                    "单选", "多选", "选择题",
+                    "which of the following", "which one", "choose the", "select the", "multiple choice", "all of the following"]
+        return cues.contains { lower.contains($0) }
+    }
+
+    /// 补全选项时追加的要求
+    static func missingOptionsFollowUp(labels: [String]) -> String {
+        let list = labels.map { "第 \($0) 题" }.joined(separator: "、")
+        return """
+        检查发现 \(list) 看起来是选择题，但你输出的题干里没有选项。请对照原文，只重新输出这几道题，必须包含全部选项（A、B、C、D……每个选项单独一行，放在 <content> 里）。格式和之前一样（<question label="…"><content>…</content><answer>…</answer></question>），不要输出其他题目，也不要输出 <title>。如果原文中这道题确实没有选项，就原样输出它。
+        """
+    }
+
     // MARK: - 标签解析
+
+    /// 去掉指定标签块之后剩下的文字（再去掉残留的标签符号）
+    static func textOutsideTags(_ names: [String], in text: String) -> String {
+        var rest = text
+        for name in names {
+            for block in blocks(name, in: rest).reversed() {
+                rest.replaceSubrange(block.range, with: "")
+            }
+        }
+        rest = rest.replacingOccurrences(of: "</?[a-zA-Z_]+[^>]*>", with: "", options: .regularExpression)
+        return unescapeEntities(rest).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
 
     struct TagBlock {
         var attributes: [String: String]
