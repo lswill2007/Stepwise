@@ -13,12 +13,24 @@ struct QuestionDetailView: View {
     @State private var confirmReset = false
     @FocusState private var chatFocused: Bool
 
+    /// 题目卡片底边在滚动区域中的位置，滚到快看不见时显示置顶的题目
+    @State private var cardBottom: CGFloat = .infinity
+    @State private var viewHeight: CGFloat = 800
+    @State private var pinnedContentHeight: CGFloat = 40
+    @AppStorage("pinnedQuestionCollapsed") private var pinnedCollapsed = false
+
+    private var showPinned: Bool { cardBottom < 90 }
+
     var body: some View {
         if let q = store.question(setID, qID) {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         questionCard(q)
+                            .id("question")
+                            .onGeometryChange(for: CGFloat.self) { proxy in
+                                proxy.frame(in: .named("detailScroll")).maxY
+                            } action: { cardBottom = $0 }
                         let split = Self.passIndex(in: q).map { $0 + 1 } ?? q.messages.count
                         ForEach(q.messages[..<split]) { message in
                             MessageRow(message: message, setID: setID)
@@ -43,14 +55,30 @@ struct QuestionDetailView: View {
                     .frame(maxWidth: 860)
                     .frame(maxWidth: .infinity)
                 }
+                .coordinateSpace(name: "detailScroll")
                 .scrollDismissesKeyboard(.interactively)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewHeight = $0 }
                 .onChange(of: q.messages.count) { scrollToBottom(proxy) }
                 .onChange(of: store.pending[qID]?.text.count ?? -1) { scrollToBottom(proxy, animated: false) }
+                // 题目滚出视野时浮在最上面
+                .overlay(alignment: .top) {
+                    if showPinned {
+                        pinnedQuestion(q) {
+                            withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo("question", anchor: .top) }
+                        }
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+                .animation(.easeInOut(duration: 0.2), value: showPinned)
             }
             .safeAreaInset(edge: .bottom) {
                 if q.status.isDone { chatBar }
             }
             .navigationTitle("第 \(q.label) 题")
+            #if os(iOS)
+            // 小标题：大标题会和滚到下面的内容、置顶的题目叠在一起
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar { toolbar(q) }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .confirmationDialog("清空这道题的作答和对话记录，重新开始？", isPresented: $confirmReset, titleVisibility: .visible) {
@@ -91,6 +119,59 @@ struct QuestionDetailView: View {
         }
         .padding(18)
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    /// 置顶的题目：短题完整显示，长题限制高度可在内部滚动，也可以收起成一行
+    private func pinnedQuestion(_ q: Question, backToTop: @escaping () -> Void) -> some View {
+        let maxHeight = max(120, viewHeight * 0.33)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("第 \(q.label) 题").font(.subheadline.bold())
+                StatusPill(status: q.status)
+                if pinnedCollapsed {
+                    Text(Tutor.plainPreview(q.content))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Button(action: backToTop) {
+                    Image(systemName: "arrow.up.to.line")
+                }
+                .accessibilityLabel("回到题目")
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { pinnedCollapsed.toggle() }
+                } label: {
+                    Image(systemName: pinnedCollapsed ? "chevron.down" : "chevron.up")
+                }
+                .accessibilityLabel(pinnedCollapsed ? "展开题目" : "收起题目")
+            }
+            .buttonStyle(.borderless)
+            .font(.callout)
+
+            if !pinnedCollapsed {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        RichText(q.content)
+                        ForEach(q.imageIDs, id: \.self) { id in
+                            StoredImage(id: id, maxHeight: 200)
+                        }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pinnedContentHeight = $0 }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(height: min(max(pinnedContentHeight, 24), maxHeight))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.secondary.opacity(0.2)))
+        .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+        .padding(.horizontal, 20)
+        .padding(.top, 6)
+        .frame(maxWidth: 860)
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - 作答区（未通过）
