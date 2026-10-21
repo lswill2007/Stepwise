@@ -171,7 +171,8 @@ final class HandwritingModel: ObservableObject {
             image = drawing.image(from: bounds, scale: 2)
         }
         guard let cg = image.cgImage else { return nil }
-        return ImageUtil.jpeg(cg).flatMap { ImageUtil.normalizedJPEG($0) }
+        // 1280 像素足够看清手写，图片更小，上传和识别都更快
+        return ImageUtil.jpeg(cg).flatMap { ImageUtil.normalizedJPEG($0, maxPixel: 1280) }
     }
 }
 

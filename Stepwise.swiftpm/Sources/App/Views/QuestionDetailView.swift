@@ -529,6 +529,10 @@ struct MessageRow: View {
                     ForEach(message.generatedQuestionIDs, id: \.self) { id in
                         if let q = store.question(setID, id) { NewQuestionCard(question: q) }
                     }
+                    if let timing = timingText {
+                        Text(timing).font(.caption2).foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
                 }
                 .padding(14)
                 .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
@@ -536,11 +540,25 @@ struct MessageRow: View {
         }
     }
 
+    /// “用时 3.2 秒 · 模型名”
+    private var timingText: String? {
+        guard store.showTiming, let duration = message.duration else { return nil }
+        let seconds = String(format: duration < 10 ? "%.1f" : "%.0f", duration)
+        if let model = message.model, !model.isEmpty { return "用时 \(seconds) 秒 · \(model)" }
+        return "用时 \(seconds) 秒"
+    }
+
     private func card(title: String, icon: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: icon)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(color == .yellow ? Color.orange : color)
+            HStack(alignment: .firstTextBaseline) {
+                Label(title, systemImage: icon)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(color == .yellow ? Color.orange : color)
+                Spacer(minLength: 8)
+                if let timing = timingText {
+                    Text(timing).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                }
+            }
             RichText(message.text)
         }
         .padding(14)
@@ -574,6 +592,7 @@ struct NewQuestionCard: View {
 }
 
 struct PendingRow: View {
+    @EnvironmentObject var store: AppStore
     let pending: PendingReply
     let onStop: () -> Void
 
@@ -591,6 +610,13 @@ struct PendingRow: View {
                     Text(label).font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
+                if store.showTiming {
+                    // 实时显示已经等了多久
+                    TimelineView(.periodic(from: pending.startedAt, by: 1)) { context in
+                        Text("\(Int(context.date.timeIntervalSince(pending.startedAt))) 秒")
+                            .font(.caption).monospacedDigit().foregroundStyle(.tertiary)
+                    }
+                }
                 Button("停止", action: onStop).font(.callout).buttonStyle(.borderless)
             }
             if !shown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

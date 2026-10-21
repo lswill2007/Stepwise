@@ -24,6 +24,8 @@ struct SettingsView: View {
                     Text("点下面任意服务商，填写 API Key 并选择模型，再点“设为当前使用”。做题时也可以在右上角随时切换模型。")
                 }
 
+                gradingSection
+
                 Section("模型服务商") {
                     ForEach(store.providers) { p in
                         NavigationLink(value: p.id) {
@@ -77,6 +79,59 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
             }
+        }
+    }
+
+    // MARK: - 批改速度
+
+    private var gradingSection: some View {
+        Section {
+            Toggle(isOn: $store.quickGrading) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("快速批改")
+                    Text("检查答案和给提示时让模型少思考").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            Picker("批改与提示模型", selection: Binding(
+                get: { store.gradingProviderID ?? "" },
+                set: { id in
+                    store.gradingProviderID = id.isEmpty ? nil : id
+                    // 换服务商时默认选它当前的模型
+                    if let p = store.providers.first(where: { $0.id == id }) { store.gradingModel = p.model }
+                })) {
+                Text("跟随当前模型").tag("")
+                ForEach(store.providers.filter(\.hasKey)) { p in
+                    Text(p.name).tag(p.id)
+                }
+            }
+
+            if let id = store.gradingProviderID, let p = store.providers.first(where: { $0.id == id }) {
+                if p.allModels.isEmpty {
+                    TextField("模型名称", text: $store.gradingModel)
+                        .autocorrectionDisabled()
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
+                } else {
+                    Picker("模型", selection: $store.gradingModel) {
+                        ForEach(p.allModels, id: \.self) { Text($0).tag($0) }
+                        if !p.allModels.contains(store.gradingModel) && !store.gradingModel.isEmpty {
+                            Text(store.gradingModel).tag(store.gradingModel)
+                        }
+                    }
+                }
+                if store.gradingProvider == nil {
+                    Label("请选择一个模型，否则会继续使用当前模型", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+
+            Toggle("显示用时", isOn: $store.showTiming)
+        } header: {
+            Text("批改速度")
+        } footer: {
+            Text("可以单独选一个反应快的模型专门检查答案和给提示，例如 deepseek-chat、Claude Haiku、Gemini Flash；看完整答案和继续对话仍使用当前模型。模型不支持快速批改时会自动按正常方式请求。")
         }
     }
 }

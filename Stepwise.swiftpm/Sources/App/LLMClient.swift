@@ -10,6 +10,12 @@ struct LLMMessage {
     var parts: [LLMContent]
 }
 
+/// 单次请求的选项
+struct RequestOptions {
+    /// 快速模式：让模型少思考（用于检查答案、给提示）
+    var fast = false
+}
+
 struct LLMError: LocalizedError {
     let message: String
     var errorDescription: String? { message }
@@ -38,13 +44,25 @@ struct LLMClient {
 
     // MARK: - 对外接口
 
-    func stream(system: String, messages: [LLMMessage]) -> AsyncThrowingStream<String, Error> {
+    func stream(system: String, messages: [LLMMessage], options: RequestOptions = RequestOptions()) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let request = try makeChatRequest(system: system, messages: Self.normalized(messages))
-                    let (bytes, response) = try await Self.session.bytes(for: request)
-                    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    let normalized = Self.normalized(messages)
+                    let fastKey = "\(config.id)|\(model)"
+                    // 这个模型之前拒绝过快速模式参数，就不再带
+                    var useFast = options.fast && !FastModeMemory.isUnsupported(fastKey) && !fastParameters().isEmpty
+                    var request = try makeChatRequest(system: system, messages: normalized, fast: useFast)
+                    var (bytes, response) = try await Self.session.bytes(for: request)
+                    var status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    if useFast && (status == 400 || status == 422) {
+                        // 模型不支持这些参数：记下来，去掉参数立即重试一次
+                        FastModeMemory.markUnsupported(fastKey)
+                        useFast = false
+                        request = try makeChatRequest(system: system, messages: normalized, fast: false)
+                        (bytes, response) = try await Self.session.bytes(for: request)
+                        status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    }
                     if status != 200 {
                         var body = ""
                         for try await line in bytes.lines { body += line + "\n" }
@@ -70,9 +88,9 @@ struct LLMClient {
         }
     }
 
-    func complete(system: String, messages: [LLMMessage]) async throws -> String {
+    func complete(system: String, messages: [LLMMessage], options: RequestOptions = RequestOptions()) async throws -> String {
         var result = ""
-        for try await chunk in stream(system: system, messages: messages) {
+        for try await chunk in stream(system: system, messages: messages, options: options) {
             result += chunk
         }
         return result
@@ -132,7 +150,47 @@ struct LLMClient {
         "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"
     ]
 
-    private func makeChatRequest(system: String, messages: [LLMMessage]) throws -> URLRequest {
+    /// 快速模式下各家服务商用来减少思考的参数（会合并进请求体）。返回空表示这个模型没有可调的参数。
+    func fastParameters() -> [String: Any] {
+        let m = model.lowercased()
+        switch config.apiProtocol {
+        case .openAI:
+            switch config.id {
+            case "openai":
+                // 只有推理模型接受 reasoning_effort
+                if m.hasPrefix("gpt-5") || m.hasPrefix("o1") || m.hasPrefix("o3") || m.hasPrefix("o4") {
+                    return ["reasoning_effort": "low"]
+                }
+                return [:]
+            case "openrouter":
+                return ["reasoning": ["effort": "low"]]
+            case "qwen", "siliconflow":
+                return ["enable_thinking": false]
+            case "zhipu", "moonshot", "doubao":
+                return ["thinking": ["type": "disabled"]]
+            default:
+                return [:]
+            }
+        case .anthropic:
+            // 支持 effort 参数的 Claude 模型
+            let prefixes = ["claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
+                            "claude-sonnet-4-6", "claude-sonnet-5", "claude-haiku-5", "claude-fable", "claude-mythos"]
+            return prefixes.contains(where: m.hasPrefix) ? ["output_config": ["effort": "low"]] : [:]
+        case .gemini:
+            if m.contains("gemini-3") {
+                return ["generationConfig": ["thinkingConfig": ["thinkingLevel": "low"]]]
+            }
+            if m.contains("2.5-flash") {
+                return ["generationConfig": ["thinkingConfig": ["thinkingBudget": 0]]]
+            }
+            if m.contains("2.5-pro") {
+                return ["generationConfig": ["thinkingConfig": ["thinkingBudget": 128]]]
+            }
+            return [:]
+        }
+    }
+
+    private func makeChatRequest(system: String, messages: [LLMMessage], fast: Bool = false) throws -> URLRequest {
         guard !apiKey.isEmpty else { throw LLMError(message: "还没有填写 \(config.name) 的 API Key，请到设置里填写。") }
         guard !model.isEmpty else { throw LLMError(message: "还没有选择 \(config.name) 的模型，请到设置里选择。") }
 
@@ -204,6 +262,10 @@ struct LLMClient {
                 ]
             }
             body = ["systemInstruction": ["parts": [["text": system]]], "contents": contents]
+        }
+
+        if fast {
+            for (key, value) in fastParameters() { body[key] = value }
         }
 
         request.httpMethod = "POST"
@@ -289,5 +351,24 @@ struct LLMClient {
         default: hint = ""
         }
         return "请求失败（HTTP \(status)）\(hint)\n\(detail)"
+    }
+}
+
+/// 记住哪些模型不接受快速模式参数，避免每次都多一次失败的请求
+enum FastModeMemory {
+    private static let lock = NSLock()
+    private static var unsupported: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "fastModeUnsupported") ?? [])
+
+    static func isUnsupported(_ key: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return unsupported.contains(key)
+    }
+
+    static func markUnsupported(_ key: String) {
+        lock.lock()
+        unsupported.insert(key)
+        let list = Array(unsupported)
+        lock.unlock()
+        UserDefaults.standard.set(list, forKey: "fastModeUnsupported")
     }
 }

@@ -28,6 +28,9 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var createdAt = Date()
     /// 这条回复里生成的新题
     var generatedQuestionIDs: [UUID] = []
+    /// AI 回复用时（秒）和所用模型，用于显示“用时”
+    var duration: Double?
+    var model: String?
 }
 
 enum QuestionStatus: String, Codable {

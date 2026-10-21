@@ -5,6 +5,15 @@ import SwiftUI
 struct PendingReply: Equatable {
     var kind: MessageKind
     var text: String = ""
+    var startedAt = Date()
+}
+
+/// AI 请求的用途，决定用哪个模型、是否用快速模式
+enum RequestPurpose {
+    case check, hint, solution, chat, split
+
+    /// 批改和提示：可以用单独的批改模型和快速模式
+    var isGrading: Bool { self == .check || self == .hint }
 }
 
 @MainActor
@@ -38,6 +47,32 @@ final class AppStore: ObservableObject {
         UserDefaults.standard.object(forKey: "aiConsent") as? Bool
     }()
     @Published var showConsent = false
+
+    // MARK: 批改速度
+    /// 检查答案和提示时让模型少思考
+    @Published var quickGrading: Bool = UserDefaults.standard.object(forKey: "quickGrading") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(quickGrading, forKey: "quickGrading") }
+    }
+    /// 单独的批改与提示模型；为 nil 时跟随当前模型
+    @Published var gradingProviderID: String? = UserDefaults.standard.string(forKey: "gradingProvider") {
+        didSet { UserDefaults.standard.set(gradingProviderID, forKey: "gradingProvider") }
+    }
+    @Published var gradingModel: String = UserDefaults.standard.string(forKey: "gradingModel") ?? "" {
+        didSet { UserDefaults.standard.set(gradingModel, forKey: "gradingModel") }
+    }
+    /// 在 AI 回复旁显示用时
+    @Published var showTiming: Bool = UserDefaults.standard.object(forKey: "showTiming") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(showTiming, forKey: "showTiming") }
+    }
+
+    /// 实际用于批改和提示的服务商（已填 Key 且选了模型才生效）
+    var gradingProvider: ProviderConfig? {
+        guard let id = gradingProviderID, var config = providers.first(where: { $0.id == id }), config.hasKey else { return nil }
+        let model = gradingModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty else { return nil }
+        config.model = model
+        return config
+    }
 
     func setAIConsent(_ value: Bool) {
         aiConsent = value
@@ -146,11 +181,14 @@ final class AppStore: ObservableObject {
         if activeProviderID == id { activeProviderID = "anthropic" }
     }
 
-    func makeClient() throws -> LLMClient {
+    func makeClient(for purpose: RequestPurpose = .chat) throws -> LLMClient {
         // 没有同意数据发送说明之前，不向任何 AI 服务商发送内容
         guard aiConsent == true else {
             showConsent = true
             throw ConsentRequired()
+        }
+        if purpose.isGrading, let grading = gradingProvider {
+            return LLMClient(config: grading, apiKey: grading.apiKey)
         }
         guard let config = activeProvider else { throw LLMError(message: "请先在设置里选择一个模型服务商。") }
         return LLMClient(config: config, apiKey: config.apiKey)
@@ -238,7 +276,7 @@ final class AppStore: ObservableObject {
         let imageIDs = handwriting.map { [ImageStore.save($0)] } ?? []
         let message = ChatMessage(role: .user, kind: .submission, text: answer, prompt: prompt, imageIDs: imageIDs)
 
-        run(setID, qID, userMessage: message, replyKind: .verdictWrong) { [weak self] full in
+        run(setID, qID, userMessage: message, replyKind: .verdictWrong, purpose: .check) { [weak self] full in
             let verdict = Tutor.parseVerdict(full)
             // 没有按格式给出判定时按“未通过”处理，反馈原样显示
             let correct = verdict.correct ?? false
@@ -263,7 +301,7 @@ final class AppStore: ObservableObject {
         let level = q.hintCount + 1
         let message = ChatMessage(role: .user, kind: .hintRequest, text: "需要进一步提示（第 \(level) 次）",
                                   prompt: Tutor.hintInstruction(level: level))
-        run(setID, qID, userMessage: message, replyKind: .hint) { [weak self] full in
+        run(setID, qID, userMessage: message, replyKind: .hint, purpose: .hint) { [weak self] full in
             self?.mutate(setID, qID) { q in
                 q.hintCount = level
                 q.messages.append(ChatMessage(role: .assistant, kind: .hint, text: full))
@@ -273,7 +311,7 @@ final class AppStore: ObservableObject {
 
     func requestSolution(_ setID: UUID, _ qID: UUID) {
         let message = ChatMessage(role: .user, kind: .solutionRequest, text: "给出完整答案", prompt: Tutor.solutionInstruction)
-        run(setID, qID, userMessage: message, replyKind: .solution) { [weak self] full in
+        run(setID, qID, userMessage: message, replyKind: .solution, purpose: .solution) { [weak self] full in
             self?.mutate(setID, qID) { q in
                 q.messages.append(ChatMessage(role: .assistant, kind: .solution, text: full))
                 if q.status != .passed { q.status = .revealed }
@@ -285,7 +323,7 @@ final class AppStore: ObservableObject {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let message = ChatMessage(role: .user, kind: .chat, text: text)
-        run(setID, qID, userMessage: message, replyKind: .chat) { [weak self] full in
+        run(setID, qID, userMessage: message, replyKind: .chat, purpose: .chat) { [weak self] full in
             guard let self else { return }
             let (display, newOnes) = Tutor.extractNewQuestions(full)
             let created = self.insertGenerated(newOnes, after: qID, in: setID)
@@ -320,10 +358,10 @@ final class AppStore: ObservableObject {
 
     /// 通用流程：追加用户消息 → 流式请求 → 完成后由 finish 写入回复
     private func run(_ setID: UUID, _ qID: UUID, userMessage: ChatMessage, replyKind: MessageKind,
-                     finish: @escaping (String) -> Void) {
+                     purpose: RequestPurpose, finish: @escaping (String) -> Void) {
         guard !isBusy(qID) else { return }
         let client: LLMClient
-        do { client = try makeClient() } catch {
+        do { client = try makeClient(for: purpose) } catch {
             if !(error is ConsentRequired) { errorMessage = error.localizedDescription }
             ImageStore.delete(userMessage.imageIDs)
             return
@@ -332,14 +370,18 @@ final class AppStore: ObservableObject {
         guard let q = question(setID, qID) else { return }
 
         let system = Tutor.tutorSystem(for: q)
-        let history = Self.history(for: q)
+        // 检查答案只需要题目和这次的作答，不带之前的对话，模型读得更快
+        let history = purpose == .check ? Self.history(for: q, onlyMessageID: userMessage.id) : Self.history(for: q)
+        let options = RequestOptions(fast: purpose.isGrading && quickGrading)
+        let modelName = client.config.model
         pending[qID] = PendingReply(kind: replyKind)
+        let started = Date()
 
         replyTasks[qID] = Task { [weak self] in
             var full = ""
             var lastFlush = Date.distantPast
             do {
-                for try await chunk in client.stream(system: system, messages: history) {
+                for try await chunk in client.stream(system: system, messages: history, options: options) {
                     full += chunk
                     // 限制刷新频率，长回答流式输出时界面不卡
                     if Date().timeIntervalSince(lastFlush) > 0.08 {
@@ -353,6 +395,14 @@ final class AppStore: ObservableObject {
                     throw LLMError(message: "模型没有返回内容，请重试。")
                 }
                 finish(full)
+                // 记下用时和模型，显示在回复旁边
+                let elapsed = Date().timeIntervalSince(started)
+                self?.mutate(setID, qID) { q in
+                    if let i = q.messages.lastIndex(where: { $0.role == .assistant }) {
+                        q.messages[i].duration = elapsed
+                        q.messages[i].model = modelName
+                    }
+                }
             } catch {
                 guard let self else { return }
                 self.pending[qID] = nil
@@ -368,7 +418,8 @@ final class AppStore: ObservableObject {
     }
 
     /// 发送给模型的对话历史。图片只带题目原图和最近两条带图消息，控制请求体积。
-    static func history(for q: Question) -> [LLMMessage] {
+    /// onlyMessageID 不为空时，只带题目原图和这一条消息（用于检查答案）。
+    static func history(for q: Question, onlyMessageID: UUID? = nil) -> [LLMMessage] {
         var result: [LLMMessage] = []
         let questionImages = q.imageIDs.compactMap(ImageStore.load).map(LLMContent.image)
         if !questionImages.isEmpty {
@@ -376,6 +427,7 @@ final class AppStore: ObservableObject {
         }
         let withImages = q.messages.indices.filter { !q.messages[$0].imageIDs.isEmpty }.suffix(2)
         for (i, m) in q.messages.enumerated() {
+            if let only = onlyMessageID, m.id != only { continue }
             var parts: [LLMContent] = []
             if withImages.contains(i) {
                 parts += m.imageIDs.compactMap(ImageStore.load).map(LLMContent.image)
@@ -390,7 +442,7 @@ final class AppStore: ObservableObject {
 
     func split(material: ImportedMaterial, requirement: String, title: String,
                progress: @escaping (Int, Int) -> Void) async throws -> QuestionSet {
-        let client = try makeClient()
+        let client = try makeClient(for: .split)
         let chunks = Importer.chunks(for: material)
         guard !chunks.isEmpty else { throw LLMError(message: "没有可以拆分的内容。") }
 
