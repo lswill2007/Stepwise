@@ -164,6 +164,44 @@ enum Tutor {
 
     static let solutionInstruction = "请给出这道题的完整答案和详细的解题过程（推导写成对齐的公式），最后总结一下解题的关键点。"
 
+    // MARK: - 精简上下文
+
+    /// 之前的作答记录摘要：每次判定和反馈、每次提示、是否看过答案。
+    /// 代替完整对话发给模型，对话变长后回复也不会越来越慢。
+    static func progressSummary(_ messages: [ChatMessage]) -> String? {
+        var lines: [String] = []
+        var attempts = 0, hints = 0
+        for m in messages {
+            switch m.kind {
+            case .verdictWrong, .verdictCorrect:
+                attempts += 1
+                let result = m.kind == .verdictCorrect ? "正确" : "错误"
+                lines.append("- 第 \(attempts) 次作答：判为\(result)。当时的反馈：\(clip(m.text, 300))")
+            case .hint:
+                hints += 1
+                lines.append("- 第 \(hints) 次提示：\(clip(m.text, 300))")
+            case .solution:
+                lines.append("- 学生已经看过完整答案。")
+            default:
+                break
+            }
+        }
+        guard !lines.isEmpty else { return nil }
+        // 记录很多时只留最近几条，最早的反馈对现在帮助不大
+        let kept = lines.suffix(8)
+        var s = "【之前的作答记录】共作答 \(attempts) 次，提示 \(hints) 次"
+        if kept.count < lines.count { s += "（只列出最近 \(kept.count) 条）" }
+        return s + "\n" + kept.joined(separator: "\n")
+    }
+
+    /// 检查答案时附在作答记录后面：以这次作答为准重新批改
+    static let regradeNote = "以上记录只用来了解我的进展。请只根据下面这次的作答重新批改，不要因为之前错过就判错；之前指出过的错误如果还在，简单点明即可，不要重复整段反馈。"
+
+    static func clip(_ s: String, _ limit: Int) -> String {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.count > limit ? String(t.prefix(limit)) + "……" : t
+    }
+
     struct Verdict {
         var correct: Bool?
         var feedback: String

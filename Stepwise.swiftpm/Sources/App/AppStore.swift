@@ -467,8 +467,7 @@ final class AppStore: ObservableObject {
         guard let q = question(setID, qID) else { return }
 
         let system = Tutor.tutorSystem(for: q)
-        // 检查答案只需要题目和这次的作答，不带之前的对话，模型读得更快
-        let history = purpose == .check ? Self.history(for: q, onlyMessageID: userMessage.id) : Self.history(for: q)
+        let history = Self.context(for: q, current: userMessage, purpose: purpose)
         let options = RequestOptions(fast: purpose.isGrading && quickGrading)
         let modelName = client.config.model
         pending[qID] = PendingReply(kind: replyKind)
@@ -514,25 +513,65 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// 发送给模型的对话历史。图片只带题目原图和最近两条带图消息，控制请求体积。
-    /// onlyMessageID 不为空时，只带题目原图和这一条消息（用于检查答案）。
-    static func history(for q: Question, onlyMessageID: UUID? = nil) -> [LLMMessage] {
+    /// 发送给模型的上下文。不发完整对话（越来越长，回复越来越慢）：
+    /// 之前的批改和提示压缩成一段摘要，再附上这次请求真正需要的内容。
+    /// - 检查答案：摘要 + 这次的作答，以这次作答为准重新批改
+    /// - 提示：摘要 + 最近一次作答（含手写图片）
+    /// - 完整答案：摘要
+    /// - 继续对话：摘要 + 完整答案 + 最近几轮对话
+    static func context(for q: Question, current: ChatMessage, purpose: RequestPurpose) -> [LLMMessage] {
+        let earlier = q.messages.filter { $0.id != current.id }
+        let summary = Tutor.progressSummary(earlier)
+        func images(_ m: ChatMessage) -> [LLMContent] { m.imageIDs.compactMap(ImageStore.load).map(LLMContent.image) }
+
         var result: [LLMMessage] = []
         let questionImages = q.imageIDs.compactMap(ImageStore.load).map(LLMContent.image)
         if !questionImages.isEmpty {
             result.append(LLMMessage(role: .user, parts: questionImages + [.text("（以上是题目原图，题目中的图形、表格以图片为准）")]))
         }
-        let withImages = q.messages.indices.filter { !q.messages[$0].imageIDs.isEmpty }.suffix(2)
-        for (i, m) in q.messages.enumerated() {
-            if let only = onlyMessageID, m.id != only { continue }
+
+        switch purpose {
+        case .check:
+            let blocks = [summary, summary == nil ? nil : Tutor.regradeNote, current.prompt ?? current.text]
+            result.append(LLMMessage(role: .user, parts: images(current) + [.text(blocks.compactMap { $0 }.joined(separator: "\n\n"))]))
+        case .hint, .solution, .split:
+            var blocks = [summary]
             var parts: [LLMContent] = []
-            if withImages.contains(i) {
-                parts += m.imageIDs.compactMap(ImageStore.load).map(LLMContent.image)
+            if purpose == .hint, let last = earlier.last(where: { $0.kind == .submission }) {
+                parts = images(last)
+                blocks.append("【我最近一次的作答】\n" + (last.text.isEmpty ? "（见手写图片）" : Tutor.clip(last.text, 1500)))
             }
-            parts.append(.text(m.prompt ?? m.text))
-            result.append(LLMMessage(role: m.role, parts: parts))
+            blocks.append(current.prompt ?? current.text)
+            result.append(LLMMessage(role: .user, parts: parts + [.text(blocks.compactMap { $0 }.joined(separator: "\n\n"))]))
+        case .chat:
+            var background = [summary]
+            if let solution = earlier.last(where: { $0.kind == .solution }) {
+                background.append("【完整答案和解题过程】\n" + Tutor.clip(solution.text, 3000))
+            }
+            // 只带最近几轮对话，从学生的一句话开始
+            var recent = Array(earlier.filter { $0.kind == .chat }.suffix(6)) + [current]
+            while recent.first?.role == .assistant { recent.removeFirst() }
+            for (i, m) in recent.enumerated() {
+                var text = m.prompt ?? m.text
+                let notes = background.compactMap { $0 }
+                if i == 0 && !notes.isEmpty {
+                    text = "【这道题之前的批改和讲解】（背景信息）\n" + notes.joined(separator: "\n\n") + "\n\n" + text
+                }
+                result.append(LLMMessage(role: m.role, parts: [.text(text)]))
+            }
         }
-        return result
+        return mergingSameRole(result)
+    }
+
+    /// 合并相邻的同角色消息，部分接口要求用户和助手交替出现
+    private static func mergingSameRole(_ list: [LLMMessage]) -> [LLMMessage] {
+        list.reduce(into: []) { out, m in
+            if let last = out.last, last.role == m.role {
+                out[out.count - 1].parts += m.parts
+            } else {
+                out.append(m)
+            }
+        }
     }
 
     // MARK: - 拆分题目
