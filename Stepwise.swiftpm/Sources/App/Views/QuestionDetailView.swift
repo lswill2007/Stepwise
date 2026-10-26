@@ -26,6 +26,9 @@ struct QuestionDetailView: View {
     @State private var confirmReset = false
     @State private var editingQuestion = false
     @FocusState private var chatFocused: Bool
+    @State private var showHintNote = false
+    @State private var hintNote = ""
+    @FocusState private var hintNoteFocused: Bool
 
     /// 题目卡片底边在滚动区域中的位置，滚到快看不见时显示置顶的题目
     @State private var cardBottom: CGFloat = .infinity
@@ -316,18 +319,32 @@ struct QuestionDetailView: View {
             .controlSize(.large)
             .disabled(busy || !canSubmit)
 
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 Button {
                     store.requestHint(setID, qID)
                 } label: {
                     Label(q.hintCount == 0 ? "需要提示" : "需要进一步提示", systemImage: "lightbulb")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                         .frame(maxWidth: .infinity)
                 }
                 .tint(.orange)
+                // 先写几句卡在哪里，再要提示
+                Button {
+                    showHintNote = true
+                } label: {
+                    Image(systemName: "text.bubble")
+                }
+                .fixedSize()
+                .tint(.orange)
+                .accessibilityLabel("补充说明后要提示")
+                .popover(isPresented: $showHintNote) { hintNotePopover(q) }
                 Button {
                     store.requestSolution(setID, qID)
                 } label: {
                     Label("给出完整答案", systemImage: "text.book.closed")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                         .frame(maxWidth: .infinity)
                 }
                 .tint(.blue)
@@ -338,6 +355,33 @@ struct QuestionDetailView: View {
         }
         .padding(18)
         .background(RoundedRectangle(cornerRadius: 16).stroke(wrong ? Color.orange.opacity(0.5) : Color.secondary.opacity(0.25)))
+    }
+
+    /// 要提示时补充文字说明：卡在哪一步、哪里不明白
+    private func hintNotePopover(_ q: Question) -> some View {
+        let empty = hintNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("补充说明").font(.headline)
+            TextField("说说你卡在哪一步、哪里不明白…", text: $hintNote, axis: .vertical)
+                .lineLimit(3...6)
+                .focused($hintNoteFocused)
+                .padding(10)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+            Button {
+                store.requestHint(setID, qID, note: hintNote)
+                hintNote = ""
+                showHintNote = false
+            } label: {
+                Label(q.hintCount == 0 ? "发送并要提示" : "发送并要进一步提示", systemImage: "lightbulb")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+            .disabled(empty || store.isBusy(qID))
+        }
+        .padding(18)
+        .frame(width: 380)
+        .onAppear { hintNoteFocused = true }
     }
 
     /// 作答时常用的符号（追加到末尾），AI 能直接理解
@@ -641,12 +685,21 @@ struct MessageRow: View {
             card(title: "完整解答", icon: "text.book.closed.fill", color: .blue)
 
         case .hintRequest, .solutionRequest:
-            HStack {
-                Spacer()
+            VStack(alignment: .trailing, spacing: 6) {
                 Text(message.text).font(.callout)
                     .padding(.horizontal, 12).padding(.vertical, 6)
                     .background(Color.secondary.opacity(0.12), in: Capsule())
+                if let note = message.note {
+                    HStack {
+                        Spacer(minLength: 80)
+                        Text(note)
+                            .padding(12)
+                            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
 
         case .chat:
             if message.role == .user {

@@ -417,11 +417,14 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func requestHint(_ setID: UUID, _ qID: UUID) {
+    /// note：学生补充的文字说明（卡在哪里），可以为空
+    func requestHint(_ setID: UUID, _ qID: UUID, note: String? = nil) {
         guard let q = question(setID, qID) else { return }
         let level = q.hintCount + 1
-        let message = ChatMessage(role: .user, kind: .hintRequest, text: "需要进一步提示（第 \(level) 次）",
-                                  prompt: Tutor.hintInstruction(level: level))
+        let note = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var message = ChatMessage(role: .user, kind: .hintRequest, text: "需要进一步提示（第 \(level) 次）",
+                                  prompt: Tutor.hintInstruction(level: level, note: note))
+        message.note = note?.isEmpty == false ? note : nil
         run(setID, qID, userMessage: message, replyKind: .hint, purpose: .hint) { [weak self] full in
             self?.mutate(setID, qID) { q in
                 q.hintCount = level

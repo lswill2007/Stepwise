@@ -165,10 +165,15 @@ enum Tutor {
     - 反馈要简洁，控制在 2–4 句话以内，直接说重点。
     """
 
-    static func hintInstruction(level: Int) -> String {
-        """
+    /// note：学生补充的文字说明
+    static func hintInstruction(level: Int, note: String? = nil) -> String {
+        var s = """
         我需要进一步提示（这是第 \(level) 次提示）。请在之前提示的基础上再具体一步，引导我自己想出来，但仍然不要直接给出最终答案。简洁一些，控制在几句话以内。
         """
+        if let note, !note.isEmpty {
+            s += "\n\n【我的补充说明】\(note)\n请针对我说的卡住的地方给提示。"
+        }
+        return s
     }
 
     static let solutionInstruction = "请给出这道题的完整答案和详细的解题过程（推导写成对齐的公式），最后总结一下解题的关键点。"
@@ -186,6 +191,10 @@ enum Tutor {
                 attempts += 1
                 let result = m.kind == .verdictCorrect ? "正确" : "错误"
                 lines.append("- 第 \(attempts) 次作答：判为\(result)。当时的反馈：\(clip(m.text, 300))")
+            case .hintRequest:
+                if let note = m.note, !note.isEmpty {
+                    lines.append("- 学生请求提示时补充说：\(clip(note, 200))")
+                }
             case .hint:
                 hints += 1
                 lines.append("- 第 \(hints) 次提示：\(clip(m.text, 300))")

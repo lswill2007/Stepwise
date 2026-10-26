@@ -31,6 +31,8 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// AI 回复用时（秒）和所用模型，用于显示“用时”
     var duration: Double?
     var model: String?
+    /// 请求提示时学生补充的文字说明（卡在哪里、哪里不懂）
+    var note: String?
 }
 
 enum QuestionStatus: String, Codable {
