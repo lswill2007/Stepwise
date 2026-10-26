@@ -1,0 +1,164 @@
+import Foundation
+import SwiftUI
+import UniformTypeIdentifiers
+
+/// 导出 / 导入用的备份文件：题集、作答和对话记录、图片、写了一半的手写笔迹，打包成一个 JSON 文件。
+/// 不包含 API Key 和设置。
+struct LibraryBackup: Codable {
+    static let formatName = "stepwise-backup"
+
+    var format = LibraryBackup.formatName
+    var version = 1
+    var exportedAt = Date()
+    var sets: [QuestionSet]
+    /// 图片文件名 → JPEG 数据
+    var images: [String: Data]
+    /// 题目 id → 手写笔迹（PencilKit 数据）
+    var drawings: [String: Data]
+
+    init(sets: [QuestionSet]) {
+        self.sets = sets
+        var images: [String: Data] = [:]
+        for id in sets.flatMap(Self.imageIDs) {
+            images[id] = ImageStore.load(id)
+        }
+        self.images = images
+        var drawings: [String: Data] = [:]
+        for q in sets.flatMap(\.questions) {
+            drawings[q.id.uuidString] = DrawingStore.load(q.id)
+        }
+        self.drawings = drawings
+    }
+
+    /// 题集用到的所有图片：题目原图、作答和对话里的图片（包括重新练习之前的记录）
+    static func imageIDs(in set: QuestionSet) -> [String] {
+        set.questions.flatMap { q in
+            q.imageIDs + q.messages.flatMap(\.imageIDs) + (q.previousAttempts ?? []).flatMap { $0.flatMap(\.imageIDs) }
+        }
+    }
+
+    /// 写到临时文件，文件名带上日期
+    func write() throws -> URL {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HHmm"
+        let name = sets.count == 1 ? sets[0].title : "\(sets.count) 个题集"
+        let safeName = name.components(separatedBy: CharacterSet(charactersIn: "/\\:?*\"<>|")).joined(separator: "-")
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Stepwise 备份 \(safeName) \(formatter.string(from: exportedAt)).json")
+        // 日期格式和题库文件 library.json 一致，导入后时间一点不差
+        try JSONEncoder().encode(self).write(to: url, options: .atomic)
+        return url
+    }
+
+    static func read(from url: URL) throws -> LibraryBackup {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        let data = try Data(contentsOf: url)
+        guard let backup = try? JSONDecoder().decode(LibraryBackup.self, from: data), backup.format == formatName else {
+            throw BackupError(message: "这不是 Stepwise 导出的备份文件。要导入新的题目，请在左侧点“+”导入题目文件。")
+        }
+        return backup
+    }
+}
+
+struct BackupError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
+/// 分享时才生成备份文件（可以存到“文件”、隔空投送到另一台 iPad）
+struct BackupFile: Transferable {
+    let sets: [QuestionSet]
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .json) { file in
+            SentTransferredFile(try LibraryBackup(sets: file.sets).write())
+        }
+    }
+}
+
+extension AppStore {
+    struct ImportResult {
+        var sets = 0
+        var questions = 0
+        /// 本机已有、作为副本导入的题集数
+        var copies = 0
+    }
+
+    /// 导入备份：只新增，不覆盖本机已有的内容。
+    /// 本机已有的题集作为副本导入，题集、题目和图片都换成新的 id，删除其中一份不影响另一份。
+    /// select：导入后选中第一个题集。从设置里导入时不选中，否则正在显示的题目页会被替换，设置也会跟着关掉。
+    func importBackup(_ backup: LibraryBackup, select: Bool = true) -> ImportResult {
+        let existingSetIDs = Set(sets.map(\.id))
+        let existingQuestionIDs = Set(sets.flatMap { $0.questions.map(\.id) })
+        var result = ImportResult()
+        var imported: [QuestionSet] = []
+
+        for var set in backup.sets {
+            let originalIDs = set.questions.map(\.id)
+            let clash = existingSetIDs.contains(set.id) || originalIDs.contains(where: existingQuestionIDs.contains)
+            // 副本要换新的图片文件名；文件名不安全（例如带路径）的图片也一律换掉，不能写到图片目录外面
+            var imageMap: [String: String] = [:]
+            for id in Set(LibraryBackup.imageIDs(in: set)) where clash || !Self.isSafeFileName(id) {
+                imageMap[id] = UUID().uuidString + ".jpg"
+            }
+            var idMap: [UUID: UUID] = [:]
+            if clash {
+                for id in originalIDs { idMap[id] = UUID() }
+                set.id = UUID()
+                set.title += "（导入）"
+                result.copies += 1
+            }
+            if clash || !imageMap.isEmpty {
+                for i in set.questions.indices {
+                    Self.remap(&set.questions[i], ids: idMap, images: imageMap)
+                }
+            }
+            // 图片：文件名本身是 UUID，本机已有同名文件就是同一张图
+            for id in Set(LibraryBackup.imageIDs(in: set)) {
+                let original = imageMap.first { $0.value == id }?.key ?? id
+                if ImageStore.load(id) == nil, let data = backup.images[original] {
+                    ImageStore.save(data, id: id)
+                }
+            }
+            // 写了一半的手写笔迹
+            for (original, q) in zip(originalIDs, set.questions) {
+                if let data = backup.drawings[original.uuidString], !DrawingStore.exists(q.id) {
+                    DrawingStore.save(data, for: q.id)
+                }
+            }
+            result.sets += 1
+            result.questions += set.questions.count
+            imported.append(set)
+        }
+
+        sets.insert(contentsOf: imported, at: 0)
+        if select, let first = imported.first {
+            selectedSetID = first.id
+            selectedQuestionID = first.questions.first(where: { !$0.status.isDone })?.id ?? first.questions.first?.id
+        }
+        saveNow()
+        return result
+    }
+
+    private static func isSafeFileName(_ name: String) -> Bool {
+        !name.isEmpty && !name.hasPrefix(".") && !name.contains("/") && !name.contains("\\")
+    }
+
+    /// 副本导入时替换题目里的 id：题目本身、对话里出的新题链接、所有图片
+    private static func remap(_ q: inout Question, ids: [UUID: UUID], images: [String: String]) {
+        func remap(_ m: inout ChatMessage) {
+            m.imageIDs = m.imageIDs.map { images[$0] ?? $0 }
+            m.generatedQuestionIDs = m.generatedQuestionIDs.map { ids[$0] ?? $0 }
+        }
+        q.id = ids[q.id] ?? q.id
+        q.imageIDs = q.imageIDs.map { images[$0] ?? $0 }
+        for i in q.messages.indices { remap(&q.messages[i]) }
+        if var attempts = q.previousAttempts {
+            for a in attempts.indices {
+                for m in attempts[a].indices { remap(&attempts[a][m]) }
+            }
+            q.previousAttempts = attempts
+        }
+    }
+}

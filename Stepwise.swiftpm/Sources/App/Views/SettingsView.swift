@@ -5,6 +5,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var path: [String] = []
     @State private var showConsent = false
+    @State private var showImporter = false
+    @State private var importMessage: String?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -55,6 +57,8 @@ struct SettingsView: View {
                     }
                 }
 
+                backupSection
+
                 Section {
                     LabeledContent("发送题目给 AI 服务商") {
                         Text(store.aiConsent == true ? "已同意" : "未同意")
@@ -75,6 +79,22 @@ struct SettingsView: View {
             }
             .navigationTitle("设置")
             .sheet(isPresented: $showConsent) { ConsentView() }
+            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { result in
+                do {
+                    let backup = try LibraryBackup.read(from: result.get())
+                    let r = store.importBackup(backup, select: false)
+                    var message = "已导入 \(r.sets) 个题集，共 \(r.questions) 道题，放在左侧题集列表的最上面。"
+                    if r.copies > 0 { message += "其中 \(r.copies) 个题集本机已经有了，作为副本导入（名称后面带“导入”）。" }
+                    importMessage = message
+                } catch {
+                    importMessage = error.localizedDescription
+                }
+            }
+            .alert("导入", isPresented: Binding(get: { importMessage != nil }, set: { if !$0 { importMessage = nil } })) {
+                Button("好") { importMessage = nil }
+            } message: {
+                Text(importMessage ?? "")
+            }
             .navigationDestination(for: String.self) { id in
                 ProviderEditView(providerID: id)
             }
@@ -147,6 +167,27 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - 备份与迁移
+
+    private var backupSection: some View {
+        Section {
+            NavigationLink {
+                ExportView()
+            } label: {
+                Label("导出题目和做题记录", systemImage: "square.and.arrow.up")
+            }
+            Button {
+                showImporter = true
+            } label: {
+                Label("导入题目和做题记录", systemImage: "square.and.arrow.down")
+            }
+        } header: {
+            Text("备份与迁移")
+        } footer: {
+            Text("导出的文件包含题目、参考答案、作答和对话记录、图片和手写笔迹，可以存到“文件”或隔空投送到另一台 iPad，再在那里导入。不包含 API Key 和设置。导入只会新增题集，不会覆盖本机已有的内容。")
+        }
+    }
+
     // MARK: - 作答
 
     @ViewBuilder
@@ -182,6 +223,72 @@ struct SettingsView: View {
             Text("做完一道题之后")
         } footer: {
             Text("做对或看完答案后，题目下方会显示这些快捷操作，可以增删、改文字、调整顺序。出新题建议选推理能力强的模型（名字里常带 pro、opus、reasoner、thinking）。新题会记住原题的作答记录，批改时会特别留意你在原题上犯过的错。")
+        }
+    }
+}
+
+/// 选择要导出的题集，生成备份文件分享出去
+struct ExportView: View {
+    @EnvironmentObject var store: AppStore
+    @State private var selected: Set<UUID> = []
+    @State private var initialized = false
+
+    var body: some View {
+        let chosen = store.sets.filter { selected.contains($0.id) }
+        let allSelected = !store.sets.isEmpty && chosen.count == store.sets.count
+        List {
+            Section {
+                if store.sets.isEmpty {
+                    Text("还没有题集").foregroundStyle(.secondary)
+                }
+                ForEach(store.sets) { set in
+                    Button {
+                        if selected.contains(set.id) { selected.remove(set.id) } else { selected.insert(set.id) }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: selected.contains(set.id) ? "checkmark.circle.fill" : "circle")
+                                .font(.title3)
+                                .foregroundStyle(selected.contains(set.id) ? Color.accentColor : Color.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(set.title).foregroundStyle(.primary)
+                                Text("\(set.questions.count) 道题 · 已完成 \(set.doneCount)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("选择要导出的题集")
+                    Spacer()
+                    if !store.sets.isEmpty {
+                        Button(allSelected ? "全不选" : "全选") {
+                            selected = allSelected ? [] : Set(store.sets.map(\.id))
+                        }
+                        .font(.callout)
+                        .textCase(nil)
+                    }
+                }
+            }
+
+            Section {
+                ShareLink(item: BackupFile(sets: chosen),
+                          preview: SharePreview("Stepwise 备份（\(chosen.count) 个题集）")) {
+                    Label(chosen.isEmpty ? "请先选择题集" : "导出 \(chosen.count) 个题集，共 \(chosen.reduce(0) { $0 + $1.questions.count }) 道题",
+                          systemImage: "square.and.arrow.up")
+                }
+                .disabled(chosen.isEmpty)
+            } footer: {
+                Text("可以存到“文件”、隔空投送到另一台 iPad，或用其他 App 发送。在另一台设备上打开设置 → 导入题目和做题记录。")
+            }
+        }
+        .navigationTitle("导出")
+        .onAppear {
+            // 默认全选
+            if !initialized {
+                selected = Set(store.sets.map(\.id))
+                initialized = true
+            }
         }
     }
 }

@@ -58,6 +58,11 @@ enum ImageStore {
         try? Data(contentsOf: directory.appendingPathComponent(id))
     }
 
+    /// 按指定文件名保存（导入备份时用）
+    static func save(_ data: Data, id: String) {
+        try? data.write(to: directory.appendingPathComponent(id), options: .atomic)
+    }
+
     static func cgImage(_ id: String) -> CGImage? {
         if let cached = cache.object(forKey: id as NSString) { return cached }
         guard let data = load(id), let image = ImageUtil.cgImage(from: data) else { return nil }
