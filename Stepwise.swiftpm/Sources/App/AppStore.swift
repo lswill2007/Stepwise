@@ -17,7 +17,7 @@ enum ReviewOutcome: Equatable {
 
 /// AI 请求的用途，决定用哪个模型、是否用快速模式
 enum RequestPurpose {
-    case check, hint, solution, chat, split
+    case check, hint, solution, chat, newQuestion, split
 
     /// 批改和提示：可以用单独的批改模型和快速模式
     var isGrading: Bool { self == .check || self == .hint }
@@ -81,10 +81,37 @@ final class AppStore: ObservableObject {
         didSet { UserDefaults.standard.set(showTiming, forKey: "showTiming") }
     }
 
+    // MARK: 作答与出题
+    /// 允许键盘作答；默认只用 Apple Pencil 手写
+    @Published var keyboardAnswer: Bool = UserDefaults.standard.bool(forKey: "keyboardAnswer") {
+        didSet { UserDefaults.standard.set(keyboardAnswer, forKey: "keyboardAnswer") }
+    }
+    /// 做完一道题之后的快捷操作
+    @Published var followUps: [FollowUpAction] = {
+        guard let data = UserDefaults.standard.data(forKey: "followUps"),
+              let saved = try? JSONDecoder().decode([FollowUpAction].self, from: data) else { return FollowUpAction.defaults }
+        return saved
+    }() {
+        didSet {
+            if let data = try? JSONEncoder().encode(followUps) { UserDefaults.standard.set(data, forKey: "followUps") }
+        }
+    }
+    /// 单独的出新题模型（一般选推理能力强的）；为 nil 时跟随当前模型
+    @Published var questionProviderID: String? = UserDefaults.standard.string(forKey: "questionProvider") {
+        didSet { UserDefaults.standard.set(questionProviderID, forKey: "questionProvider") }
+    }
+    @Published var questionModel: String = UserDefaults.standard.string(forKey: "questionModel") ?? "" {
+        didSet { UserDefaults.standard.set(questionModel, forKey: "questionModel") }
+    }
+
     /// 实际用于批改和提示的服务商（已填 Key 且选了模型才生效）
-    var gradingProvider: ProviderConfig? {
-        guard let id = gradingProviderID, var config = providers.first(where: { $0.id == id }), config.hasKey else { return nil }
-        let model = gradingModel.trimmingCharacters(in: .whitespacesAndNewlines)
+    var gradingProvider: ProviderConfig? { overrideProvider(id: gradingProviderID, model: gradingModel) }
+    /// 实际用于出新题的服务商
+    var questionProvider: ProviderConfig? { overrideProvider(id: questionProviderID, model: questionModel) }
+
+    private func overrideProvider(id: String?, model: String) -> ProviderConfig? {
+        guard let id, var config = providers.first(where: { $0.id == id }), config.hasKey else { return nil }
+        let model = model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty else { return nil }
         config.model = model
         return config
@@ -211,6 +238,9 @@ final class AppStore: ObservableObject {
         }
         if purpose.isGrading, let grading = gradingProvider {
             return LLMClient(config: grading, apiKey: grading.apiKey)
+        }
+        if purpose == .newQuestion, let question = questionProvider {
+            return LLMClient(config: question, apiKey: question.apiKey)
         }
         guard let config = activeProvider else { throw LLMError(message: "请先在设置里选择一个模型服务商。") }
         return LLMClient(config: config, apiKey: config.apiKey)
@@ -416,11 +446,13 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func sendChat(_ setID: UUID, _ qID: UUID, text: String) {
+    /// makesQuestion：这句话是让 AI 出新题，用出新题模型
+    func sendChat(_ setID: UUID, _ qID: UUID, text: String, makesQuestion: Bool = false) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let message = ChatMessage(role: .user, kind: .chat, text: text)
-        run(setID, qID, userMessage: message, replyKind: .chat, purpose: .chat) { [weak self] full in
+        let purpose: RequestPurpose = makesQuestion || Tutor.asksForNewQuestion(text) ? .newQuestion : .chat
+        run(setID, qID, userMessage: message, replyKind: .chat, purpose: purpose) { [weak self] full in
             guard let self else { return }
             let (display, newOnes) = Tutor.extractNewQuestions(full)
             let created = self.insertGenerated(newOnes, after: qID, in: setID)
@@ -437,6 +469,7 @@ final class AppStore: ObservableObject {
               let si = sets.firstIndex(where: { $0.id == setID }),
               let qi = sets[si].questions.firstIndex(where: { $0.id == qID }) else { return [] }
         let baseLabel = sets[si].questions[qi].label
+        let origin = Tutor.originNote(for: sets[si].questions[qi])
         let existing = sets[si].questions.filter { $0.label.hasPrefix(baseLabel + "-新") }.count
         var insertAt = qi + 1
         // 跳过之前已插入的变式题，保持顺序
@@ -445,8 +478,9 @@ final class AppStore: ObservableObject {
         }
         var ids: [UUID] = []
         for (k, item) in items.enumerated() {
-            let q = Question(label: "\(baseLabel)-新\(existing + k + 1)", content: item.content,
+            var q = Question(label: "\(baseLabel)-新\(existing + k + 1)", content: item.content,
                              referenceAnswer: item.answer, isGenerated: true)
+            q.originNote = origin
             sets[si].questions.insert(q, at: insertAt + k)
             ids.append(q.id)
         }
@@ -466,7 +500,7 @@ final class AppStore: ObservableObject {
         mutate(setID, qID) { $0.messages.append(userMessage) }
         guard let q = question(setID, qID) else { return }
 
-        let system = Tutor.tutorSystem(for: q)
+        let system = Tutor.tutorSystem(for: q, origin: q.originNote ?? legacyOrigin(of: q, in: setID))
         let history = Self.context(for: q, current: userMessage, purpose: purpose)
         let options = RequestOptions(fast: purpose.isGrading && quickGrading)
         let modelName = client.config.model
@@ -513,6 +547,14 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// 旧版本出的新题没有保存原题记忆：按题号（“3-新1”的原题是“3”）找到原题现场生成
+    private func legacyOrigin(of q: Question, in setID: UUID) -> String? {
+        guard q.isGenerated, let range = q.label.range(of: "-新", options: .backwards) else { return nil }
+        let base = String(q.label[..<range.lowerBound])
+        guard let source = set(setID)?.questions.first(where: { $0.label == base }) else { return nil }
+        return Tutor.originNote(for: source)
+    }
+
     /// 发送给模型的上下文。不发完整对话（越来越长，回复越来越慢）：
     /// 之前的批改和提示压缩成一段摘要，再附上这次请求真正需要的内容。
     /// - 检查答案：摘要 + 这次的作答，以这次作答为准重新批改
@@ -543,7 +585,7 @@ final class AppStore: ObservableObject {
             }
             blocks.append(current.prompt ?? current.text)
             result.append(LLMMessage(role: .user, parts: parts + [.text(blocks.compactMap { $0 }.joined(separator: "\n\n"))]))
-        case .chat:
+        case .chat, .newQuestion:
             var background = [summary]
             if let solution = earlier.last(where: { $0.kind == .solution }) {
                 background.append("【完整答案和解题过程】\n" + Tutor.clip(solution.text, 3000))

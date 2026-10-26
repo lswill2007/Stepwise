@@ -237,16 +237,20 @@ struct QuestionDetailView: View {
 
     // MARK: - 作答区（未通过）
 
+    /// 没在设置里开启键盘作答时只能手写
+    private var handwritingOnly: Bool { HandwritingModel.isAvailable && !store.keyboardAnswer }
+    private var isHandwriting: Bool { handwritingOnly || useHandwriting }
+
     private func answerComposer(_ q: Question) -> some View {
         let busy = store.isBusy(qID)
-        let canSubmit = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (useHandwriting && !handwriting.isEmpty)
+        let canSubmit = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (isHandwriting && !handwriting.isEmpty)
         let wrong = q.status == .wrong
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(wrong ? "修改后再检查一次" : "你的作答").font(.headline)
                 Spacer()
-                if HandwritingModel.isAvailable {
+                if HandwritingModel.isAvailable && store.keyboardAnswer {
                     Picker("作答方式", selection: $useHandwriting) {
                         Label("键盘", systemImage: "keyboard").tag(false)
                         Label("手写", systemImage: "pencil.tip").tag(true)
@@ -256,11 +260,11 @@ struct QuestionDetailView: View {
                 }
             }
 
-            if useHandwriting {
+            if isHandwriting {
                 HandwritingPad(model: handwriting, fullScreen: store.isFullScreen)
             }
 
-            if !useHandwriting {
+            if !isHandwriting {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(Self.symbols, id: \.self) { symbol in
@@ -272,17 +276,20 @@ struct QuestionDetailView: View {
                 }
             }
 
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: $draft)
-                    .frame(minHeight: useHandwriting ? 60 : 130)
-                    .scrollContentBackground(.hidden)
-                    .padding(6)
-                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-                if draft.isEmpty {
-                    Text(useHandwriting ? "可以补充文字说明（可选）" : "在这里写下答案和解题过程…")
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 12).padding(.vertical, 14)
-                        .allowsHitTesting(false)
+            // 只能手写时不显示文字框；以前打过的文字仍然显示，不会丢
+            if !handwritingOnly || !draft.isEmpty {
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $draft)
+                        .frame(minHeight: isHandwriting ? 60 : 130)
+                        .scrollContentBackground(.hidden)
+                        .padding(6)
+                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    if draft.isEmpty {
+                        Text(isHandwriting ? "可以补充文字说明（可选）" : "在这里写下答案和解题过程…")
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 12).padding(.vertical, 14)
+                            .allowsHitTesting(false)
+                    }
                 }
             }
 
@@ -298,7 +305,7 @@ struct QuestionDetailView: View {
 
             Button {
                 saveDraft()
-                let image = useHandwriting ? handwriting.exportJPEG() : nil
+                let image = isHandwriting ? handwriting.exportJPEG() : nil
                 store.check(setID, qID, answer: draft, handwriting: image)
             } label: {
                 Label("检查答案", systemImage: "checkmark.seal")
@@ -337,15 +344,6 @@ struct QuestionDetailView: View {
     private static let symbols = ["²", "³", "√", "π", "±", "×", "÷", "≤", "≥", "≠", "≈", "∞", "°", "∠", "△", "⊥", "∥", "∈", "∪", "∩", "→", "⇒", "α", "β", "θ", "Δ"]
 
     // MARK: - 通过后
-
-    private static let followUps: [(String, String)] = [
-        ("出一道类似的新题", "请出一道考查相同知识点的类似新题。"),
-        ("出一道更难的题", "请出一道考查相同知识点、但更难一些的新题。"),
-        ("总结做题技巧", "请总结这道题用到的做题技巧和通用方法，以后遇到类似的题应该怎么想？"),
-        ("讲讲解题思路", "请从头讲一下这道题的解题思路：拿到题目时先注意什么，突破口在哪里？"),
-        ("还有别的解法吗", "这道题还有其他解法吗？请和原来的方法比较一下。"),
-        ("常见易错点", "这类题有哪些常见的易错点？")
-    ]
 
     /// 通过这道题的那条消息（第一次判对或看完整答案），之后的消息都是通过后的对话
     static func passIndex(in q: Question) -> Int? {
@@ -492,11 +490,12 @@ struct QuestionDetailView: View {
     private var followUpChips: some View {
         // 自动换行，所有按钮都能直接看到
         FlowLayout(spacing: 8) {
-            ForEach(Array(Self.followUps.enumerated()), id: \.offset) { index, item in
-                Button(item.0) { store.sendChat(setID, qID, text: item.1) }
+            // 在设置里自定义；出新题的操作用紫色
+            ForEach(store.followUps.filter { !$0.title.isEmpty && !$0.prompt.isEmpty }) { action in
+                Button(action.title) { store.sendChat(setID, qID, text: action.prompt, makesQuestion: action.makesQuestion) }
                     .buttonStyle(.bordered)
                     .buttonBorderShape(.capsule)
-                    .tint(index < 2 ? .purple : .accentColor)
+                    .tint(action.makesQuestion ? .purple : .accentColor)
             }
         }
         .disabled(store.isBusy(qID))

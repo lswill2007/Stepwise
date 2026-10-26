@@ -120,12 +120,21 @@ enum Tutor {
 
     // MARK: - 辅导
 
-    static func tutorSystem(for q: Question) -> String {
-        let answerSection: String
+    /// origin：这道题是 AI 出的新题时，原题的内容和作答记录
+    static func tutorSystem(for q: Question, origin: String? = nil) -> String {
+        var answerSection: String
         if let ref = q.referenceAnswer, !ref.isEmpty {
             answerSection = "【参考答案】（只供你判断对错，学生看不到。在学生请求完整答案之前不要泄露）\n\(ref)"
         } else {
             answerSection = "【参考答案】无。请你先自己认真求解并核对，再评判学生。"
+        }
+        if let origin, !origin.isEmpty {
+            answerSection += """
+
+
+            【原题的记忆】这道题是根据学生做过的一道原题出的新题。学生在原题上出过的错很可能再犯：批改和提示时请特别留意，发现同类问题时直接点明“和原题一样……”。
+            \(origin)
+            """
         }
         return """
         你是一位耐心、严谨的学习辅导老师，正在一对一辅导学生做下面这道题。
@@ -137,7 +146,7 @@ enum Tutor {
 
         辅导原则：鼓励学生独立思考；学生通过这道题（做对或已看过完整答案）之前，不要直接给出最终答案。
 
-        当学生请你出一道新题时：先用一两句话说明这道题考查什么，然后按下面的格式给出新题（一次可以出多道，每道一组标签），新题的答案只写在 <answer> 里，不要写在标签外面：
+        当学生请你出一道新题时：参考学生在这道题上的作答记录，让新题能检验他之前出错的地方。先用一两句话说明这道题考查什么，然后按下面的格式给出新题（一次可以出多道，每道一组标签），新题的答案只写在 <answer> 里，不要写在标签外面：
         <new_question>
         <content>完整题干（含选项，每个选项单独一行）</content>
         <answer>参考答案和简要解析</answer>
@@ -196,6 +205,23 @@ enum Tutor {
 
     /// 检查答案时附在作答记录后面：以这次作答为准重新批改
     static let regradeNote = "以上记录只用来了解我的进展。请只根据下面这次的作答重新批改，不要因为之前错过就判错；之前指出过的错误如果还在，简单点明即可，不要重复整段反馈。"
+
+    /// 出的新题要记住的原题内容：题干和作答记录（包括错题本里重新练习之前的记录）
+    static func originNote(for source: Question) -> String {
+        let history = (source.previousAttempts ?? []).flatMap { $0 } + source.messages
+        var s = "原题（第 \(source.label) 题）：\n" + clip(source.content, 800) + "\n\n"
+        s += progressSummary(history) ?? "学生在原题上没有错误记录。"
+        // 新题再出新题时，最早那道原题的记录也带上
+        if let earlier = source.originNote {
+            s += "\n\n更早的原题：\n" + clip(earlier, 800)
+        }
+        return s
+    }
+
+    /// 对话里直接打字让 AI 出题时，也用出新题模型
+    static func asksForNewQuestion(_ text: String) -> Bool {
+        ["出一道", "出两道", "出三道", "出几道", "再出", "出道题", "出个题", "新题"].contains { text.contains($0) }
+    }
 
     static func clip(_ s: String, _ limit: Int) -> String {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)

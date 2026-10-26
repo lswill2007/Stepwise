@@ -60,8 +60,28 @@ struct Question: Codable, Identifiable, Equatable {
     var reviewRounds: Int?
     /// 重新练习之前的作答记录（每次重新练习保存一份）
     var previousAttempts: [[ChatMessage]]?
+    /// AI 出的新题：原题的内容和作答记录，批改新题时参考，更容易发现同样的问题
+    var originNote: String?
 
     var isStarred: Bool { starredAt != nil }
+}
+
+/// 做完一道题之后的快捷操作，可以在设置里自定义
+struct FollowUpAction: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var title: String
+    var prompt: String
+    /// 会出新题：用“出新题模型”请求，出的题加入题目列表
+    var makesQuestion = false
+
+    static let defaults: [FollowUpAction] = [
+        FollowUpAction(title: "出一道类似的新题", prompt: "请出一道考查相同知识点的类似新题。", makesQuestion: true),
+        FollowUpAction(title: "出一道更难的题", prompt: "请出一道考查相同知识点、但更难一些的新题。", makesQuestion: true),
+        FollowUpAction(title: "总结做题技巧", prompt: "请总结这道题用到的做题技巧和通用方法，以后遇到类似的题应该怎么想？"),
+        FollowUpAction(title: "讲讲解题思路", prompt: "请从头讲一下这道题的解题思路：拿到题目时先注意什么，突破口在哪里？"),
+        FollowUpAction(title: "还有别的解法吗", prompt: "这道题还有其他解法吗？请和原来的方法比较一下。"),
+        FollowUpAction(title: "常见易错点", prompt: "这类题有哪些常见的易错点？")
+    ]
 }
 
 struct QuestionSet: Codable, Identifiable, Equatable {
