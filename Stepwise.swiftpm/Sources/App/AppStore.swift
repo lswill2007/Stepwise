@@ -27,6 +27,8 @@ enum RequestPurpose {
 final class AppStore: ObservableObject {
     // MARK: 题库
     @Published var sets: [QuestionSet] = [] { didSet { scheduleSave() } }
+    /// 左侧的分级文件夹，单独存在 folders.json
+    @Published var folders: [Folder] = [] { didSet { saveFolders() } }
     @Published var selectedSetID: UUID?
     @Published var selectedQuestionID: UUID?
     /// 错题复习结果提示
@@ -134,6 +136,8 @@ final class AppStore: ObservableObject {
 
     nonisolated private static let libraryURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("library.json")
+    private static let foldersURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("folders.json")
 
     init() {
         if let data = try? Data(contentsOf: Self.libraryURL) {
@@ -145,6 +149,11 @@ final class AppStore: ObservableObject {
                 let backup = Self.libraryURL.deletingLastPathComponent().appendingPathComponent("library-backup-\(stamp).json")
                 try? data.write(to: backup)
             }
+        }
+        if let data = try? Data(contentsOf: Self.foldersURL),
+           let decoded = try? JSONDecoder().decode([Folder].self, from: data) {
+            folders = decoded
+            repairFolders()
         }
         loadProviders()
         activeProviderID = UserDefaults.standard.string(forKey: "activeProvider") ?? "anthropic"
@@ -185,6 +194,12 @@ final class AppStore: ObservableObject {
             try? await Task.sleep(nanoseconds: 600_000_000)
             guard !Task.isCancelled, let data = try? JSONEncoder().encode(snapshot) else { return }
             try? data.write(to: Self.libraryURL, options: .atomic)
+        }
+    }
+
+    private func saveFolders() {
+        if let data = try? JSONEncoder().encode(folders) {
+            try? data.write(to: Self.foldersURL, options: .atomic)
         }
     }
 
@@ -767,4 +782,124 @@ final class AppStore: ObservableObject {
 /// 需要先同意数据发送说明（会弹出说明页，不显示错误提示）
 struct ConsentRequired: LocalizedError {
     var errorDescription: String? { "需要先同意数据发送说明才能使用 AI 功能。" }
+}
+
+// MARK: - 文件夹
+
+extension AppStore {
+    func folder(_ id: UUID?) -> Folder? {
+        id.flatMap { id in folders.first { $0.id == id } }
+    }
+
+    /// 某个文件夹（nil 为最外层）直接包含的文件夹和题集
+    func childFolders(of parent: UUID?) -> [Folder] {
+        folders.filter { $0.parentID == parent }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    func sets(in folderID: UUID?) -> [QuestionSet] {
+        // 指向已经不存在的文件夹的题集放到最外层，不会丢
+        sets.filter { set in
+            let actual = folder(set.folderID) == nil ? nil : set.folderID
+            return actual == folderID
+        }
+    }
+
+    /// 文件夹里（包括子文件夹）一共多少个题集
+    func setCount(inTree id: UUID) -> Int {
+        sets(in: id).count + childFolders(of: id).reduce(0) { $0 + setCount(inTree: $1.id) }
+    }
+
+    /// “数学 / 函数 / 二次函数”
+    func folderPath(_ id: UUID?) -> String {
+        var names: [String] = []
+        var current = folder(id)
+        var guardCount = 0
+        while let f = current, guardCount < 50 {
+            names.insert(f.name, at: 0)
+            current = folder(f.parentID)
+            guardCount += 1
+        }
+        return names.joined(separator: " / ")
+    }
+
+    /// 所有文件夹，按层级排好（用于“移到…”菜单）
+    func folderTree() -> [(folder: Folder, depth: Int)] {
+        func walk(_ parent: UUID?, _ depth: Int) -> [(Folder, Int)] {
+            childFolders(of: parent).flatMap { [($0, depth)] + walk($0.id, depth + 1) }
+        }
+        return walk(nil, 0)
+    }
+
+    /// id 是不是 ancestor 本身或它的子孙（防止把文件夹移到自己里面）
+    func isInside(_ id: UUID?, _ ancestor: UUID) -> Bool {
+        var current = id
+        var guardCount = 0
+        while let c = current, guardCount < 50 {
+            if c == ancestor { return true }
+            current = folder(c)?.parentID
+            guardCount += 1
+        }
+        return false
+    }
+
+    @discardableResult
+    func addFolder(name: String, parent: UUID?) -> UUID {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let new = Folder(name: trimmed.isEmpty ? "新文件夹" : trimmed, parentID: parent)
+        folders.append(new)
+        // 在文件夹里新建时，把上一级展开
+        if let parent, let i = folders.firstIndex(where: { $0.id == parent }) { folders[i].collapsed = false }
+        return new.id
+    }
+
+    func renameFolder(_ id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let i = folders.firstIndex(where: { $0.id == id }) else { return }
+        folders[i].name = trimmed
+    }
+
+    func setCollapsed(_ id: UUID, _ collapsed: Bool) {
+        guard let i = folders.firstIndex(where: { $0.id == id }), folders[i].collapsed != collapsed else { return }
+        folders[i].collapsed = collapsed
+    }
+
+    /// 删除文件夹：里面的题集和子文件夹移到上一级，不会删除任何题目
+    func deleteFolder(_ id: UUID) {
+        guard let f = folder(id) else { return }
+        for i in folders.indices where folders[i].parentID == id { folders[i].parentID = f.parentID }
+        for i in sets.indices where sets[i].folderID == id { sets[i].folderID = f.parentID }
+        folders.removeAll { $0.id == id }
+    }
+
+    /// 上级文件夹不存在、或者互相嵌套成环的文件夹（只可能来自损坏的备份）放回最外层，里面的题集不会看不见
+    func repairFolders() {
+        let ids = Set(folders.map(\.id))
+        for i in folders.indices {
+            var seen: Set<UUID> = [folders[i].id]
+            var current = folders[i].parentID
+            while let c = current {
+                if !ids.contains(c) || seen.contains(c) {
+                    folders[i].parentID = nil
+                    break
+                }
+                seen.insert(c)
+                current = folder(c)?.parentID
+            }
+        }
+    }
+
+    func moveSet(_ setID: UUID, to folderID: UUID?) {
+        guard let i = sets.firstIndex(where: { $0.id == setID }), sets[i].folderID != folderID else { return }
+        sets[i].folderID = folderID
+        if let folderID { setCollapsed(folderID, false) }
+    }
+
+    func moveFolder(_ id: UUID, to parent: UUID?) {
+        // 不能移到自己或自己的子文件夹里
+        if let parent, isInside(parent, id) { return }
+        guard let i = folders.firstIndex(where: { $0.id == id }), folders[i].parentID != parent else { return }
+        folders[i].parentID = parent
+        if let parent { setCollapsed(parent, false) }
+    }
 }

@@ -70,6 +70,15 @@ struct Question: Codable, Identifiable, Equatable {
     var isStarred: Bool { starredAt != nil }
 }
 
+/// 左侧的分级文件夹：文件夹里可以放题集，也可以再放文件夹
+struct Folder: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var name: String
+    /// 上一级文件夹；nil 表示最外层
+    var parentID: UUID?
+    var collapsed = false
+}
+
 /// 做完一道题之后的快捷操作，可以在设置里自定义
 struct FollowUpAction: Codable, Identifiable, Equatable {
     var id = UUID()
@@ -94,6 +103,8 @@ struct QuestionSet: Codable, Identifiable, Equatable {
     var createdAt = Date()
     var requirement: String = ""
     var questions: [Question]
+    /// 所在的文件夹；nil 表示放在最外层（旧版本的数据没有这个字段）
+    var folderID: UUID?
 
     var doneCount: Int { questions.filter { $0.status.isDone }.count }
 }

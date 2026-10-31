@@ -4,8 +4,23 @@ struct SidebarView: View {
     @EnvironmentObject var store: AppStore
     @Binding var showImport: Bool
     @Binding var showSettings: Bool
-    @State private var renaming: QuestionSet?
-    @State private var newTitle = ""
+
+    /// 正在输入名字：新建文件夹、重命名文件夹或题集
+    enum NameEdit: Identifiable {
+        case newFolder(parent: UUID?)
+        case renameFolder(UUID)
+        case renameSet(UUID)
+        var id: String {
+            switch self {
+            case .newFolder(let parent): return "new-\(parent?.uuidString ?? "root")"
+            case .renameFolder(let id): return "folder-\(id)"
+            case .renameSet(let id): return "set-\(id)"
+            }
+        }
+    }
+    @State private var nameEdit: NameEdit?
+    @State private var nameText = ""
+    @State private var deletingFolder: Folder?
 
     var body: some View {
         List(selection: Binding(get: { store.selectedSetID }, set: { id in
@@ -37,31 +52,28 @@ struct SidebarView: View {
                     .tag(AppStore.mistakeBookID)
                 }
             }
-            ForEach(store.sets) { set in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(set.title).font(.headline).lineLimit(2)
-                    HStack {
-                        ProgressView(value: Double(set.doneCount), total: Double(max(set.questions.count, 1)))
-                        Text("\(set.doneCount)/\(set.questions.count)")
-                            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            Section {
+                FolderContents(parent: nil, actions: actions)
+                if !store.sets.isEmpty || !store.folders.isEmpty {
+                    Button {
+                        startEdit(.newFolder(parent: nil))
+                    } label: {
+                        Label("新建文件夹", systemImage: "folder.badge.plus")
+                            .foregroundStyle(Color.accentColor)
                     }
                 }
-                .padding(.vertical, 4)
-                .tag(set.id)
-                .contextMenu {
-                    Button("重命名", systemImage: "pencil") {
-                        newTitle = set.title
-                        renaming = set
-                    }
-                    Button("删除", systemImage: "trash", role: .destructive) { store.deleteSet(set.id) }
+            } header: {
+                if !store.folders.isEmpty || !store.sets.isEmpty {
+                    Text("题集")
+                        // 拖到这里放回最外层
+                        .dropDestination(for: String.self) { items, _ in
+                            drop(items, into: nil)
+                        }
                 }
-            }
-            .onDelete { offsets in
-                offsets.map { store.sets[$0].id }.forEach(store.deleteSet)
             }
         }
         .overlay {
-            if store.sets.isEmpty {
+            if store.sets.isEmpty && store.folders.isEmpty {
                 ContentUnavailableView {
                     Label("还没有题目", systemImage: "doc.text.magnifyingglass")
                 } description: {
@@ -80,13 +92,217 @@ struct SidebarView: View {
                 Button { showSettings = true } label: { Label("设置", systemImage: "gearshape") }
             }
         }
-        .alert("重命名题集", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("名称", text: $newTitle)
-            Button("取消", role: .cancel) { renaming = nil }
-            Button("确定") {
-                if let id = renaming?.id, !newTitle.isEmpty { store.renameSet(id, to: newTitle) }
-                renaming = nil
+        .alert(alertTitle, isPresented: Binding(get: { nameEdit != nil }, set: { if !$0 { nameEdit = nil } })) {
+            TextField("名称", text: $nameText)
+            Button("取消", role: .cancel) { nameEdit = nil }
+            Button("确定") { commitName() }
+        }
+        .confirmationDialog(
+            "删除文件夹“\(deletingFolder?.name ?? "")”？",
+            isPresented: Binding(get: { deletingFolder != nil }, set: { if !$0 { deletingFolder = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("删除文件夹", role: .destructive) {
+                if let id = deletingFolder?.id { store.deleteFolder(id) }
+                deletingFolder = nil
             }
+        } message: {
+            Text("里面的题集和子文件夹会移到上一级，不会删除任何题目。")
+        }
+    }
+
+    private var actions: SidebarActions {
+        SidebarActions(edit: startEdit, deleteFolder: { deletingFolder = $0 }, drop: drop)
+    }
+
+    private var alertTitle: String {
+        switch nameEdit {
+        case .newFolder(let parent): return parent == nil ? "新建文件夹" : "新建子文件夹"
+        case .renameFolder: return "重命名文件夹"
+        case .renameSet: return "重命名题集"
+        case nil: return ""
+        }
+    }
+
+    private func startEdit(_ edit: NameEdit) {
+        switch edit {
+        case .newFolder: nameText = ""
+        case .renameFolder(let id): nameText = store.folder(id)?.name ?? ""
+        case .renameSet(let id): nameText = store.set(id)?.title ?? ""
+        }
+        nameEdit = edit
+    }
+
+    private func commitName() {
+        let name = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch nameEdit {
+        case .newFolder(let parent): store.addFolder(name: name, parent: parent)
+        case .renameFolder(let id): store.renameFolder(id, to: name)
+        case .renameSet(let id): if !name.isEmpty { store.renameSet(id, to: name) }
+        case nil: break
+        }
+        nameEdit = nil
+    }
+
+    /// 拖放：题集或文件夹拖到某个文件夹上（nil 为最外层）
+    private func drop(_ items: [String], into folderID: UUID?) -> Bool {
+        var moved = false
+        for item in items {
+            if item.hasPrefix("set:"), let id = UUID(uuidString: String(item.dropFirst(4))) {
+                store.moveSet(id, to: folderID)
+                moved = true
+            } else if item.hasPrefix("folder:"), let id = UUID(uuidString: String(item.dropFirst(7))), id != folderID {
+                store.moveFolder(id, to: folderID)
+                moved = true
+            }
+        }
+        return moved
+    }
+}
+
+/// 侧边栏里各行要用到的操作（新建、重命名、删除、拖放）
+struct SidebarActions {
+    let edit: (SidebarView.NameEdit) -> Void
+    let deleteFolder: (Folder) -> Void
+    let drop: ([String], UUID?) -> Bool
+}
+
+/// 一个文件夹（或最外层）里的内容：子文件夹在前，题集在后
+struct FolderContents: View {
+    @EnvironmentObject var store: AppStore
+    let parent: UUID?
+    let actions: SidebarActions
+
+    var body: some View {
+        ForEach(store.childFolders(of: parent)) { folder in
+            FolderNode(folder: folder, actions: actions)
+        }
+        ForEach(store.sets(in: parent)) { set in
+            SetRow(set: set, actions: actions)
+        }
+        .onDelete { offsets in
+            let ids = offsets.map { store.sets(in: parent)[$0].id }
+            ids.forEach(store.deleteSet)
+        }
+    }
+}
+
+struct FolderNode: View {
+    @EnvironmentObject var store: AppStore
+    let folder: Folder
+    let actions: SidebarActions
+    @State private var targeted = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: Binding(get: { !(store.folder(folder.id)?.collapsed ?? false) },
+                                            set: { store.setCollapsed(folder.id, !$0) })) {
+            FolderContents(parent: folder.id, actions: actions)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: targeted ? "folder.fill.badge.plus" : "folder.fill")
+                    .foregroundStyle(Color.accentColor)
+                Text(folder.name).font(.headline).lineLimit(1)
+                Spacer()
+                let count = store.setCount(inTree: folder.id)
+                if count > 0 {
+                    Text("\(count)").font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                }
+                Menu { menuItems } label: {
+                    Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("文件夹操作")
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+            // 点文件夹名展开 / 收起
+            .onTapGesture {
+                withAnimation { store.setCollapsed(folder.id, !(store.folder(folder.id)?.collapsed ?? false)) }
+            }
+            .draggable("folder:\(folder.id.uuidString)") {
+                Label(folder.name, systemImage: "folder.fill").padding(8)
+            }
+            .dropDestination(for: String.self) { items, _ in
+                actions.drop(items, folder.id)
+            } isTargeted: { targeted = $0 }
+            .contextMenu { menuItems }
+        }
+    }
+
+    @ViewBuilder
+    private var menuItems: some View {
+        Button("新建子文件夹", systemImage: "folder.badge.plus") { actions.edit(.newFolder(parent: folder.id)) }
+        Button("重命名", systemImage: "pencil") { actions.edit(.renameFolder(folder.id)) }
+        MoveMenu(excluding: folder.id, current: folder.parentID) { store.moveFolder(folder.id, to: $0) }
+        Button("删除文件夹", systemImage: "trash", role: .destructive) { actions.deleteFolder(folder) }
+    }
+}
+
+struct SetRow: View {
+    @EnvironmentObject var store: AppStore
+    let set: QuestionSet
+    let actions: SidebarActions
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top) {
+                Text(set.title).font(.headline).lineLimit(2)
+                Spacer(minLength: 4)
+                Menu { menuItems } label: {
+                    Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("题集操作")
+            }
+            HStack {
+                ProgressView(value: Double(set.doneCount), total: Double(max(set.questions.count, 1)))
+                Text("\(set.doneCount)/\(set.questions.count)")
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            }
+        }
+        .padding(.vertical, 4)
+        .tag(set.id)
+        .draggable("set:\(set.id.uuidString)") {
+            Label(set.title, systemImage: "doc.text").padding(8)
+        }
+        .contextMenu { menuItems }
+    }
+
+    @ViewBuilder
+    private var menuItems: some View {
+        Button("重命名", systemImage: "pencil") { actions.edit(.renameSet(set.id)) }
+        MoveMenu(excluding: nil, current: set.folderID) { store.moveSet(set.id, to: $0) }
+        Button("删除", systemImage: "trash", role: .destructive) { store.deleteSet(set.id) }
+    }
+}
+
+/// “移到…”菜单：列出所有文件夹（按层级缩进）
+struct MoveMenu: View {
+    @EnvironmentObject var store: AppStore
+    /// 移动文件夹时，不能移到它自己和它的子文件夹里
+    let excluding: UUID?
+    let current: UUID?
+    let move: (UUID?) -> Void
+
+    var body: some View {
+        Menu {
+            Button {
+                move(nil)
+            } label: {
+                Label("最外层", systemImage: current == nil ? "checkmark" : "tray")
+            }
+            .disabled(current == nil)
+            ForEach(store.folderTree().filter { excluding == nil || !store.isInside($0.folder.id, excluding!) }, id: \.folder.id) { item in
+                Button {
+                    move(item.folder.id)
+                } label: {
+                    Label(String(repeating: "    ", count: item.depth) + item.folder.name,
+                          systemImage: current == item.folder.id ? "checkmark" : "folder")
+                }
+                .disabled(current == item.folder.id)
+            }
+        } label: {
+            Label("移到…", systemImage: "folder")
         }
     }
 }

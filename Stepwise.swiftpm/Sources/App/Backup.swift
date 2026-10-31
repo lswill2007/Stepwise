@@ -15,9 +15,20 @@ struct LibraryBackup: Codable {
     var images: [String: Data]
     /// 题目 id → 手写笔迹（PencilKit 数据）
     var drawings: [String: Data]
+    /// 题集所在的文件夹（连同上级文件夹），导入后保持同样的分类；旧版本的备份没有
+    var folders: [Folder]?
 
-    init(sets: [QuestionSet]) {
+    init(sets: [QuestionSet], folders allFolders: [Folder] = []) {
         self.sets = sets
+        var needed: [Folder] = []
+        for set in sets {
+            var current = allFolders.first { $0.id == set.folderID }
+            while let f = current, !needed.contains(where: { $0.id == f.id }) {
+                needed.append(f)
+                current = allFolders.first { $0.id == f.parentID }
+            }
+        }
+        self.folders = needed.isEmpty ? nil : needed
         var images: [String: Data] = [:]
         for id in sets.flatMap(Self.imageIDs) {
             images[id] = ImageStore.load(id)
@@ -69,10 +80,11 @@ struct BackupError: LocalizedError {
 /// 分享时才生成备份文件（可以存到“文件”、隔空投送到另一台 iPad）
 struct BackupFile: Transferable {
     let sets: [QuestionSet]
+    var folders: [Folder] = []
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(exportedContentType: .json) { file in
-            SentTransferredFile(try LibraryBackup(sets: file.sets).write())
+            SentTransferredFile(try LibraryBackup(sets: file.sets, folders: file.folders).write())
         }
     }
 }
@@ -93,6 +105,11 @@ extension AppStore {
         let existingQuestionIDs = Set(sets.flatMap { $0.questions.map(\.id) })
         var result = ImportResult()
         var imported: [QuestionSet] = []
+        // 先补上本机没有的文件夹；文件夹 id 一样就是同一个文件夹
+        for f in backup.folders ?? [] where !folders.contains(where: { $0.id == f.id }) {
+            folders.append(f)
+        }
+        repairFolders()
 
         for var set in backup.sets {
             let originalIDs = set.questions.map(\.id)

@@ -16,6 +16,9 @@ struct ImportView: View {
     @State private var syncingToggle = false
     @State private var requirement = ""
     @State private var title = ""
+    /// 放到哪个文件夹；默认是当前打开的题集所在的文件夹
+    @State private var folderID: UUID?
+    @State private var folderInitialized = false
 
     @State private var showFilePicker = false
     @State private var photoItems: [PhotosPickerItem] = []
@@ -106,6 +109,19 @@ struct ImportView: View {
 
                 Section("题集名称（可选，不填由 AI 起名）") {
                     TextField("例如：高一数学 第三章练习", text: $title)
+                    if !store.folders.isEmpty {
+                        Picker("放到文件夹", selection: $folderID) {
+                            Text("最外层").tag(UUID?.none)
+                            ForEach(store.folderTree(), id: \.folder.id) { item in
+                                Text(String(repeating: "    ", count: item.depth) + item.folder.name).tag(Optional(item.folder.id))
+                            }
+                        }
+                        .onAppear {
+                            guard !folderInitialized else { return }
+                            folderInitialized = true
+                            folderID = store.set(store.selectedSetID)?.folderID.flatMap { store.folder($0)?.id }
+                        }
+                    }
                 }
 
                 Section {
@@ -232,10 +248,12 @@ struct ImportView: View {
         progressText = "正在拆分…"
         task = Task {
             do {
-                let newSet = try await store.split(material: source, requirement: requirement, title: title) { i, n in
+                var newSet = try await store.split(material: source, requirement: requirement, title: title) { i, n in
                     progressText = n > 1 ? "正在拆分 第 \(i)/\(n) 部分…" : "正在拆分…"
                 }
+                newSet.folderID = folderID
                 store.addSet(newSet)
+                if let folderID { store.setCollapsed(folderID, false) }
                 dismiss()
             } catch {
                 if !(error is CancellationError) && !(error is ConsentRequired) {

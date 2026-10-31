@@ -279,7 +279,7 @@ struct ExportView: View {
             }
 
             Section {
-                ShareLink(item: BackupFile(sets: chosen),
+                ShareLink(item: BackupFile(sets: chosen, folders: store.folders),
                           preview: SharePreview("Stepwise 备份（\(chosen.count) 个题集）")) {
                     Label(chosen.isEmpty ? "请先选择题集" : "导出 \(chosen.count) 个题集，共 \(chosen.reduce(0) { $0 + $1.questions.count }) 道题",
                           systemImage: "square.and.arrow.up")
