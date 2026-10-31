@@ -2,6 +2,7 @@ import SwiftUI
 
 #if os(iOS)
 import PencilKit
+import Combine
 
 /// 框选后画布会成为第一响应者（用于剪切 / 拷贝 / 撤销），这里阻止它顺带弹出键盘
 final class PadCanvasView: PKCanvasView {
@@ -38,80 +39,39 @@ final class PadCanvasView: PKCanvasView {
     }
 }
 
-/// 手写作答板：Apple Pencil 书写，手指滚动和缩放；导出为白底 JPEG 发给模型批改。
-final class HandwritingModel: ObservableObject {
+/// 笔记本里所有手写区共用的工具：换一次笔，每道题都生效
+final class InkTools: ObservableObject {
     enum Tool { case pen, eraser, lasso }
     enum EraserKind: String { case area, stroke }
 
-    let canvas = PadCanvasView()
-    @Published var isEmpty = true
-    @Published var zoom: CGFloat = 1
-    @Published var tool: Tool = .pen { didSet { applyTool() } }
+    @Published var tool: Tool = .pen
     @Published var eraserKind: EraserKind {
-        didSet {
-            UserDefaults.standard.set(eraserKind.rawValue, forKey: "handwritingEraserKind")
-            if tool == .eraser { applyTool() }
-        }
+        didSet { UserDefaults.standard.set(eraserKind.rawValue, forKey: "handwritingEraserKind") }
     }
-    /// 没有 Apple Pencil 时可以打开，让手指也能书写
+    /// 没有 Apple Pencil 时可以打开，让手指也能书写（这时要在空白处滑动页面）
     @Published var allowFinger: Bool {
-        didSet {
-            UserDefaults.standard.set(allowFinger, forKey: "handwritingAllowFinger")
-            canvas.drawingPolicy = allowFinger ? .anyInput : .pencilOnly
-        }
+        didSet { UserDefaults.standard.set(allowFinger, forKey: "handwritingAllowFinger") }
     }
+    /// 当前是不是“按住侧边”的临时橡皮擦
+    @Published private(set) var isTemporaryEraser = false
 
     /// 双击笔身切到橡皮擦前的工具，再双击时切回去
     private var toolBeforeEraser: Tool = .pen
     /// 按住笔身侧边（Apple Pencil Pro 捏住）时临时用橡皮擦，松开恢复的工具
     private var toolBeforeSqueeze: Tool?
-    /// 当前是不是“按住侧边”的临时橡皮擦
-    @Published private(set) var isTemporaryEraser = false
+    /// 最近写过的手写区，撤销 / 重做作用在它上面
+    weak var active: HandwritingModel?
 
-    /// 笔迹属于哪道题；为 nil 时不保存
-    private let questionID: UUID?
-    private var pendingSave: DispatchWorkItem?
-
-    static let isAvailable = true
-    static let zoomRange: ClosedRange<CGFloat> = 0.5...4
-
-    init(questionID: UUID? = nil) {
-        self.questionID = questionID
+    init() {
         eraserKind = EraserKind(rawValue: UserDefaults.standard.string(forKey: "handwritingEraserKind") ?? "") ?? .area
         allowFinger = UserDefaults.standard.bool(forKey: "handwritingAllowFinger")
-        canvas.drawingPolicy = allowFinger ? .anyInput : .pencilOnly
-        applyTool()
-        // 恢复这道题上次写到一半的笔迹
-        if let questionID, let data = DrawingStore.load(questionID), let drawing = try? PKDrawing(data: data) {
-            canvas.pendingDrawing = drawing
-            isEmpty = drawing.strokes.isEmpty
-        }
     }
 
-    /// 笔迹变化后稍等片刻再写盘，连续书写时不会频繁保存
-    func scheduleSave() {
-        pendingSave?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.saveNow() }
-        pendingSave = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
-    }
-
-    func saveNow() {
-        pendingSave?.cancel()
-        pendingSave = nil
-        guard let questionID else { return }
-        let drawing = canvas.pendingDrawing ?? canvas.drawing
-        DrawingStore.save(drawing.strokes.isEmpty ? nil : drawing.dataRepresentation(), for: questionID)
-    }
-
-    private func applyTool() {
+    static func pkTool(_ tool: Tool, _ eraser: EraserKind) -> PKTool {
         switch tool {
-        case .pen:
-            canvas.tool = PKInkingTool(.pen, color: .black, width: 3)
-        case .eraser:
-            canvas.tool = eraserKind == .stroke ? PKEraserTool(.vector) : PKEraserTool(.bitmap, width: 18)
-        case .lasso:
-            canvas.tool = PKLassoTool()
+        case .pen: return PKInkingTool(.pen, color: .black, width: 3)
+        case .eraser: return eraser == .stroke ? PKEraserTool(.vector) : PKEraserTool(.bitmap, width: 18)
+        case .lasso: return PKLassoTool()
         }
     }
 
@@ -120,7 +80,7 @@ final class HandwritingModel: ObservableObject {
         tool = newTool
     }
 
-    /// Apple Pencil 双击或捏合：在橡皮擦和之前的工具之间切换
+    /// Apple Pencil 双击：在橡皮擦和之前的工具之间切换
     func toggleEraser() {
         if tool == .eraser {
             tool = toolBeforeEraser
@@ -146,24 +106,101 @@ final class HandwritingModel: ObservableObject {
         isTemporaryEraser = false
     }
 
+    func undo() { active?.canvas?.undoManager?.undo() }
+    func redo() { active?.canvas?.undoManager?.redo() }
+}
+
+/// 一道题的手写区。笔迹（PKDrawing）保存在这里，画布视图可以随页面滚动被回收、重建
+final class HandwritingModel: ObservableObject {
+    @Published var isEmpty = true
+    /// 手写区高度：写到下面时自动加长
+    @Published var height: CGFloat
+
+    let tools: InkTools
+    private(set) var drawing = PKDrawing()
+    /// 当前显示在屏幕上的画布
+    weak var canvas: PadCanvasView?
+
+    /// 笔迹属于哪道题；为 nil 时不保存
+    private let questionID: UUID?
+    private var pendingSave: DispatchWorkItem?
+
+    static let isAvailable = true
+    static let minHeight: CGFloat = 260
+    /// 每次加长的高度
+    static let growStep: CGFloat = 240
+
+    init(questionID: UUID?, tools: InkTools) {
+        self.questionID = questionID
+        self.tools = tools
+        // 恢复这道题上次写的笔迹
+        if let questionID, let data = DrawingStore.load(questionID), let saved = try? PKDrawing(data: data) {
+            drawing = saved
+        }
+        let empty = drawing.strokes.isEmpty
+        height = empty ? Self.minHeight : max(Self.minHeight, drawing.bounds.maxY + 160)
+        isEmpty = empty
+    }
+
+    /// 新建或重建画布时调用：放入笔迹、应用当前工具
+    func attach(_ canvas: PadCanvasView) {
+        self.canvas = canvas
+        canvas.pendingDrawing = drawing
+        appliedTools = nil
+        applyTools()
+    }
+
+    /// 上次应用到画布上的工具；没变就不重复设置，免得打断正在写的一笔
+    private var appliedTools: String?
+
+    func applyTools() {
+        let key = "\(tools.tool)-\(tools.eraserKind)-\(tools.allowFinger)"
+        guard let canvas, key != appliedTools else { return }
+        appliedTools = key
+        canvas.tool = InkTools.pkTool(tools.tool, tools.eraserKind)
+        canvas.drawingPolicy = tools.allowFinger ? .anyInput : .pencilOnly
+    }
+
+    func drawingChanged(_ newDrawing: PKDrawing) {
+        drawing = newDrawing
+        let empty = newDrawing.strokes.isEmpty
+        if isEmpty != empty { isEmpty = empty }
+        // 写到靠近底部时自动加长，像翻到下一行纸
+        if !empty, newDrawing.bounds.maxY > height - 100 {
+            height = newDrawing.bounds.maxY + Self.growStep
+        }
+        tools.active = self
+        scheduleSave()
+    }
+
+    func addSpace() { height += Self.growStep }
+
+    /// 笔迹变化后稍等片刻再写盘，连续书写时不会频繁保存
+    func scheduleSave() {
+        pendingSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.saveNow() }
+        pendingSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    func saveNow() {
+        pendingSave?.cancel()
+        pendingSave = nil
+        guard let questionID else { return }
+        DrawingStore.save(drawing.strokes.isEmpty ? nil : drawing.dataRepresentation(), for: questionID)
+    }
+
     func clear() {
-        canvas.pendingDrawing = nil
-        canvas.drawing = PKDrawing()
+        drawing = PKDrawing()
+        canvas?.pendingDrawing = nil
+        canvas?.drawing = PKDrawing()
         isEmpty = true
+        height = Self.minHeight
         saveNow()
     }
 
-    func undo() { canvas.undoManager?.undo() }
-    func redo() { canvas.undoManager?.redo() }
-
-    func resetZoom() {
-        canvas.setZoomScale(1, animated: true)
-    }
-
     func exportJPEG() -> Data? {
-        let drawing = canvas.pendingDrawing ?? canvas.drawing
         guard !drawing.strokes.isEmpty else { return nil }
-        // 笔迹坐标与缩放无关，导出结果不受当前缩放影响
         let bounds = drawing.bounds.insetBy(dx: -24, dy: -24)
         var image: UIImage!
         // 固定浅色外观，避免深色模式下导出白色笔迹
@@ -176,179 +213,32 @@ final class HandwritingModel: ObservableObject {
     }
 }
 
-struct HandwritingPad: View {
+/// 笔记本里的一块手写区：横线纸背景；画布不自己滚动，手指拖动滚的是整本笔记
+struct NotebookCanvas: UIViewRepresentable {
     @ObservedObject var model: HandwritingModel
-    /// 全屏时用另一套记忆的高度
-    var fullScreen = false
-
-    @AppStorage("handwritingPadHeight") private var normalHeight: Double = 340
-    @AppStorage("handwritingPadHeightFull") private var fullHeight: Double = 520
-    /// 拖动过程中的起始高度
-    @State private var dragStartHeight: Double?
-
-    private static let heightRange: ClosedRange<Double> = 200...1400
-
-    private var height: Double { fullScreen ? fullHeight : normalHeight }
-
-    private func setHeight(_ value: Double) {
-        let clamped = min(max(value, Self.heightRange.lowerBound), Self.heightRange.upperBound)
-        if fullScreen { fullHeight = clamped } else { normalHeight = clamped }
-    }
-
-    var body: some View {
-        VStack(spacing: 8) {
-            toolbar
-
-            CanvasRepresentable(model: model)
-                .frame(height: height)
-                .animation(dragStartHeight == nil ? .easeInOut(duration: 0.25) : nil, value: height)
-                .background(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
-
-            VStack(spacing: 2) {
-                // 拖动条：上下拖动调整手写板高度
-                ZStack {
-                    Color.clear
-                    Capsule()
-                        .fill(dragStartHeight == nil ? Color.secondary.opacity(0.45) : Color.accentColor)
-                        .frame(width: 56, height: 6)
-                }
-                .frame(height: 22)
-                .contentShape(Rectangle())
-                .highPriorityGesture(
-                    DragGesture(minimumDistance: 2)
-                        .onChanged { value in
-                            if dragStartHeight == nil { dragStartHeight = height }
-                            setHeight((dragStartHeight ?? height) + value.translation.height)
-                        }
-                        .onEnded { _ in dragStartHeight = nil }
-                )
-                .accessibilityLabel("调整手写板高度")
-
-                Text(model.isTemporaryEraser
-                     ? "正在用橡皮擦 · 松开笔身侧边恢复书写"
-                     : model.allowFinger
-                        ? "Apple Pencil 或手指书写 · 按住笔身侧边临时擦除 · 双指缩放 · 拖动横条调整高度"
-                        : "Apple Pencil 书写 · 按住笔身侧边临时擦除 · 手指拖动和双指缩放 · 拖动横条调整高度")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
-
-    private var toolbar: some View {
-        ViewThatFits(in: .horizontal) {
-            toolbarRow(showTitles: true)
-            toolbarRow(showTitles: false)
-        }
-    }
-
-    private func toolbarRow(showTitles: Bool) -> some View {
-        HStack(spacing: 6) {
-            toolButton(.pen, title: "笔", icon: "pencil.tip", showTitle: showTitles)
-            toolButton(.eraser,
-                       title: model.eraserKind == .stroke ? "整笔擦" : "橡皮",
-                       icon: model.eraserKind == .stroke ? "eraser.line.dashed" : "eraser",
-                       showTitle: showTitles)
-                .contextMenu {
-                    Picker("橡皮擦类型", selection: $model.eraserKind) {
-                        Label("局部擦除", systemImage: "eraser").tag(HandwritingModel.EraserKind.area)
-                        Label("整笔擦除", systemImage: "eraser.line.dashed").tag(HandwritingModel.EraserKind.stroke)
-                    }
-                }
-            toolButton(.lasso, title: "框选", icon: "lasso", showTitle: showTitles)
-
-            Divider().frame(height: 22).padding(.horizontal, 4)
-
-            Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }
-                .accessibilityLabel("撤销")
-            Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }
-                .accessibilityLabel("重做")
-
-            Spacer(minLength: 4)
-
-            Button {
-                model.resetZoom()
-            } label: {
-                Label("\(Int((model.zoom * 100).rounded()))%", systemImage: "plus.magnifyingglass")
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-            .disabled(abs(model.zoom - 1) < 0.01)
-            .accessibilityHint("恢复 100%")
-
-            Button(role: .destructive) { model.clear() } label: { Image(systemName: "trash") }
-                .disabled(model.isEmpty)
-                .accessibilityLabel("清空")
-
-            Menu {
-                Toggle(isOn: $model.allowFinger) {
-                    Label("允许手指书写", systemImage: "hand.draw")
-                }
-                Picker("橡皮擦类型", selection: $model.eraserKind) {
-                    Label("局部擦除", systemImage: "eraser").tag(HandwritingModel.EraserKind.area)
-                    Label("整笔擦除", systemImage: "eraser.line.dashed").tag(HandwritingModel.EraserKind.stroke)
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-            .accessibilityLabel("手写设置")
-        }
-        .buttonStyle(.borderless)
-        .font(.body)
-    }
-
-    private func toolButton(_ tool: HandwritingModel.Tool, title: String, icon: String, showTitle: Bool) -> some View {
-        let selected = model.tool == tool
-        return Button {
-            model.select(tool)
-        } label: {
-            Group {
-                if showTitle {
-                    Label(title, systemImage: icon)
-                } else {
-                    Image(systemName: icon)
-                }
-            }
-                .lineLimit(1)
-                .fixedSize()
-                .font(.callout.weight(selected ? .semibold : .regular))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(selected ? Color.accentColor.opacity(0.15) : Color.clear, in: Capsule())
-                .foregroundStyle(selected ? Color.accentColor : Color.primary)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
-
-private struct CanvasRepresentable: UIViewRepresentable {
-    let model: HandwritingModel
+    @ObservedObject var tools: InkTools
 
     func makeUIView(context: Context) -> PadCanvasView {
-        let canvas = model.canvas
-        canvas.backgroundColor = .white
-        canvas.isOpaque = true
+        let canvas = PadCanvasView()
+        canvas.backgroundColor = .clear
+        canvas.isOpaque = false
         canvas.overrideUserInterfaceStyle = .light
+        canvas.isScrollEnabled = false
+        canvas.minimumZoomScale = 1
+        canvas.maximumZoomScale = 1
         canvas.delegate = context.coordinator
-        canvas.alwaysBounceVertical = true
-        canvas.minimumZoomScale = HandwritingModel.zoomRange.lowerBound
-        canvas.maximumZoomScale = HandwritingModel.zoomRange.upperBound
-        canvas.bouncesZoom = true
-        canvas.contentSize = CGSize(width: 2000, height: 3000)
-
         // Apple Pencil 双击 / 捏合切换橡皮擦
         let pencil = UIPencilInteraction()
         pencil.delegate = context.coordinator
         canvas.addInteraction(pencil)
+        model.attach(canvas)
         return canvas
     }
 
-    func updateUIView(_ uiView: PadCanvasView, context: Context) {}
+    func updateUIView(_ uiView: PadCanvasView, context: Context) {
+        // 工具在任何一块手写区换了，所有手写区跟着换
+        if model.canvas !== uiView { model.attach(uiView) } else { model.applyTools() }
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
 
@@ -357,14 +247,9 @@ private struct CanvasRepresentable: UIViewRepresentable {
         init(model: HandwritingModel) { self.model = model }
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-            let empty = canvasView.drawing.strokes.isEmpty
-            if model.isEmpty != empty { model.isEmpty = empty }
-            model.scheduleSave()
-        }
-
-        func scrollViewDidZoom(_ scrollView: UIScrollView) {
-            let zoom = scrollView.zoomScale
-            if abs(model.zoom - zoom) > 0.005 { model.zoom = zoom }
+            // 恢复笔迹还没放进去时的变化不算
+            guard (canvasView as? PadCanvasView)?.pendingDrawing == nil else { return }
+            model.drawingChanged(canvasView.drawing)
         }
 
         // iPadOS 17.0–17.4
@@ -385,9 +270,9 @@ private struct CanvasRepresentable: UIViewRepresentable {
             case .began:
                 // 用户在“设置 › Apple Pencil”里关闭了捏合就不响应
                 guard UIPencilInteraction.preferredSqueezeAction != .ignore else { return }
-                model.beginTemporaryEraser()
+                model.tools.beginTemporaryEraser()
             case .ended, .cancelled:
-                model.endTemporaryEraser()
+                model.tools.endTemporaryEraser()
             default:
                 break
             }
@@ -397,26 +282,106 @@ private struct CanvasRepresentable: UIViewRepresentable {
         private func handleTap() {
             // 尊重系统设置：用户在“设置 › Apple Pencil”里关闭了双击就不响应
             guard UIPencilInteraction.preferredTapAction != .ignore else { return }
-            model.toggleEraser()
+            model.tools.toggleEraser()
         }
+    }
+}
+
+/// 浮在笔记本底部的工具条：笔、橡皮、框选、撤销、手指书写
+struct InkPalette: View {
+    @ObservedObject var tools: InkTools
+
+    var body: some View {
+        VStack(spacing: 6) {
+            if tools.isTemporaryEraser {
+                Text("正在用橡皮擦 · 松开笔身侧边恢复书写")
+                    .font(.caption.weight(.medium))
+                    .padding(.horizontal, 12).padding(.vertical, 5)
+                    .background(.regularMaterial, in: Capsule())
+            }
+            HStack(spacing: 4) {
+                toolButton(.pen, title: "笔", icon: "pencil.tip")
+                toolButton(.eraser, title: tools.eraserKind == .stroke ? "整笔擦" : "橡皮",
+                           icon: tools.eraserKind == .stroke ? "eraser.line.dashed" : "eraser")
+                    .contextMenu { eraserPicker }
+                toolButton(.lasso, title: "框选", icon: "lasso")
+
+                Divider().frame(height: 22).padding(.horizontal, 4)
+
+                Button { tools.undo() } label: { Image(systemName: "arrow.uturn.backward").frame(width: 34, height: 34) }
+                    .accessibilityLabel("撤销")
+                Button { tools.redo() } label: { Image(systemName: "arrow.uturn.forward").frame(width: 34, height: 34) }
+                    .accessibilityLabel("重做")
+                Menu {
+                    Toggle(isOn: $tools.allowFinger) {
+                        Label("允许手指书写", systemImage: "hand.draw")
+                    }
+                    eraserPicker
+                } label: {
+                    Image(systemName: "ellipsis.circle").frame(width: 34, height: 34)
+                }
+                .accessibilityLabel("手写设置")
+            }
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(Capsule().stroke(Color.secondary.opacity(0.2)))
+            .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+        }
+    }
+
+    private var eraserPicker: some View {
+        Picker("橡皮擦类型", selection: $tools.eraserKind) {
+            Label("局部擦除", systemImage: "eraser").tag(InkTools.EraserKind.area)
+            Label("整笔擦除", systemImage: "eraser.line.dashed").tag(InkTools.EraserKind.stroke)
+        }
+    }
+
+    private func toolButton(_ tool: InkTools.Tool, title: String, icon: String) -> some View {
+        let selected = tools.tool == tool
+        return Button {
+            tools.select(tool)
+        } label: {
+            Label(title, systemImage: icon)
+                .lineLimit(1)
+                .fixedSize()
+                .font(.callout.weight(selected ? .semibold : .regular))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(selected ? Color.accentColor.opacity(0.15) : Color.clear, in: Capsule())
+                .foregroundStyle(selected ? Color.accentColor : Color.primary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
 #else
 
 /// Mac 上仅用于编译检查，不提供手写
+final class InkTools: ObservableObject {}
+
 final class HandwritingModel: ObservableObject {
     @Published var isEmpty = true
+    @Published var height: CGFloat = 260
+    let tools: InkTools
     static let isAvailable = false
-    init(questionID: UUID? = nil) {}
+    init(questionID: UUID?, tools: InkTools) { self.tools = tools }
     func clear() {}
     func saveNow() {}
+    func addSpace() {}
     func exportJPEG() -> Data? { nil }
 }
 
-struct HandwritingPad: View {
+struct NotebookCanvas: View {
     @ObservedObject var model: HandwritingModel
-    var fullScreen = false
+    @ObservedObject var tools: InkTools
+    var body: some View { Color.clear }
+}
+
+struct InkPalette: View {
+    @ObservedObject var tools: InkTools
     var body: some View { EmptyView() }
 }
 

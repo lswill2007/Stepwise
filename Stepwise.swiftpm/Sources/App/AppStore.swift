@@ -447,7 +447,6 @@ final class AppStore: ObservableObject {
                 if correct {
                     let revealedBefore = q.status == .revealed
                     if q.status != .revealed { q.status = .passed }
-                    q.draftAnswer = ""
                     if let rounds {
                         q.reviewRounds = nil
                         if rounds <= AppStore.masteryRounds && !revealedBefore {

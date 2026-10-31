@@ -1,0 +1,783 @@
+import SwiftUI
+
+/// 笔记本里每道题的手写区，按题目缓存：页面滚动回收视图时笔迹和高度都不丢
+final class NotebookInk: ObservableObject {
+    let tools = InkTools()
+    private var models: [UUID: HandwritingModel] = [:]
+
+    func model(for id: UUID) -> HandwritingModel {
+        if let model = models[id] { return model }
+        let model = HandwritingModel(questionID: id, tools: tools)
+        models[id] = model
+        return model
+    }
+
+    func saveAll() { models.values.forEach { $0.saveNow() } }
+}
+
+/// 做题的主界面：整个题集是一本可以一直往下写的笔记本。
+/// 题目印在纸上，下面就是手写区；批改结果、提示写在页边，完整答案折叠在题目下方。
+struct NotebookView: View {
+    @EnvironmentObject var store: AppStore
+    /// 题集；为 nil 时显示错题本
+    let setID: UUID?
+
+    struct Entry: Hashable {
+        let setID: UUID
+        let qID: UUID
+    }
+
+    @StateObject private var ink = NotebookInk()
+    @State private var position: UUID?
+    @State private var width: CGFloat = 800
+    @State private var showSettings = false
+    /// 错题本里显示的题：做对移出错题本后先留在页面上，免得正看着结果题目就消失了
+    @State private var mistakeEntries: [Entry] = []
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var entries: [Entry] {
+        if let setID {
+            return store.set(setID)?.questions.map { Entry(setID: setID, qID: $0.id) } ?? []
+        }
+        return mistakeEntries.filter { store.question($0.setID, $0.qID) != nil }
+    }
+
+    var body: some View {
+        let items = entries
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(items, id: \.qID) { entry in
+                    QuestionBlock(setID: entry.setID, qID: entry.qID, model: ink.model(for: entry.qID),
+                                  wide: width >= 760, mistakeMode: setID == nil,
+                                  nextID: next(after: entry, in: items))
+                        .id(entry.qID)
+                }
+                // 给底部的工具条留位置
+                Color.clear.frame(height: 110)
+            }
+            .scrollTargetLayout()
+            .padding(.horizontal, 28)
+            .frame(maxWidth: 1100)
+            .frame(maxWidth: .infinity)
+        }
+        .scrollPosition(id: $position, anchor: .top)
+        .scrollDismissesKeyboard(.interactively)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .overlay(alignment: .bottom) {
+            if HandwritingModel.isAvailable && !items.isEmpty {
+                InkPalette(tools: ink.tools).padding(.bottom, 14)
+            }
+        }
+        .overlay {
+            // 说明文字在左边的错题本列表里，这里只留标题
+            if items.isEmpty && setID == nil {
+                ContentUnavailableView("错题本是空的", systemImage: "bookmark")
+            }
+        }
+        .navigationTitle(setID.flatMap { store.set($0)?.title } ?? "错题本")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    store.setFullScreen(!store.isFullScreen)
+                } label: {
+                    Label(store.isFullScreen ? "显示题目列表" : "全屏做题",
+                          systemImage: store.isFullScreen ? "sidebar.left" : "arrow.up.left.and.arrow.down.right")
+                }
+                ModelMenu { showSettings = true }
+            }
+        }
+        .sheet(isPresented: $showSettings) { SettingsView() }
+        .onAppear {
+            if setID == nil {
+                mistakeEntries = store.starredEntries.map { Entry(setID: $0.setID, qID: $0.question.id) }
+            }
+            // 等页面排好版再滚到选中的题
+            DispatchQueue.main.async { position = store.selectedQuestionID }
+        }
+        // 左边目录点了哪道题，就翻到哪道题
+        .onChange(of: store.selectedQuestionID) {
+            if store.selectedQuestionID != position {
+                withAnimation(.easeInOut(duration: 0.3)) { position = store.selectedQuestionID }
+            }
+        }
+        // 翻到哪道题，左边目录就跟着选中哪道题
+        .onChange(of: position) {
+            if let position, position != store.selectedQuestionID { store.selectedQuestionID = position }
+        }
+        // 新加入错题本的题接在后面
+        .onChange(of: store.starredEntries.map(\.question.id)) {
+            guard setID == nil else { return }
+            for entry in store.starredEntries where !mistakeEntries.contains(where: { $0.qID == entry.question.id }) {
+                mistakeEntries.append(Entry(setID: entry.setID, qID: entry.question.id))
+            }
+        }
+        .onChange(of: scenePhase) {
+            if scenePhase != .active { ink.saveAll() }
+        }
+        .onDisappear { ink.saveAll() }
+    }
+
+    /// 做对后“下一题”跳到哪里：题集里是下一道没做完的题，错题本里是下一道错题
+    private func next(after entry: Entry, in items: [Entry]) -> UUID? {
+        if let setID { return store.nextQuestion(after: entry.qID, in: setID) }
+        guard let i = items.firstIndex(of: entry), i + 1 < items.count else { return nil }
+        return items[i + 1].qID
+    }
+}
+
+// MARK: - 一道题
+
+struct QuestionBlock: View {
+    @EnvironmentObject var store: AppStore
+    let setID: UUID
+    let qID: UUID
+    @ObservedObject var model: HandwritingModel
+    /// 页面够宽时批改结果写在右边页边，否则写在手写区下面
+    let wide: Bool
+    let mistakeMode: Bool
+    let nextID: UUID?
+
+    @State private var draft = ""
+    @State private var loaded = false
+    @State private var draftSaveTask: Task<Void, Never>?
+    @State private var editing = false
+    @State private var showHistory = false
+    @State private var confirmReset = false
+    @State private var confirmClearInk = false
+    @State private var showHintNote = false
+    @State private var hintNote = ""
+    @State private var showAsk = false
+    @State private var askText = ""
+
+    var body: some View {
+        if let q = store.question(setID, qID) {
+            VStack(alignment: .leading, spacing: 14) {
+                header(q)
+                RichText(q.content, scale: 1.08)
+                ForEach(q.imageIDs, id: \.self) { id in
+                    StoredImage(id: id, maxHeight: 420)
+                }
+                if mistakeMode { reviewLine(q) }
+
+                // 手写区和按钮在左，批改结果写在右边页边；页面窄时批改结果排在按钮下面
+                let work = VStack(alignment: .leading, spacing: 12) {
+                    writingArea(q)
+                    actionRow(q)
+                    if q.status.isDone { followUpRow }
+                }
+                if wide {
+                    HStack(alignment: .top, spacing: 18) {
+                        work
+                        MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, nextID: nextID, wide: true)
+                            .frame(width: 270)
+                    }
+                } else {
+                    work
+                    MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, nextID: nextID, wide: false)
+                }
+
+                QuestionNotes(setID: setID, qID: qID)
+            }
+            .padding(.vertical, 28)
+            .overlay(alignment: .bottom) {
+                // 题与题之间的分隔线，像笔记本上画的横线
+                Rectangle().fill(Color.secondary.opacity(0.2)).frame(height: 1)
+            }
+            .onAppear { onAppear(q) }
+            .onDisappear {
+                saveDraft()
+                model.saveNow()
+            }
+            // 打字停顿 1 秒自动保存
+            .onChange(of: draft) {
+                draftSaveTask?.cancel()
+                draftSaveTask = Task {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    saveDraft()
+                }
+            }
+            .sheet(isPresented: $editing) { EditQuestionView(setID: setID, qID: qID) }
+            .sheet(isPresented: $showHistory) { QuestionHistoryView(setID: setID, qID: qID) }
+            .confirmationDialog("清空这道题的作答、批改记录和手写，重新开始？", isPresented: $confirmReset, titleVisibility: .visible) {
+                Button("清空并重做", role: .destructive) {
+                    store.resetQuestion(setID, qID)
+                    draft = ""
+                    model.clear()
+                }
+            }
+            .confirmationDialog("擦掉这道题的全部手写？", isPresented: $confirmClearInk, titleVisibility: .visible) {
+                Button("全部擦掉", role: .destructive) { model.clear() }
+            }
+        }
+    }
+
+    private func onAppear(_ q: Question) {
+        if !loaded {
+            draft = q.draftAnswer
+            loaded = true
+        }
+        // 趁做题的时间在后台把答案解出来，点批改时只需对答案
+        if !q.status.isDone { store.presolve(setID, [qID]) }
+        // 错题本里还没做完的题：开始计复习轮数
+        if mistakeMode { store.beginReviewIfNeeded(setID, qID) }
+    }
+
+    // MARK: 题头
+
+    private func header(_ q: Question) -> some View {
+        HStack(spacing: 8) {
+            Text("第 \(q.label) 题").font(.title3.bold())
+            StatusPill(status: q.status)
+            if q.isGenerated {
+                Text("AI 新题").font(.caption).padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(.purple.opacity(0.15), in: Capsule()).foregroundStyle(.purple)
+            }
+            if mistakeMode, let title = store.set(setID)?.title {
+                Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { store.toggleStar(setID, qID) }
+            } label: {
+                Label(q.isStarred ? "已加入错题本" : "错题", systemImage: q.isStarred ? "bookmark.fill" : "bookmark")
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background((q.isStarred ? Color.red : Color.secondary).opacity(q.isStarred ? 0.15 : 0.1), in: Capsule())
+                    .foregroundStyle(q.isStarred ? Color.red : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(q.isStarred ? "移出错题本" : "加入错题本")
+            Menu {
+                Button("编辑题目", systemImage: "square.and.pencil") { editing = true }
+                Button("完整记录", systemImage: "clock.arrow.circlepath") { showHistory = true }
+                    .disabled(q.messages.isEmpty && (q.previousAttempts ?? []).isEmpty)
+                Button("清空这道题重做", systemImage: "arrow.counterclockwise", role: .destructive) { confirmReset = true }
+            } label: {
+                Image(systemName: "ellipsis.circle").font(.title3)
+            }
+            .accessibilityLabel("这道题的更多操作")
+        }
+    }
+
+    /// 错题本里：做过的题可以重新练习；复习中显示已用轮数
+    @ViewBuilder
+    private func reviewLine(_ q: Question) -> some View {
+        if q.status.isDone && q.reviewRounds == nil {
+            HStack(spacing: 12) {
+                Label("可以重新练一遍：\(AppStore.masteryRounds) 轮之内做对，就从错题本移出", systemImage: "arrow.counterclockwise")
+                    .font(.callout).foregroundStyle(.red)
+                Spacer()
+                Button {
+                    withAnimation { store.startReview(setID, qID) }
+                    draft = ""
+                    model.clear()
+                } label: {
+                    Label("重新练习", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+            }
+        } else if let rounds = q.reviewRounds {
+            Label(rounds == 0
+                  ? "错题复习中 · \(AppStore.masteryRounds) 轮之内做对就移出错题本（批改一次或提示一次算一轮）"
+                  : "错题复习中 · 已用 \(rounds) 轮" + (rounds < AppStore.masteryRounds ? "，这一轮做对就移出错题本" : "，这次做对也会留在错题本里"),
+                  systemImage: "bookmark.fill")
+                .font(.callout)
+                .foregroundStyle(.red)
+        }
+    }
+
+    // MARK: 手写区
+
+    private func writingArea(_ q: Question) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if HandwritingModel.isAvailable {
+                NotebookCanvas(model: model, tools: model.tools)
+                    .frame(height: model.height)
+                    .background(RuledPaper())
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.2)))
+                    .animation(.easeOut(duration: 0.2), value: model.height)
+
+                HStack(spacing: 16) {
+                    Button { model.addSpace() } label: { Label("加长", systemImage: "arrow.down.to.line") }
+                    Spacer()
+                    Button(role: .destructive) { confirmClearInk = true } label: { Label("擦掉全部", systemImage: "trash") }
+                        .disabled(model.isEmpty)
+                }
+                .font(.caption)
+                .buttonStyle(.borderless)
+            }
+
+            // 打字作答默认隐藏；以前打过的字仍然显示，不会丢
+            if store.keyboardAnswer || !HandwritingModel.isAvailable || !draft.isEmpty {
+                TextField(model.isEmpty ? "在这里打字作答…" : "可以补充文字说明（可选）", text: $draft, axis: .vertical)
+                    .lineLimit(1...8)
+                    .padding(10)
+                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                if draft.contains("$") || draft.contains("\\(") {
+                    RichText(draft, scale: 0.95)
+                        .padding(8)
+                        .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: 操作
+
+    private func actionRow(_ q: Question) -> some View {
+        let busy = store.isBusy(qID)
+        let empty = model.isEmpty && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return HStack(spacing: 8) {
+            // 做对之前：批改、提示、看答案
+            if q.status != .passed {
+                Button {
+                    saveDraft()
+                    model.saveNow()
+                    store.check(setID, qID, answer: draft, handwriting: model.exportJPEG())
+                } label: {
+                    Label("批改", systemImage: "checkmark.seal")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(busy || empty)
+
+                Button {
+                    store.requestHint(setID, qID)
+                } label: {
+                    Label(q.hintCount == 0 ? "提示" : "再提示", systemImage: "lightbulb")
+                }
+                .tint(.orange)
+                .disabled(busy)
+
+                // 先写几句卡在哪里，再要提示
+                Button {
+                    showHintNote = true
+                } label: {
+                    Image(systemName: "text.bubble")
+                }
+                .tint(.orange)
+                .disabled(busy)
+                .accessibilityLabel("补充说明后要提示")
+                .popover(isPresented: $showHintNote) { hintNotePopover(q) }
+
+                if q.status != .revealed {
+                    Button {
+                        store.requestSolution(setID, qID)
+                    } label: {
+                        Label("看答案", systemImage: "text.book.closed")
+                    }
+                    .tint(.blue)
+                    .disabled(busy)
+                }
+            }
+            Spacer()
+            if busy {
+                Button("停止", systemImage: "stop.circle") { store.cancelReply(qID) }
+                    .tint(.secondary)
+            }
+        }
+        .buttonStyle(.bordered)
+    }
+
+    /// 做完之后：自定义的快捷操作，以及自由提问。回答写成这道题下面的笔记
+    private var followUpRow: some View {
+        FlowLayout(spacing: 8) {
+            ForEach(store.followUps.filter { !$0.title.isEmpty && !$0.prompt.isEmpty }) { action in
+                Button(action.title) {
+                    store.sendChat(setID, qID, text: action.prompt, makesQuestion: action.makesQuestion)
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .controlSize(.small)
+                .tint(action.makesQuestion ? .purple : .accentColor)
+            }
+            Button {
+                showAsk = true
+            } label: {
+                Label("问 AI…", systemImage: "questionmark.bubble")
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
+            .popover(isPresented: $showAsk) { askPopover }
+        }
+        .disabled(store.isBusy(qID))
+    }
+
+    private func hintNotePopover(_ q: Question) -> some View {
+        notePopover(title: "补充说明", prompt: "说说你卡在哪一步、哪里不明白…", text: $hintNote,
+                    button: q.hintCount == 0 ? "发送并要提示" : "发送并要进一步提示", icon: "lightbulb", tint: .orange) {
+            store.requestHint(setID, qID, note: hintNote)
+            hintNote = ""
+            showHintNote = false
+        }
+    }
+
+    private var askPopover: some View {
+        notePopover(title: "问 AI", prompt: "关于这道题想问什么…", text: $askText,
+                    button: "发送", icon: "paperplane", tint: .accentColor) {
+            store.sendChat(setID, qID, text: askText)
+            askText = ""
+            showAsk = false
+        }
+    }
+
+    private func notePopover(title: String, prompt: String, text: Binding<String>, button: String,
+                             icon: String, tint: Color, send: @escaping () -> Void) -> some View {
+        NotePopover(title: title, prompt: prompt, text: text, button: button, icon: icon, tint: tint,
+                    disabled: store.isBusy(qID), send: send)
+    }
+
+    private func saveDraft() {
+        let text = draft
+        store.mutate(setID, qID) { q in
+            if q.draftAnswer != text { q.draftAnswer = text }
+        }
+    }
+}
+
+/// 弹出的小输入框：写一句话发给 AI
+private struct NotePopover: View {
+    let title: String
+    let prompt: String
+    @Binding var text: String
+    let button: String
+    let icon: String
+    let tint: Color
+    let disabled: Bool
+    let send: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.headline)
+            TextField(prompt, text: $text, axis: .vertical)
+                .lineLimit(3...6)
+                .focused($focused)
+                .padding(10)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+            Button(action: send) {
+                Label(button, systemImage: icon).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(tint)
+            .disabled(disabled || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(18)
+        .frame(width: 380)
+        .onAppear { focused = true }
+    }
+}
+
+/// 横线纸
+struct RuledPaper: View {
+    var body: some View {
+        Canvas { context, size in
+            var path = Path()
+            var y: CGFloat = 44
+            while y < size.height {
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: size.width, y: y))
+                y += 44
+            }
+            context.stroke(path, with: .color(Color(red: 0.62, green: 0.72, blue: 0.86).opacity(0.45)), lineWidth: 0.8)
+        }
+        .background(Color.white)
+    }
+}
+
+// MARK: - 页边批注
+
+/// 这一轮作答的批改结果和提示，像老师用红笔写在页边
+struct MarginNotes: View {
+    @EnvironmentObject var store: AppStore
+    let setID: UUID
+    let qID: UUID
+    let mistakeMode: Bool
+    let nextID: UUID?
+    let wide: Bool
+
+    var body: some View {
+        if let q = store.question(setID, qID) {
+            let notes = Self.currentRound(q)
+            let pending = store.pending[qID].flatMap { [.verdictWrong, .verdictCorrect, .hint].contains($0.kind) ? $0 : nil }
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(notes) { message in
+                    note(message)
+                }
+                if let pending {
+                    PendingNote(pending: pending)
+                }
+                if mistakeMode { reviewOutcome }
+                if notes.isEmpty && pending == nil && wide {
+                    Text(q.status == .passed ? "" : "写完点“批改”，结果会标在这里")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 8)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// 最近一次提交之后的批改、提示；之前的都在“完整记录”里
+    static func currentRound(_ q: Question) -> [ChatMessage] {
+        let start = q.messages.lastIndex { $0.kind == .submission }.map { $0 + 1 } ?? 0
+        return q.messages[start...].filter { m in
+            switch m.kind {
+            case .verdictCorrect, .verdictWrong, .hint: return true
+            case .hintRequest: return m.note != nil
+            default: return false
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func note(_ message: ChatMessage) -> some View {
+        switch message.kind {
+        case .verdictCorrect:
+            VStack(alignment: .leading, spacing: 8) {
+                mark(correct: true, message: message)
+                RichText(message.text, scale: 0.92)
+                if let nextID {
+                    Button {
+                        store.selectedQuestionID = nextID
+                    } label: {
+                        Label("下一题", systemImage: "arrow.down")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .controlSize(.small)
+                }
+            }
+            .padding(12)
+            .background(Color.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        case .verdictWrong:
+            VStack(alignment: .leading, spacing: 8) {
+                mark(correct: false, message: message)
+                RichText(message.text, scale: 0.92)
+            }
+            .padding(12)
+            .background(Color.red.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+        case .hint:
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("提示", systemImage: "lightbulb.fill").font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+                    Spacer()
+                    timing(message)
+                }
+                RichText(message.text, scale: 0.92)
+            }
+            .padding(12)
+            // 便签纸
+            .background(Color.yellow.opacity(0.18), in: RoundedRectangle(cornerRadius: 4))
+        case .hintRequest:
+            Text("我卡在：\(message.note ?? "")")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        default:
+            EmptyView()
+        }
+    }
+
+    private func mark(correct: Bool, message: ChatMessage) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: correct ? "checkmark" : "xmark")
+                .font(.system(size: 26, weight: .heavy))
+                .foregroundStyle(correct ? Color.green : Color.red)
+            Text(correct ? "做对了" : "还不对")
+                .font(.headline)
+                .foregroundStyle(correct ? Color.green : Color.red)
+            Spacer()
+            timing(message)
+        }
+    }
+
+    @ViewBuilder
+    private func timing(_ message: ChatMessage) -> some View {
+        if store.showTiming, let duration = message.duration {
+            Text(String(format: duration < 10 ? "%.1f 秒" : "%.0f 秒", duration))
+                .font(.caption2).monospacedDigit().foregroundStyle(.tertiary)
+        }
+    }
+
+    /// 错题复习结果
+    @ViewBuilder
+    private var reviewOutcome: some View {
+        if let outcome = store.reviewOutcomes[qID] {
+            let (icon, text, color): (String, String, Color) = {
+                switch outcome {
+                case .mastered(let rounds): return ("checkmark.seal.fill", "\(rounds) 轮就做对了，已经掌握！已移出错题本。", .green)
+                case .keep(let rounds): return ("bookmark.fill", "这次用了 \(rounds) 轮，先留在错题本里，下次再练一遍。", .orange)
+                case .revealed: return ("bookmark.fill", "这次看了完整答案，先留在错题本里，过几天再练一遍。", .orange)
+                }
+            }()
+            Label(text, systemImage: icon)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(color)
+        }
+    }
+}
+
+/// AI 正在写的批注：判定一出来就先标上对错，说明随后补上
+struct PendingNote: View {
+    @EnvironmentObject var store: AppStore
+    let pending: PendingReply
+
+    var body: some View {
+        let isVerdict = pending.kind == .verdictWrong || pending.kind == .verdictCorrect
+        let verdict = isVerdict ? Tutor.parseVerdict(pending.text) : nil
+        let shown = verdict?.feedback ?? Tutor.hideUnfinishedTags(pending.text)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                if let correct = verdict?.correct {
+                    Image(systemName: correct ? "checkmark" : "xmark")
+                        .font(.system(size: 26, weight: .heavy))
+                        .foregroundStyle(correct ? Color.green : Color.red)
+                } else {
+                    ProgressView().controlSize(.small)
+                    Text(label).font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if store.showTiming {
+                    TimelineView(.periodic(from: pending.startedAt, by: 1)) { context in
+                        Text("\(Int(context.date.timeIntervalSince(pending.startedAt))) 秒")
+                            .font(.caption).monospacedDigit().foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            if !shown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                RichText(shown, scale: 0.92)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var label: String {
+        switch pending.kind {
+        case .verdictWrong, .verdictCorrect: return "正在批改…"
+        case .hint: return "正在想提示…"
+        case .solution: return "正在写完整答案…"
+        default: return pending.text.isEmpty ? "思考中…" : "正在回答…"
+        }
+    }
+}
+
+// MARK: - 题目下方的笔记
+
+/// 完整答案（折叠）和做完之后的笔记（总结技巧、讲思路、新题……）
+struct QuestionNotes: View {
+    @EnvironmentObject var store: AppStore
+    let setID: UUID
+    let qID: UUID
+    @State private var showSolution = false
+
+    var body: some View {
+        if let q = store.question(setID, qID) {
+            let solution = q.messages.last { $0.kind == .solution }
+            let pending = store.pending[qID]
+            VStack(alignment: .leading, spacing: 12) {
+                if let solution {
+                    DisclosureGroup(isExpanded: $showSolution) {
+                        RichText(solution.text)
+                            .padding(.top, 8)
+                    } label: {
+                        Label("完整答案", systemImage: "text.book.closed.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.blue)
+                    }
+                    .padding(12)
+                    .background(Color.blue.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                    // 刚看的答案直接展开
+                    .onChange(of: solution.id) { showSolution = true }
+                }
+                if let pending, pending.kind == .solution {
+                    PendingNote(pending: pending)
+                        .onDisappear { showSolution = true }
+                }
+
+                ForEach(Array(notes(q).enumerated()), id: \.element.answer.id) { _, note in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(note.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.purple)
+                            .lineLimit(2)
+                        RichText(note.answer.text)
+                        ForEach(note.answer.generatedQuestionIDs, id: \.self) { id in
+                            if let generated = store.question(setID, id) { NewQuestionCard(question: generated) }
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.purple.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+                }
+                if let pending, pending.kind == .chat {
+                    PendingNote(pending: pending)
+                }
+            }
+        }
+    }
+
+    /// 做完之后的每一问一答；标题用快捷操作的名字，自由提问就用问题本身
+    private func notes(_ q: Question) -> [(title: String, answer: ChatMessage)] {
+        var result: [(String, ChatMessage)] = []
+        var lastQuestion: String?
+        for m in q.messages where m.kind == .chat {
+            if m.role == .user {
+                lastQuestion = store.followUps.first { $0.prompt == m.text }?.title ?? m.text
+            } else {
+                result.append((lastQuestion ?? "笔记", m))
+                lastQuestion = nil
+            }
+        }
+        return result
+    }
+}
+
+// MARK: - 完整记录
+
+/// 一道题的全部作答、批改、提示和对话（包括错题本重新练习之前的记录）
+struct QuestionHistoryView: View {
+    @EnvironmentObject var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    let setID: UUID
+    let qID: UUID
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if let q = store.question(setID, qID) {
+                        let attempts = q.previousAttempts ?? []
+                        ForEach(Array(attempts.enumerated()), id: \.offset) { index, messages in
+                            Text("第 \(index + 1) 次练习").font(.headline)
+                            ForEach(messages) { MessageRow(message: $0, setID: setID) }
+                            Divider()
+                        }
+                        if !attempts.isEmpty && !q.messages.isEmpty {
+                            Text("这一次").font(.headline)
+                        }
+                        ForEach(q.messages) { MessageRow(message: $0, setID: setID) }
+                    }
+                }
+                .padding(20)
+            }
+            .navigationTitle("完整记录")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+            }
+        }
+    }
+}

@@ -49,7 +49,7 @@ Sources/App/
   Importer.swift         PDF/图片/文本读取与分段
   Storage.swift          钥匙串、图片存储、图片压缩、手写笔迹
   Backup.swift           导出 / 导入题目和做题记录
-  Views/                 界面（SettingsView 设置，ModelBrowser 模型浏览器，Handwriting 手写板，QuestionDetailView 做题页）
+  Views/                 界面（Notebook 笔记本做题页，Handwriting 手写区，Messages 完整记录里的消息，SettingsView 设置，ModelBrowser 模型浏览器）
 ```
 
 ## 升级 KaTeX

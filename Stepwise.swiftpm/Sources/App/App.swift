@@ -35,15 +35,15 @@ struct RootView: View {
                                        description: Text("在左侧选择一个题集，或点击 + 导入题目文件"))
             }
         } detail: {
-            // 错题本里的题来自不同题集，按题目找到它所在的题集
-            if let qID = store.selectedQuestionID,
-               let setID = store.isMistakeBook ? store.setID(containing: qID) : store.selectedSetID,
-               store.question(setID, qID) != nil {
-                QuestionDetailView(setID: setID, qID: qID, fromMistakeBook: store.isMistakeBook)
-                    // 同一道题从错题本和从题集打开是两种模式，要重新创建页面
-                    .id("\(qID)-\(store.isMistakeBook)")
+            // 整个题集（或错题本）是一本笔记本，中间的题目列表当目录用
+            if store.isMistakeBook {
+                NotebookView(setID: nil)
+                    .id(AppStore.mistakeBookID)
+            } else if let setID = store.selectedSetID, store.set(setID) != nil {
+                NotebookView(setID: setID)
+                    .id(setID)
             } else {
-                ContentUnavailableView("选择一道题开始", systemImage: "pencil.and.list.clipboard")
+                ContentUnavailableView("选择一个题集开始", systemImage: "pencil.and.list.clipboard")
             }
         }
         .sheet(isPresented: $showImport) {

@@ -204,7 +204,7 @@ struct SettingsView: View {
                 Toggle(isOn: $store.keyboardAnswer) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("键盘作答")
-                        Text("打开后可以在键盘和手写之间切换").font(.caption).foregroundStyle(.secondary)
+                        Text("打开后每道题的手写区下面会多一个打字框").font(.caption).foregroundStyle(.secondary)
                     }
                 }
             } header: {
