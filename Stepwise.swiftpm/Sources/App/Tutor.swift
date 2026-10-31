@@ -125,6 +125,8 @@ enum Tutor {
         var answerSection: String
         if let ref = q.referenceAnswer, !ref.isEmpty {
             answerSection = "【参考答案】（只供你判断对错，学生看不到。在学生请求完整答案之前不要泄露）\n\(ref)"
+        } else if let solved = q.aiAnswer, !solved.isEmpty {
+            answerSection = "【参考答案】（AI 预先求解的，只供你判断对错，学生看不到，在学生请求完整答案之前不要泄露。一般可靠；如果和学生的作答不一致，先快速验算一下参考答案本身）\n\(solved)"
         } else {
             answerSection = "【参考答案】无。请你先自己认真求解并核对，再评判学生。"
         }
@@ -177,6 +179,26 @@ enum Tutor {
     }
 
     static let solutionInstruction = "请给出这道题的完整答案和详细的解题过程（推导写成对齐的公式），最后总结一下解题的关键点。"
+
+    // MARK: - 预先求解
+
+    static func presolveSystem(for q: Question) -> String {
+        """
+        你是严谨的解题老师。请认真求解下面这道题，结果用于之后批改学生的作答，学生看不到。
+
+        【题目】\(q.label)
+        \(q.content)
+
+        要求：
+        - 先在心里仔细验算，再输出。
+        - 只输出最终答案和关键步骤，简洁，不超过 12 行；选择题写明正确选项的字母；有多个小问时逐问给出答案。
+        - 不要寒暄，不要解释你在做什么。
+
+        \(formatRule)
+        """
+    }
+
+    static let presolveInstruction = "请求解这道题。"
 
     // MARK: - 精简上下文
 

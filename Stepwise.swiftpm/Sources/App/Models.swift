@@ -64,6 +64,8 @@ struct Question: Codable, Identifiable, Equatable {
     var previousAttempts: [[ChatMessage]]?
     /// AI 出的新题：原题的内容和作答记录，批改新题时参考，更容易发现同样的问题
     var originNote: String?
+    /// 没有参考答案的题，由 AI 在后台预先求解的答案（学生看不到）。批改时只需对答案，更快更准
+    var aiAnswer: String?
 
     var isStarred: Bool { starredAt != nil }
 }

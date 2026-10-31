@@ -17,7 +17,7 @@ enum ReviewOutcome: Equatable {
 
 /// AI 请求的用途，决定用哪个模型、是否用快速模式
 enum RequestPurpose {
-    case check, hint, solution, chat, newQuestion, split
+    case check, hint, solution, chat, newQuestion, presolve, split
 
     /// 批改和提示：可以用单独的批改模型和快速模式
     var isGrading: Bool { self == .check || self == .hint }
@@ -103,6 +103,13 @@ final class AppStore: ObservableObject {
     @Published var questionModel: String = UserDefaults.standard.string(forKey: "questionModel") ?? "" {
         didSet { UserDefaults.standard.set(questionModel, forKey: "questionModel") }
     }
+
+    /// 导入后在后台预先求解没有参考答案的题
+    @Published var presolveAnswers: Bool = UserDefaults.standard.object(forKey: "presolveAnswers") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(presolveAnswers, forKey: "presolveAnswers") }
+    }
+    /// 正在后台求解的题
+    private var presolving: Set<UUID> = []
 
     /// 实际用于批改和提示的服务商（已填 Key 且选了模型才生效）
     var gradingProvider: ProviderConfig? { overrideProvider(id: gradingProviderID, model: gradingModel) }
@@ -239,7 +246,7 @@ final class AppStore: ObservableObject {
         if purpose.isGrading, let grading = gradingProvider {
             return LLMClient(config: grading, apiKey: grading.apiKey)
         }
-        if purpose == .newQuestion, let question = questionProvider {
+        if purpose == .newQuestion || purpose == .presolve, let question = questionProvider {
             return LLMClient(config: question, apiKey: question.apiKey)
         }
         guard let config = activeProvider else { throw LLMError(message: "请先在设置里选择一个模型服务商。") }
@@ -266,6 +273,7 @@ final class AppStore: ObservableObject {
         sets.insert(newSet, at: 0)
         selectedSetID = newSet.id
         selectedQuestionID = newSet.questions.first?.id
+        presolve(newSet.id, newSet.questions.map(\.id))
     }
 
     func deleteSet(_ id: UUID) {
@@ -365,6 +373,46 @@ final class AppStore: ObservableObject {
         guard let qs = set(setID)?.questions, let i = qs.firstIndex(where: { $0.id == qID }) else { return nil }
         let rest = qs[(i + 1)...]
         return rest.first(where: { !$0.status.isDone })?.id ?? rest.first?.id
+    }
+
+    // MARK: - 预先求解
+
+    /// 在后台为没有参考答案的题求解答案，之后批改只需对答案。
+    /// 两题一组并行；没同意数据发送、没开这个设置、出错时都静默跳过，不打扰做题。
+    func presolve(_ setID: UUID, _ ids: [UUID]) {
+        guard presolveAnswers, aiConsent == true else { return }
+        let todo = ids.filter { id in
+            guard let q = question(setID, id), !presolving.contains(id) else { return false }
+            return (q.referenceAnswer ?? "").isEmpty && q.aiAnswer == nil
+        }
+        guard !todo.isEmpty, let client = try? makeClient(for: .presolve) else { return }
+        presolving.formUnion(todo)
+        // 在主线程先把题目和图片准备好
+        let jobs: [(UUID, String, [LLMMessage])] = todo.compactMap { id in
+            guard let q = question(setID, id) else { return nil }
+            let images = q.imageIDs.compactMap(ImageStore.load).map(LLMContent.image)
+            return (id, Tutor.presolveSystem(for: q), [LLMMessage(role: .user, parts: images + [.text(Tutor.presolveInstruction)])])
+        }
+        Task { [weak self] in
+            for start in stride(from: 0, to: jobs.count, by: 2) {
+                let batch = jobs[start..<min(start + 2, jobs.count)]
+                await withTaskGroup(of: (UUID, String?).self) { group in
+                    for (id, system, messages) in batch {
+                        group.addTask {
+                            let answer = try? await client.complete(system: system, messages: messages)
+                            return (id, answer?.trimmingCharacters(in: .whitespacesAndNewlines))
+                        }
+                    }
+                    for await (id, answer) in group {
+                        guard let self else { continue }
+                        self.presolving.remove(id)
+                        if let answer, !answer.isEmpty {
+                            self.mutate(setID, id) { $0.aiAnswer = answer }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - 辅导操作
@@ -579,7 +627,7 @@ final class AppStore: ObservableObject {
         case .check:
             let blocks = [summary, summary == nil ? nil : Tutor.regradeNote, current.prompt ?? current.text]
             result.append(LLMMessage(role: .user, parts: images(current) + [.text(blocks.compactMap { $0 }.joined(separator: "\n\n"))]))
-        case .hint, .solution, .split:
+        case .hint, .solution, .presolve, .split:
             var blocks = [summary]
             var parts: [LLMContent] = []
             if purpose == .hint, let last = earlier.last(where: { $0.kind == .submission }) {

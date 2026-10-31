@@ -129,6 +129,13 @@ struct SettingsView: View {
             modelOverride("批改与提示模型", providerID: $store.gradingProviderID, model: $store.gradingModel,
                           resolved: store.gradingProvider)
 
+            Toggle(isOn: $store.presolveAnswers) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("预先求解答案")
+                    Text("没有参考答案的题，在你做题时由 AI 在后台先解出来，批改时只需对答案，更快也更准。每题多用一次 API，使用出新题模型（没设置时用当前模型）").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
             Toggle("显示用时", isOn: $store.showTiming)
         } header: {
             Text("批改速度")

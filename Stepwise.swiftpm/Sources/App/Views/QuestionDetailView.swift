@@ -119,6 +119,8 @@ struct QuestionDetailView: View {
                 draft = q.draftAnswer
                 // 从错题本打开还没做完的题：开始计复习轮数
                 if fromMistakeBook { store.beginReviewIfNeeded(setID, qID) }
+                // 趁做题的时间在后台把答案解出来，点批改时只需对答案
+                if !q.status.isDone { store.presolve(setID, [qID]) }
             }
             // 切到手写时自动收起左侧栏，书写区域更大
             .onChange(of: useHandwriting) {
