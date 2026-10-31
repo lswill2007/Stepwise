@@ -186,6 +186,38 @@ enum ModelInfo {
         return keys.contains { name.contains($0) }
     }
 
+    /// 可能是反应快的轻量模型（批改用）：flash、haiku、mini 之类。推理（思考）模型不算
+    static func likelyFast(_ model: String) -> Bool {
+        let name = baseName(model)
+        guard !isNonChat(model) else { return false }
+        // o 系列是推理模型，名字带 mini 也要先思考很久
+        if family(model) == .openai && name.first == "o" { return false }
+        let slow = ["thinking", "reasoner", "-pro", "opus", "deep-research", "-max", "qwq", "qvq", "-r1"]
+        if slow.contains(where: { name.contains($0) }) { return false }
+        let fast = ["flash", "haiku", "mini", "nano", "lite", "turbo", "-fast", "air", "-8b", "-7b", "-small", "instant", "-speed"]
+        return fast.contains { name.contains($0) }
+    }
+
+    /// 批改手写作答的推荐顺序：又快、看图又准的放前面
+    private static let recommendedFastVision = [
+        "gemini-3-flash", "gemini-2.5-flash", "claude-haiku-4", "gpt-4.1-mini", "gpt-5-mini", "grok-4-fast",
+        "gpt-4o-mini", "qwen3-vl-flash", "doubao-seed-1.6-flash", "glm-4v-flash", "gemini-2.0-flash", "claude-3-5-haiku"
+    ]
+
+    /// 适合批改手写作答：快、能看图；分数越高越推荐，nil 表示不适合
+    static func fastVisionScore(_ model: String) -> Int? {
+        guard likelyFast(model), likelyVision(model) else { return nil }
+        let name = baseName(model).replacingOccurrences(of: ".", with: "-")
+        guard let index = recommendedFastVision.firstIndex(where: { name.contains($0.replacingOccurrences(of: ".", with: "-")) }) else {
+            return 1
+        }
+        var score = 1000 - index * 10
+        // lite / nano 更快但看手写没那么准；带日期、preview 的通常是旧快照
+        if name.contains("lite") || name.contains("nano") { score -= 5 }
+        if name.contains("preview") || name.range(of: #"\d{6,}"#, options: .regularExpression) != nil { score -= 3 }
+        return score
+    }
+
     /// 可能支持看图（手写作答、图片题需要）
     static func likelyVision(_ model: String) -> Bool {
         let name = baseName(model)

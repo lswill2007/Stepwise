@@ -36,7 +36,11 @@ struct ModelBrowser: View {
     var body: some View {
         let list = filtered
         let favoriteRows = list.filter(favorites.contains)
-        let grouped = Dictionary(grouping: list.filter { !favorites.contains($0) }, by: ModelInfo.family)
+        // 快、能看图的模型单独放在最上面（批改手写作答最合适）；同一厂商版本新的靠前，最多 12 个
+        let fastRows = list.filter { !favorites.contains($0) && ModelInfo.fastVisionScore($0) != nil }
+            .sorted { (ModelInfo.fastVisionScore($0) ?? 0) > (ModelInfo.fastVisionScore($1) ?? 0) }
+            .prefix(12)
+        let grouped = Dictionary(grouping: list.filter { !favorites.contains($0) && !fastRows.contains($0) }, by: ModelInfo.family)
 
         List {
             Section {
@@ -53,6 +57,16 @@ struct ModelBrowser: View {
                 Toggle("显示绘图、语音、向量等模型", isOn: $showNonChat)
             } footer: {
                 Text("“看图”是根据模型名称推测的。手写作答和图片题需要能看图的模型。点 ☆ 把模型加入常用，做题时右上角的菜单只显示常用模型。")
+            }
+
+            if !fastRows.isEmpty {
+                Section {
+                    ForEach(Array(fastRows), id: \.self, content: row)
+                } header: {
+                    Label("快速 · 能看图（推荐用来批改）", systemImage: "bolt.fill")
+                } footer: {
+                    Text("根据模型名称推测（flash、haiku、mini 等）。批改手写作答用这类模型最快。")
+                }
             }
 
             if !favoriteRows.isEmpty {
@@ -138,6 +152,13 @@ struct ModelBrowser: View {
                             .padding(.horizontal, 6).padding(.vertical, 2)
                             .background(Color.teal.opacity(0.15), in: Capsule())
                             .foregroundStyle(.teal)
+                    }
+                    if ModelInfo.likelyFast(model) {
+                        Text("快")
+                            .font(.caption2.weight(.medium))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.15), in: Capsule())
+                            .foregroundStyle(.orange)
                     }
                     Spacer(minLength: 0)
                 }
