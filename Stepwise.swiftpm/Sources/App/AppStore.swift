@@ -6,6 +6,8 @@ struct PendingReply: Equatable {
     var kind: MessageKind
     var text: String = ""
     var startedAt = Date()
+    /// 圈出一步来提问：回答写在页边，不写在题目下面
+    var inMargin = false
 }
 
 /// 错题复习的结果（只在本次打开 App 期间显示）
@@ -444,7 +446,8 @@ final class AppStore: ObservableObject {
         let answer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !answer.isEmpty || handwriting != nil else { return }
         var prompt = "【我的作答】\n" + (answer.isEmpty ? "（见手写图片）" : answer)
-        prompt += "\n\n" + Tutor.checkInstruction
+        // 手写图片左边印着行号，AI 可以指出错在哪一行
+        prompt += "\n\n" + Tutor.checkInstruction(lineNumbers: handwriting != nil)
         let imageIDs = handwriting.map { [ImageStore.save($0)] } ?? []
         let message = ChatMessage(role: .user, kind: .submission, text: answer, prompt: prompt, imageIDs: imageIDs)
 
@@ -452,11 +455,13 @@ final class AppStore: ObservableObject {
             let verdict = Tutor.parseVerdict(full)
             // 没有按格式给出判定时按“未通过”处理，反馈原样显示
             let correct = verdict.correct ?? false
+            let (feedback, marks) = Tutor.extractMarks(verdict.feedback)
             self?.mutate(setID, qID) { q in
-                let reply = ChatMessage(
+                var reply = ChatMessage(
                     role: .assistant, kind: correct ? .verdictCorrect : .verdictWrong,
-                    text: verdict.feedback,
-                    prompt: "<verdict>\(correct ? "correct" : "wrong")</verdict>\n\(verdict.feedback)")
+                    text: feedback,
+                    prompt: "<verdict>\(correct ? "correct" : "wrong")</verdict>\n\(feedback)")
+                if !correct && !marks.isEmpty { reply.marks = marks }
                 q.messages.append(reply)
                 let rounds = self?.countReviewRound(&q)
                 if correct {
@@ -490,7 +495,9 @@ final class AppStore: ObservableObject {
         run(setID, qID, userMessage: message, replyKind: .hint, purpose: .hint) { [weak self] full in
             self?.mutate(setID, qID) { q in
                 q.hintCount = level
-                q.messages.append(ChatMessage(role: .assistant, kind: .hint, text: full))
+                var hint = ChatMessage(role: .assistant, kind: .hint, text: full)
+                hint.hintLevel = level
+                q.messages.append(hint)
                 _ = self?.countReviewRound(&q)
             }
         }
@@ -528,6 +535,23 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// 用笔圈出一步来提问。image：整块手写，圈住的地方画了蓝框；回答贴在页边
+    func askAboutStep(_ setID: UUID, _ qID: UUID, text: String, image: Data?, region: InkRegion) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let q = question(setID, qID) else { return }
+        let imageIDs = image.map { [ImageStore.save($0)] } ?? []
+        var message = ChatMessage(role: .user, kind: .chat, text: text,
+                                  prompt: Tutor.stepQuestion(text, done: q.status.isDone), imageIDs: imageIDs)
+        message.region = region
+        run(setID, qID, userMessage: message, replyKind: .chat, purpose: .chat, inMargin: true) { [weak self] full in
+            self?.mutate(setID, qID) { q in
+                var reply = ChatMessage(role: .assistant, kind: .chat, text: full)
+                reply.region = region
+                q.messages.append(reply)
+            }
+        }
+    }
+
     /// 把对话中出的新题插到当前题后面，返回新题 id
     private func insertGenerated(_ items: [Tutor.NewQuestion], after qID: UUID, in setID: UUID) -> [UUID] {
         guard !items.isEmpty,
@@ -554,7 +578,7 @@ final class AppStore: ObservableObject {
 
     /// 通用流程：追加用户消息 → 流式请求 → 完成后由 finish 写入回复
     private func run(_ setID: UUID, _ qID: UUID, userMessage: ChatMessage, replyKind: MessageKind,
-                     purpose: RequestPurpose, finish: @escaping (String) -> Void) {
+                     purpose: RequestPurpose, inMargin: Bool = false, finish: @escaping (String) -> Void) {
         guard !isBusy(qID) else { return }
         let client: LLMClient
         do { client = try makeClient(for: purpose) } catch {
@@ -569,7 +593,7 @@ final class AppStore: ObservableObject {
         let history = Self.context(for: q, current: userMessage, purpose: purpose)
         let options = RequestOptions(fast: purpose.isGrading && quickGrading)
         let modelName = client.config.model
-        pending[qID] = PendingReply(kind: replyKind)
+        pending[qID] = PendingReply(kind: replyKind, inMargin: inMargin)
         let started = Date()
 
         replyTasks[qID] = Task { [weak self] in
@@ -664,7 +688,9 @@ final class AppStore: ObservableObject {
                 if i == 0 && !notes.isEmpty {
                     text = "【这道题之前的批改和讲解】（背景信息）\n" + notes.joined(separator: "\n\n") + "\n\n" + text
                 }
-                result.append(LLMMessage(role: m.role, parts: [.text(text)]))
+                // 这次提问带的图片（圈出一步来问时的手写）
+                let attached = m.id == current.id ? images(m) : []
+                result.append(LLMMessage(role: m.role, parts: attached + [.text(text)]))
             }
         }
         return mergingSameRole(result)

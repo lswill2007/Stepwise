@@ -9,6 +9,8 @@ final class PadCanvasView: PKCanvasView {
     private let noKeyboard = UIView(frame: .zero)
     /// 恢复的笔迹要等画布显示到屏幕上再放进去，否则 PencilKit 不会绘制
     var pendingDrawing: PKDrawing?
+    /// 正在重新放入笔迹（不是用户在写），这时的变化不算
+    private(set) var isRefreshing = false
 
     /// 画布在屏幕上且有了实际尺寸后再放入恢复的笔迹
     override func layoutSubviews() {
@@ -17,13 +19,17 @@ final class PadCanvasView: PKCanvasView {
         DispatchQueue.main.async { [weak self] in
             guard let self, let drawing = self.pendingDrawing else { return }
             self.pendingDrawing = nil
+            self.isRefreshing = true
             self.drawing = drawing
+            self.isRefreshing = false
             // 布局动画结束后再刷新一次：PencilKit 在尺寸变化过程中放入的笔迹可能不会被绘制
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
                 guard let self else { return }
                 let current = self.drawing
+                self.isRefreshing = true
                 self.drawing = PKDrawing()
                 self.drawing = current
+                self.isRefreshing = false
             }
         }
     }
@@ -41,7 +47,8 @@ final class PadCanvasView: PKCanvasView {
 
 /// 笔记本里所有手写区共用的工具：换一次笔，每道题都生效
 final class InkTools: ObservableObject {
-    enum Tool { case pen, eraser, lasso }
+    /// ask：圈选提问，用笔圈出一步，圈的这一笔不留在纸上
+    enum Tool { case pen, eraser, lasso, ask }
     enum EraserKind: String { case area, stroke }
 
     @Published var tool: Tool = .pen
@@ -72,12 +79,22 @@ final class InkTools: ObservableObject {
         case .pen: return PKInkingTool(.pen, color: .black, width: 3)
         case .eraser: return eraser == .stroke ? PKEraserTool(.vector) : PKEraserTool(.bitmap, width: 18)
         case .lasso: return PKLassoTool()
+        case .ask: return PKInkingTool(.pen, color: .systemBlue, width: 2)
         }
     }
 
+    /// 圈选提问之前的工具，圈完一次就切回去
+    private var toolBeforeAsk: Tool = .pen
+
     func select(_ newTool: Tool) {
         if newTool == .eraser && tool != .eraser { toolBeforeEraser = tool }
+        if newTool == .ask && tool != .ask { toolBeforeAsk = tool }
         tool = newTool
+    }
+
+    /// 圈完一处：切回原来的工具，接着写
+    func finishAsk() {
+        if tool == .ask { tool = toolBeforeAsk }
     }
 
     /// Apple Pencil 双击：在橡皮擦和之前的工具之间切换
@@ -115,6 +132,8 @@ final class HandwritingModel: ObservableObject {
     @Published var isEmpty = true
     /// 手写区高度：写到下面时自动加长
     @Published var height: CGFloat
+    /// 刚用“圈选提问”圈住的地方，等学生写下要问什么
+    @Published var circledRegion: CGRect?
 
     let tools: InkTools
     private(set) var drawing = PKDrawing()
@@ -173,6 +192,31 @@ final class HandwritingModel: ObservableObject {
         scheduleSave()
     }
 
+    /// 圈选提问画完一笔：这一笔不留在纸上，记下圈住的地方。只点了一下就当作圈住这一行
+    func circled(_ bounds: CGRect) {
+        var region = bounds
+        if bounds.width < 30 && bounds.height < 30 {
+            let row = RuledPaper.row(at: bounds.midY)
+            let span = inkSpan(inRow: row) ?? (bounds.minX - 60)...(bounds.maxX + 60)
+            region = CGRect(x: span.lowerBound, y: RuledPaper.top(ofRow: row),
+                            width: span.upperBound - span.lowerBound, height: RuledPaper.lineSpacing)
+        }
+        circledRegion = region.insetBy(dx: -4, dy: -4)
+        tools.finishAsk()
+    }
+
+    /// 某一行（横线行，从 1 开始）里笔迹的左右范围；这一行没写字时为 nil
+    func inkSpan(inRow row: Int) -> ClosedRange<CGFloat>? {
+        let band = CGRect(x: -10_000, y: RuledPaper.top(ofRow: row) + 6, width: 20_000, height: RuledPaper.lineSpacing - 12)
+        var hits = drawing.strokes.map(\.renderBounds).filter { $0.intersects(band) }
+        // 跨好几行的长笔画（竖线、大括号）不算这一行的字，除非这一行只有它
+        let short = hits.filter { $0.height < RuledPaper.lineSpacing * 2.5 }
+        if !short.isEmpty { hits = short }
+        guard let first = hits.first else { return nil }
+        let union = hits.dropFirst().reduce(first) { $0.union($1) }
+        return union.minX...union.maxX
+    }
+
     func addSpace() { height += Self.growStep }
 
     /// 笔迹变化后稍等片刻再写盘，连续书写时不会频繁保存
@@ -199,13 +243,54 @@ final class HandwritingModel: ObservableObject {
         saveNow()
     }
 
-    func exportJPEG() -> Data? {
+    /// 导出发给 AI 的手写图片：左边印上行号、画上横线，AI 才能说出错在哪一行。
+    /// highlight：圈选提问时圈住的地方，用蓝框标出
+    func exportJPEG(highlight: CGRect? = nil) -> Data? {
         guard !drawing.strokes.isEmpty else { return nil }
-        let bounds = drawing.bounds.insetBy(dx: -24, dy: -24)
-        var image: UIImage!
+        let spacing = RuledPaper.lineSpacing
+        var content = drawing.bounds
+        if let highlight { content = content.union(highlight) }
+        let firstRow = RuledPaper.row(at: content.minY)
+        let lastRow = max(firstRow, RuledPaper.row(at: content.maxY))
+        let top = RuledPaper.top(ofRow: firstRow)
+        let left = max(0, content.minX - 24)
+        let area = CGRect(x: left, y: top, width: content.maxX + 24 - left,
+                          height: CGFloat(lastRow - firstRow + 1) * spacing)
+        var ink: UIImage!
         // 固定浅色外观，避免深色模式下导出白色笔迹
         UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
-            image = drawing.image(from: bounds, scale: 2)
+            ink = drawing.image(from: area, scale: 2)
+        }
+        let gutter: CGFloat = 40
+        let size = CGSize(width: area.width + gutter, height: area.height)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 2
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold),
+                .foregroundColor: UIColor.gray
+            ]
+            for row in firstRow...lastRow {
+                let bottom = RuledPaper.top(ofRow: row) + spacing - top
+                UIColor(red: 0.62, green: 0.72, blue: 0.86, alpha: 0.6).setFill()
+                context.fill(CGRect(x: gutter, y: bottom - 0.5, width: area.width, height: 1))
+                let label = "\(row)" as NSString
+                let labelSize = label.size(withAttributes: attributes)
+                label.draw(at: CGPoint(x: gutter - 8 - labelSize.width, y: bottom - spacing / 2 - labelSize.height / 2),
+                           withAttributes: attributes)
+            }
+            UIColor.gray.withAlphaComponent(0.4).setFill()
+            context.fill(CGRect(x: gutter - 2, y: 0, width: 1, height: size.height))
+            ink.draw(in: CGRect(x: gutter, y: 0, width: area.width, height: area.height))
+            if let highlight {
+                let box = UIBezierPath(roundedRect: highlight.offsetBy(dx: gutter - left, dy: -top), cornerRadius: 8)
+                box.lineWidth = 3
+                UIColor.systemBlue.setStroke()
+                box.stroke()
+            }
         }
         guard let cg = image.cgImage else { return nil }
         // 1280 像素足够看清手写，图片更小，上传和识别都更快
@@ -244,11 +329,28 @@ struct NotebookCanvas: UIViewRepresentable {
 
     final class Coordinator: NSObject, PKCanvasViewDelegate, UIPencilInteractionDelegate {
         let model: HandwritingModel
+        /// 用户正在用笔（或手指）写，下一次笔迹变化是用户写的
+        private var penDown = false
         init(model: HandwritingModel) { self.model = model }
 
+        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+            penDown = true
+        }
+
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-            // 恢复笔迹还没放进去时的变化不算
-            guard (canvasView as? PadCanvasView)?.pendingDrawing == nil else { return }
+            // 恢复、重新放入笔迹时的变化不算；把圈选的一笔撤掉时也会进来，笔迹没变就不算
+            guard let pad = canvasView as? PadCanvasView, pad.pendingDrawing == nil, !pad.isRefreshing,
+                  canvasView.drawing != model.drawing else { return }
+            let byPen = penDown
+            penDown = false
+            // 圈选提问：用户刚画的这一笔只用来圈出地方，不留在纸上
+            if byPen, model.tools.tool == .ask, canvasView.drawing.strokes.count == model.drawing.strokes.count + 1,
+               let stroke = canvasView.drawing.strokes.last {
+                let saved = model.drawing
+                DispatchQueue.main.async { canvasView.drawing = saved }
+                model.circled(stroke.renderBounds)
+                return
+            }
             model.drawingChanged(canvasView.drawing)
         }
 
@@ -305,6 +407,7 @@ struct InkPalette: View {
                            icon: tools.eraserKind == .stroke ? "eraser.line.dashed" : "eraser")
                     .contextMenu { eraserPicker }
                 toolButton(.lasso, title: "框选", icon: "lasso")
+                toolButton(.ask, title: "圈出来问", icon: "questionmark.bubble")
 
                 Divider().frame(height: 22).padding(.horizontal, 4)
 
@@ -370,8 +473,10 @@ final class HandwritingModel: ObservableObject {
     init(questionID: UUID?, tools: InkTools) { self.tools = tools }
     func clear() {}
     func saveNow() {}
+    @Published var circledRegion: CGRect?
     func addSpace() {}
-    func exportJPEG() -> Data? { nil }
+    func inkSpan(inRow row: Int) -> ClosedRange<CGFloat>? { nil }
+    func exportJPEG(highlight: CGRect? = nil) -> Data? { nil }
 }
 
 struct NotebookCanvas: View {

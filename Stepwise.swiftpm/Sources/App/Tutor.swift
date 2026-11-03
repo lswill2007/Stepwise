@@ -158,24 +158,65 @@ enum Tutor {
         """
     }
 
-    static let checkInstruction = """
-    请批改我的作答（如果附有图片，那是我的手写作答）。
-    第一行只输出 <verdict>correct</verdict> 或 <verdict>wrong</verdict>，从第二行开始写给我的反馈：
-    - 结果和必要的过程都正确时判 correct，反馈简短肯定，并点出这道题的关键。
-    - 有错误或不完整时判 wrong，具体指出哪里错了（哪一步、哪个概念或计算，可以引用我写的式子），可以提示检查方向，但不要给出正确答案或完整解法。
-    - 如果题目要求写过程而我只写了结果，按不完整处理并说明。
-    - 反馈要简洁，控制在 2–4 句话以内，直接说重点。
-    """
-
-    /// note：学生补充的文字说明
-    static func hintInstruction(level: Int, note: String? = nil) -> String {
+    /// lineNumbers：手写图片左边印了行号，可以要求模型指出错在哪一行
+    static func checkInstruction(lineNumbers: Bool) -> String {
         var s = """
-        我需要进一步提示（这是第 \(level) 次提示）。请在之前提示的基础上再具体一步，引导我自己想出来，但仍然不要直接给出最终答案。简洁一些，控制在几句话以内。
+        请批改我的作答（如果附有图片，那是我的手写作答）。
+        第一行只输出 <verdict>correct</verdict> 或 <verdict>wrong</verdict>，从第二行开始写给我的反馈：
+        - 结果和必要的过程都正确时判 correct，反馈简短肯定，并点出这道题的关键。
+        - 有错误或不完整时判 wrong，具体指出哪里错了（哪一步、哪个概念或计算，可以引用我写的式子），可以提示检查方向，但不要给出正确答案或完整解法。
+        - 如果题目要求写过程而我只写了结果，按不完整处理并说明。
+        - 反馈要简洁，控制在 2–4 句话以内，直接说重点。
+        """
+        if lineNumbers {
+            s += """
+
+            - 手写图片左边的灰色数字是行号。判 wrong 时，在反馈的最后为每一处错误单独写一行 <mark line="行号">不超过 12 个字的短评</mark>，行号是出错的那一行左边的数字，最多 3 处；判 correct 时不要写 mark。
+            """
+        }
+        return s
+    }
+
+    /// 提示分三档，一档比一档具体
+    static let hintLevels = ["思路方向", "关键一步", "下一步写什么"]
+
+    static func hintLevelName(_ level: Int) -> String {
+        hintLevels[min(max(level, 1), hintLevels.count) - 1]
+    }
+
+    /// 按钮和小标签上用的短名字
+    static func hintLevelShortName(_ level: Int) -> String {
+        ["思路", "关键一步", "下一步"][min(max(level, 1), hintLevels.count) - 1]
+    }
+
+    /// level：第几次提示，决定这次提示的档次；note：学生补充的文字说明
+    static func hintInstruction(level: Int, note: String? = nil) -> String {
+        let detail: String
+        switch level {
+        case 1:
+            detail = "这次是「思路方向」：只点出该往哪个方向想、用到哪个知识点或方法，不要涉及具体步骤和式子。"
+        case 2:
+            detail = "这次是「关键一步」：指出这道题最关键的一步是什么（可以写出关键的关系式），但不要往下算。"
+        default:
+            detail = "这次是「下一步写什么」：结合我已经写的作答，具体告诉我下一步该写什么（可以给出下一步的式子），但不要给出最终答案。"
+        }
+        var s = """
+        我需要提示（这是第 \(level) 次提示）。\(detail)
+        每次提示都在之前提示的基础上更具体一步，引导我自己想出来，简洁一些，控制在几句话以内。
         """
         if let note, !note.isEmpty {
             s += "\n\n【我的补充说明】\(note)\n请针对我说的卡住的地方给提示。"
         }
         return s
+    }
+
+    /// 用笔圈出一步来提问
+    static func stepQuestion(_ text: String, done: Bool) -> String {
+        var s = "【我圈出的这一步】见手写图片里蓝框圈住的部分（左边的灰色数字是行号）。\n" + text
+        if !done {
+            s += "\n（这道题我还没做完：请只针对我圈出的这一步回答，可以指出问题、提示方向，不要直接给出最终答案。）"
+        }
+        return s + "\n请简洁回答，控制在几句话以内。"
     }
 
     static let solutionInstruction = "请给出这道题的完整答案和详细的解题过程（推导写成对齐的公式），最后总结一下解题的关键点。"
@@ -310,9 +351,25 @@ enum Tutor {
         return (display.trimmingCharacters(in: .whitespacesAndNewlines), found)
     }
 
-    /// 流式输出过程中隐藏还没写完的出题标签
+    /// 取出批改里的 <mark line="3">短评</mark>，返回去掉标签后的反馈
+    static func extractMarks(_ text: String) -> (text: String, marks: [InkMark]) {
+        let pattern = #"<mark\s+line\s*=\s*["'“”]?\s*(\d+)\s*["'“”]?\s*>([\s\S]*?)</mark>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return (text, []) }
+        let ns = text as NSString
+        var marks: [InkMark] = []
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            guard let line = Int(ns.substring(with: match.range(at: 1))), line > 0 else { continue }
+            let note = ns.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
+            marks.append(InkMark(line: line, note: clip(note, 20)))
+        }
+        let stripped = regex.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: ns.length), withTemplate: "")
+        return (stripped.trimmingCharacters(in: .whitespacesAndNewlines), Array(marks.prefix(3)))
+    }
+
+    /// 流式输出过程中隐藏还没写完的出题标签和批改标记
     static func hideUnfinishedTags(_ text: String) -> String {
-        let shown = extractNewQuestions(text).display
+        var shown = extractMarks(extractNewQuestions(text).display).text
+        if let r = shown.range(of: "<mark") { shown = String(shown[..<r.lowerBound]) }
         if let r = shown.range(of: "<new_question") {
             return String(shown[..<r.lowerBound]) + "\n\n（正在出题…）"
         }

@@ -151,6 +151,10 @@ struct QuestionBlock: View {
     @State private var hintNote = ""
     @State private var showAsk = false
     @State private var askText = ""
+    /// 页边选中的批注；nil 表示最新一条
+    @State private var selectedNote: UUID?
+    /// 圈选提问的弹窗。等圈的那一笔抬起来再弹出，否则会被同一次触摸关掉
+    @State private var showStepAsk = false
 
     var body: some View {
         if let q = store.question(setID, qID) {
@@ -171,15 +175,17 @@ struct QuestionBlock: View {
                 if wide {
                     HStack(alignment: .top, spacing: 18) {
                         work
-                        MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, nextID: nextID, wide: true)
-                            .frame(width: 270)
+                        MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, nextID: nextID, wide: true,
+                                    selection: $selectedNote)
+                            .frame(width: 290)
                     }
                 } else {
                     work
-                    MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, nextID: nextID, wide: false)
+                    MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, nextID: nextID, wide: false,
+                                selection: $selectedNote)
                 }
 
-                QuestionNotes(setID: setID, qID: qID)
+                QuestionNotes(setID: setID, qID: qID, wide: wide)
             }
             .padding(.vertical, 28)
             .overlay(alignment: .bottom) {
@@ -299,6 +305,9 @@ struct QuestionBlock: View {
                 NotebookCanvas(model: model, tools: model.tools)
                     .frame(height: model.height)
                     .background(RuledPaper())
+                    // 批改标出的错误行、圈选提问圈住的地方
+                    .overlay { annotations(q) }
+                    .overlay(alignment: .topLeading) { askAnchor }
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.2)))
                     .animation(.easeOut(duration: 0.2), value: model.height)
@@ -329,6 +338,45 @@ struct QuestionBlock: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// 画在手写区上的标注：这一轮批改标出的错误行（红色波浪线），选中的圈选提问圈住的地方（蓝框）
+    private func annotations(_ q: Question) -> some View {
+        let items = MarginNotes.items(q, wide: wide)
+        let verdict = items.last { $0.kind == .verdictWrong || $0.kind == .verdictCorrect }
+        let marks = verdict?.kind == .verdictWrong ? verdict?.marks ?? [] : []
+        var region = model.circledRegion
+        if region == nil, store.pending[qID]?.inMargin == true {
+            region = q.messages.last { $0.role == .user && $0.region != nil }?.region?.rect
+        }
+        if region == nil, let selected = MarginNotes.selected(items, selectedNote), selected.kind == .chat {
+            region = selected.region?.rect
+        }
+        return InkAnnotations(marks: marks, region: region, span: model.inkSpan(inRow:))
+    }
+
+    /// 圈选提问的弹窗从圈住的地方弹出
+    private var askAnchor: some View {
+        let r = model.circledRegion ?? .zero
+        return Color.clear
+            .frame(width: max(r.width, 1), height: max(r.height, 1))
+            .padding(.leading, max(0, r.minX))
+            .padding(.top, max(0, r.minY))
+            .onChange(of: model.circledRegion) {
+                guard model.circledRegion != nil else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    if model.circledRegion != nil { showStepAsk = true }
+                }
+            }
+            .popover(isPresented: $showStepAsk) {
+                StepAskPopover(disabled: store.isBusy(qID)) { text in
+                    guard let region = model.circledRegion else { return }
+                    store.askAboutStep(setID, qID, text: text, image: model.exportJPEG(highlight: region),
+                                       region: InkRegion(region))
+                    showStepAsk = false
+                }
+                .onDisappear { model.circledRegion = nil }
+            }
+    }
+
     // MARK: 操作
 
     private func actionRow(_ q: Question) -> some View {
@@ -350,7 +398,10 @@ struct QuestionBlock: View {
                 Button {
                     store.requestHint(setID, qID)
                 } label: {
-                    Label(q.hintCount == 0 ? "提示" : "再提示", systemImage: "lightbulb")
+                    // 提示分三档：思路方向 → 关键一步 → 下一步写什么，按钮上写着下一档是什么
+                    Label("提示：" + Tutor.hintLevelShortName(q.hintCount + 1), systemImage: "lightbulb")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 .tint(.orange)
                 .disabled(busy)
@@ -412,7 +463,7 @@ struct QuestionBlock: View {
 
     private func hintNotePopover(_ q: Question) -> some View {
         notePopover(title: "补充说明", prompt: "说说你卡在哪一步、哪里不明白…", text: $hintNote,
-                    button: q.hintCount == 0 ? "发送并要提示" : "发送并要进一步提示", icon: "lightbulb", tint: .orange) {
+                    button: "发送并要提示：" + Tutor.hintLevelName(q.hintCount + 1), icon: "lightbulb", tint: .orange) {
             store.requestHint(setID, qID, note: hintNote)
             hintNote = ""
             showHintNote = false
@@ -475,16 +526,22 @@ private struct NotePopover: View {
     }
 }
 
-/// 横线纸
+/// 横线纸。第 n 行是第 n-1 条和第 n 条横线之间的那一格，批改时按行号标出错误
 struct RuledPaper: View {
+    static let lineSpacing: CGFloat = 44
+
+    /// 手写区里 y 处是第几行（从 1 开始）
+    static func row(at y: CGFloat) -> Int { max(1, Int((y / lineSpacing).rounded(.down)) + 1) }
+    static func top(ofRow row: Int) -> CGFloat { CGFloat(row - 1) * lineSpacing }
+
     var body: some View {
         Canvas { context, size in
             var path = Path()
-            var y: CGFloat = 44
+            var y = Self.lineSpacing
             while y < size.height {
                 path.move(to: CGPoint(x: 0, y: y))
                 path.addLine(to: CGPoint(x: size.width, y: y))
-                y += 44
+                y += Self.lineSpacing
             }
             context.stroke(path, with: .color(Color(red: 0.62, green: 0.72, blue: 0.86).opacity(0.45)), lineWidth: 0.8)
         }
@@ -494,7 +551,105 @@ struct RuledPaper: View {
 
 // MARK: - 页边批注
 
-/// 这一轮作答的批改结果和提示，像老师用红笔写在页边
+extension InkRegion {
+    init(_ rect: CGRect) {
+        self.init(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height)
+    }
+
+    var rect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
+}
+
+/// 手写区上的标注，像老师用红笔改作业：错的那一行下面画波浪线，前面写上序号，后面有地方就写短评
+struct InkAnnotations: View {
+    let marks: [InkMark]
+    let region: CGRect?
+    /// 某一行笔迹的左右范围
+    let span: (Int) -> ClosedRange<CGFloat>?
+
+    var body: some View {
+        Canvas { context, size in
+            let spacing = RuledPaper.lineSpacing
+            for (i, mark) in marks.enumerated() {
+                let rowTop = RuledPaper.top(ofRow: mark.line)
+                guard rowTop < size.height else { continue }
+                let range = span(mark.line) ?? 40...(size.width * 0.5)
+                let x0 = max(28, range.lowerBound)
+                let x1 = min(size.width - 8, max(range.upperBound, x0 + 40))
+                let y = rowTop + spacing + 2
+                // 波浪线
+                var wave = Path()
+                wave.move(to: CGPoint(x: x0, y: y))
+                var x = x0
+                var up = true
+                while x < x1 {
+                    let next = min(x + 7, x1)
+                    wave.addQuadCurve(to: CGPoint(x: next, y: y), control: CGPoint(x: (x + next) / 2, y: y + (up ? -3.5 : 3.5)))
+                    x = next
+                    up.toggle()
+                }
+                context.stroke(wave, with: .color(.red.opacity(0.85)), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+                let middle = rowTop + spacing / 2 + 4
+                let number = context.resolve(Text(MarginNotes.circled(i + 1)).font(.system(size: 17, weight: .bold)).foregroundColor(.red))
+                context.draw(number, at: CGPoint(x: max(12, x0 - 16), y: middle))
+                let note = context.resolve(Text(mark.note).font(.system(size: 14, weight: .medium)).foregroundColor(.red))
+                let noteSize = note.measure(in: CGSize(width: 600, height: spacing))
+                if x1 + 12 + noteSize.width < size.width - 6 {
+                    let background = CGRect(x: x1 + 8, y: middle - noteSize.height / 2 - 2,
+                                            width: noteSize.width + 8, height: noteSize.height + 4)
+                    context.fill(Path(roundedRect: background, cornerRadius: 4), with: .color(.white.opacity(0.85)))
+                    context.draw(note, at: CGPoint(x: x1 + 12, y: middle), anchor: .leading)
+                }
+            }
+            if let region {
+                let box = Path(roundedRect: region, cornerRadius: 8)
+                context.fill(box, with: .color(.blue.opacity(0.06)))
+                context.stroke(box, with: .color(.blue.opacity(0.8)), style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// 圈出一步之后弹出：点常用的问题，或者写下想问的
+private struct StepAskPopover: View {
+    let disabled: Bool
+    let send: (String) -> Void
+    @State private var text = ""
+
+    static let quick = ["这一步对吗？", "这一步为什么不对？", "这一步是怎么来的？", "接下来该怎么写？"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("问圈出来的这一步").font(.headline)
+            FlowLayout(spacing: 8) {
+                ForEach(Self.quick, id: \.self) { question in
+                    Button(question) { send(question) }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.small)
+                }
+            }
+            .disabled(disabled)
+            // 输入框里可以直接用 Apple Pencil 写字，系统会转成文字
+            TextField("或者写下想问的…", text: $text, axis: .vertical)
+                .lineLimit(2...5)
+                .padding(10)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+            Button { send(text) } label: {
+                Label("发送", systemImage: "paperplane").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(disabled || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(18)
+        .frame(width: 380)
+    }
+}
+
+// MARK: - 页边批注
+
+/// 页边只放一张当前的批注：最近一次批改、提示、圈选提问的回答（页面宽时还有完整答案）。
+/// 之前的收成一排小标签，点哪个看哪个；新的一到就翻回最新一条
 struct MarginNotes: View {
     @EnvironmentObject var store: AppStore
     let setID: UUID
@@ -502,49 +657,175 @@ struct MarginNotes: View {
     let mistakeMode: Bool
     let nextID: UUID?
     let wide: Bool
+    /// 和手写区共用：选中圈选提问时，手写区上标出圈住的地方
+    @Binding var selection: UUID?
+    @State private var showCorrectDetail = false
+    @State private var flash = false
 
     var body: some View {
         if let q = store.question(setID, qID) {
-            let notes = Self.currentRound(q)
-            let pending = store.pending[qID].flatMap { [.verdictWrong, .verdictCorrect, .hint].contains($0.kind) ? $0 : nil }
+            let items = Self.items(q, wide: wide)
+            let current = Self.selected(items, selection)
+            let pending = store.pending[qID].flatMap { showsInMargin($0) ? $0 : nil }
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(notes) { message in
-                    note(message)
-                }
+                if items.count > 1 { tabs(items, current: current, q: q) }
                 if let pending {
                     PendingNote(pending: pending)
+                } else if let current {
+                    note(current, in: q)
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Self.tint(current).opacity(flash ? 0.8 : 0), lineWidth: 2))
                 }
                 if mistakeMode { reviewOutcome }
-                if notes.isEmpty && pending == nil && wide {
-                    Text(q.status == .passed ? "" : "写完点“批改”，结果会标在这里")
+                if items.isEmpty && pending == nil && wide && q.status != .passed {
+                    Text("写完点“批改”，结果会标在这里")
                         .font(.callout)
                         .foregroundStyle(.tertiary)
                         .padding(.top, 8)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    /// 最近一次提交之后的批改、提示；之前的都在“完整记录”里
-    static func currentRound(_ q: Question) -> [ChatMessage] {
-        let start = q.messages.lastIndex { $0.kind == .submission }.map { $0 + 1 } ?? 0
-        return q.messages[start...].filter { m in
-            switch m.kind {
-            case .verdictCorrect, .verdictWrong, .hint: return true
-            case .hintRequest: return m.note != nil
-            default: return false
+            // 新的批注到了：翻回最新一条，边框轻轻闪一下
+            .onChange(of: items.last?.id) { _, newID in
+                selection = nil
+                showCorrectDetail = false
+                guard newID != nil else { return }
+                withAnimation(.easeIn(duration: 0.15)) { flash = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    withAnimation(.easeOut(duration: 0.8)) { flash = false }
+                }
             }
         }
     }
 
+    /// 页边的批注：这次作答的所有提示和圈选提问、最近一次提交的批改、（页面宽时）完整答案，按时间排
+    static func items(_ q: Question, wide: Bool) -> [ChatMessage] {
+        let lastSubmission = q.messages.lastIndex { $0.kind == .submission }
+        let lastSolution = q.messages.lastIndex { $0.kind == .solution }
+        return q.messages.indices.compactMap { i in
+            let m = q.messages[i]
+            switch m.kind {
+            case .hint: return m
+            case .verdictCorrect, .verdictWrong: return lastSubmission.map { i > $0 } == true ? m : nil
+            case .chat: return m.role == .assistant && m.region != nil ? m : nil
+            case .solution: return wide && i == lastSolution ? m : nil
+            default: return nil
+            }
+        }
+    }
+
+    static func selected(_ items: [ChatMessage], _ selection: UUID?) -> ChatMessage? {
+        items.first { $0.id == selection } ?? items.last
+    }
+
+    static func circled(_ n: Int) -> String {
+        let digits = Array("①②③④⑤⑥⑦⑧⑨")
+        return (1...digits.count).contains(n) ? String(digits[n - 1]) : "(\(n))"
+    }
+
+    private func showsInMargin(_ pending: PendingReply) -> Bool {
+        switch pending.kind {
+        case .verdictWrong, .verdictCorrect, .hint: return true
+        case .chat: return pending.inMargin
+        case .solution: return wide
+        default: return false
+        }
+    }
+
+    private static func tint(_ m: ChatMessage) -> Color {
+        switch m.kind {
+        case .verdictCorrect: return .green
+        case .verdictWrong: return .red
+        case .hint: return .orange
+        case .solution: return .blue
+        default: return .purple
+        }
+    }
+
+    // MARK: 小标签
+
+    private func tabs(_ items: [ChatMessage], current: ChatMessage?, q: Question) -> some View {
+        FlowLayout(spacing: 6) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, m in
+                let selected = m.id == current?.id
+                Button {
+                    selection = m.id
+                } label: {
+                    Label(tabTitle(m, index: index, in: items), systemImage: tabIcon(m))
+                        .font(.caption.weight(selected ? .semibold : .regular))
+                        .lineLimit(1)
+                        .padding(.horizontal, 9).padding(.vertical, 4)
+                        .background(Self.tint(m).opacity(selected ? 0.2 : 0.08), in: Capsule())
+                        .foregroundStyle(selected ? Self.tint(m) : .secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func tabTitle(_ m: ChatMessage, index: Int, in items: [ChatMessage]) -> String {
+        let before = items[..<index]
+        switch m.kind {
+        case .verdictCorrect, .verdictWrong: return "批改"
+        case .hint:
+            let n = before.filter { $0.kind == .hint }.count + 1
+            return "\(n) " + Tutor.hintLevelShortName(m.hintLevel ?? n)
+        case .chat: return "问 \(before.filter { $0.kind == .chat }.count + 1)"
+        case .solution: return "答案"
+        default: return ""
+        }
+    }
+
+    private func tabIcon(_ m: ChatMessage) -> String {
+        switch m.kind {
+        case .verdictCorrect: return "checkmark"
+        case .verdictWrong: return "xmark"
+        case .hint: return "lightbulb"
+        case .solution: return "text.book.closed"
+        default: return "questionmark.bubble"
+        }
+    }
+
+    // MARK: 一张批注
+
+    /// 第几档提示；旧版本的提示没有记档次，按是第几次提示算
+    private func hintLevel(_ m: ChatMessage, in q: Question) -> Int {
+        if let level = m.hintLevel { return level }
+        guard let i = q.messages.firstIndex(where: { $0.id == m.id }) else { return 1 }
+        return q.messages[...i].filter { $0.kind == .hint }.count
+    }
+
+    /// 这条回复前面学生说的话（提问、提示时的补充说明）
+    private func request(before m: ChatMessage, in q: Question) -> ChatMessage? {
+        guard let i = q.messages.firstIndex(where: { $0.id == m.id }) else { return nil }
+        return q.messages[..<i].last { $0.role == .user }
+    }
+
     @ViewBuilder
-    private func note(_ message: ChatMessage) -> some View {
+    private func note(_ message: ChatMessage, in q: Question) -> some View {
         switch message.kind {
         case .verdictCorrect:
+            // 做对了只留一个勾，点开再看说明
             VStack(alignment: .leading, spacing: 8) {
-                mark(correct: true, message: message)
-                RichText(message.text, scale: 0.92)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { showCorrectDetail.toggle() }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 26, weight: .heavy))
+                        Text("做对了").font(.headline)
+                        Spacer()
+                        timing(message)
+                        Image(systemName: showCorrectDetail ? "chevron.up" : "chevron.down")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundStyle(Color.green)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint(showCorrectDetail ? "收起说明" : "展开说明")
+                if showCorrectDetail {
+                    RichText(message.text, scale: 0.92)
+                }
                 if let nextID {
                     Button {
                         store.selectedQuestionID = nextID
@@ -561,6 +842,16 @@ struct MarginNotes: View {
         case .verdictWrong:
             VStack(alignment: .leading, spacing: 8) {
                 mark(correct: false, message: message)
+                let marks = message.marks ?? []
+                if !marks.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(marks.enumerated()), id: \.offset) { i, mark in
+                            Text("\(Self.circled(i + 1)) 第 \(mark.line) 行：\(mark.note)")
+                                .font(.callout.weight(.medium))
+                                .foregroundStyle(.red)
+                        }
+                    }
+                }
                 RichText(message.text, scale: 0.92)
             }
             .padding(12)
@@ -568,20 +859,46 @@ struct MarginNotes: View {
         case .hint:
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Label("提示", systemImage: "lightbulb.fill").font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+                    Label("提示 · " + Tutor.hintLevelName(hintLevel(message, in: q)), systemImage: "lightbulb.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
                     Spacer()
                     timing(message)
+                }
+                if let note = request(before: message, in: q)?.note {
+                    Text("我卡在：\(note)").font(.callout).foregroundStyle(.secondary)
                 }
                 RichText(message.text, scale: 0.92)
             }
             .padding(12)
             // 便签纸
             .background(Color.yellow.opacity(0.18), in: RoundedRectangle(cornerRadius: 4))
-        case .hintRequest:
-            Text("我卡在：\(message.note ?? "")")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+        case .chat:
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("问这一步", systemImage: "questionmark.bubble.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.purple)
+                    Spacer()
+                    timing(message)
+                }
+                if let asked = request(before: message, in: q) {
+                    Text("我问：\(asked.text)").font(.callout).foregroundStyle(.secondary)
+                }
+                RichText(message.text, scale: 0.92)
+            }
+            .padding(12)
+            .background(Color.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+        case .solution:
+            // 和左边自己的作答并排对照
+            VStack(alignment: .leading, spacing: 6) {
+                Label("完整答案", systemImage: "text.book.closed.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.blue)
+                RichText(message.text, scale: 0.92)
+            }
+            .padding(12)
+            .background(Color.blue.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
         default:
             EmptyView()
         }
@@ -634,7 +951,7 @@ struct PendingNote: View {
     var body: some View {
         let isVerdict = pending.kind == .verdictWrong || pending.kind == .verdictCorrect
         let verdict = isVerdict ? Tutor.parseVerdict(pending.text) : nil
-        let shown = verdict?.feedback ?? Tutor.hideUnfinishedTags(pending.text)
+        let shown = Tutor.hideUnfinishedTags(verdict?.feedback ?? pending.text)
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 if let correct = verdict?.correct {
@@ -679,11 +996,13 @@ struct QuestionNotes: View {
     @EnvironmentObject var store: AppStore
     let setID: UUID
     let qID: UUID
+    /// 页面宽时完整答案放在页边，和自己的作答并排对照
+    let wide: Bool
     @State private var showSolution = false
 
     var body: some View {
         if let q = store.question(setID, qID) {
-            let solution = q.messages.last { $0.kind == .solution }
+            let solution = wide ? nil : q.messages.last { $0.kind == .solution }
             let pending = store.pending[qID]
             VStack(alignment: .leading, spacing: 12) {
                 if let solution {
@@ -700,7 +1019,7 @@ struct QuestionNotes: View {
                     // 刚看的答案直接展开
                     .onChange(of: solution.id) { showSolution = true }
                 }
-                if let pending, pending.kind == .solution {
+                if let pending, pending.kind == .solution, !wide {
                     PendingNote(pending: pending)
                         .onDisappear { showSolution = true }
                 }
@@ -720,7 +1039,7 @@ struct QuestionNotes: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.purple.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
                 }
-                if let pending, pending.kind == .chat {
+                if let pending, pending.kind == .chat, !pending.inMargin {
                     PendingNote(pending: pending)
                 }
             }
@@ -731,7 +1050,8 @@ struct QuestionNotes: View {
     private func notes(_ q: Question) -> [(title: String, answer: ChatMessage)] {
         var result: [(String, ChatMessage)] = []
         var lastQuestion: String?
-        for m in q.messages where m.kind == .chat {
+        // 圈出一步来问的写在页边
+        for m in q.messages where m.kind == .chat && m.region == nil {
             if m.role == .user {
                 lastQuestion = store.followUps.first { $0.prompt == m.text }?.title ?? m.text
             } else {

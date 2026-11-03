@@ -33,6 +33,26 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var model: String?
     /// 请求提示时学生补充的文字说明（卡在哪里、哪里不懂）
     var note: String?
+    /// 提示的档次：1 思路方向，2 关键一步，3 起是下一步写什么
+    var hintLevel: Int?
+    /// 批改时标出的出错位置，画在手写区对应的那一行
+    var marks: [InkMark]?
+    /// 用笔圈出来提问时圈住的地方（手写区坐标）；问题和回答都记着，回答贴在页边
+    var region: InkRegion?
+}
+
+/// 批改标出的一处错误：第几行（手写区的横线行，从 1 开始）、一句短评
+struct InkMark: Codable, Equatable {
+    var line: Int
+    var note: String
+}
+
+/// 手写区里的一块地方
+struct InkRegion: Codable, Equatable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
 }
 
 enum QuestionStatus: String, Codable {
