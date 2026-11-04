@@ -529,7 +529,7 @@ final class AppStore: ObservableObject {
             let (display, newOnes) = Tutor.extractNewQuestions(full)
             let created = self.insertGenerated(newOnes, after: qID, in: setID)
             self.mutate(setID, qID) { q in
-                q.messages.append(ChatMessage(role: .assistant, kind: .chat, text: display.isEmpty && !created.isEmpty ? "新题来了：" : display,
+                q.messages.append(ChatMessage(role: .assistant, kind: .chat, text: display.isEmpty && !created.isEmpty ? "出了一道新题：" : display,
                                               prompt: full, generatedQuestionIDs: created))
             }
         }

@@ -147,18 +147,10 @@ struct ModelBrowser: View {
                         .truncationMode(.middle)
                         .foregroundStyle(.primary)
                     if ModelInfo.likelyVision(model) {
-                        Text("看图")
-                            .font(.caption2.weight(.medium))
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.teal.opacity(0.15), in: Capsule())
-                            .foregroundStyle(.teal)
+                        Text("看图").font(.caption).foregroundStyle(.secondary)
                     }
                     if ModelInfo.likelyFast(model) {
-                        Text("快")
-                            .font(.caption2.weight(.medium))
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.orange.opacity(0.15), in: Capsule())
-                            .foregroundStyle(.orange)
+                        Text("快").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
                 }

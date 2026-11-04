@@ -129,3 +129,54 @@ struct FlowLayout: Layout {
         return rows.filter { !$0.indices.isEmpty }
     }
 }
+
+// MARK: - 纸笔配色
+
+/// 整个 App 只用纸和笔的颜色：墨蓝钢笔（主色，Assets 里的 AccentColor）、红笔批改、蓝笔答案、便签黄。
+/// 不用一种功能配一种鲜艳颜色，页面才像一本笔记本
+enum Ink {
+    static let pen = Color.accentColor
+    static let red = adaptive(light: (0.74, 0.16, 0.12), dark: (0.96, 0.47, 0.42))
+    static let blue = adaptive(light: (0.14, 0.35, 0.62), dark: (0.56, 0.71, 0.95))
+    static let green = adaptive(light: (0.21, 0.45, 0.28), dark: (0.52, 0.78, 0.57))
+    /// 便签纸
+    static let note = adaptive(light: (1.0, 0.957, 0.78), dark: (0.29, 0.26, 0.17))
+    /// 笔记本的纸色
+    static let paper = adaptive(light: (0.984, 0.977, 0.958), dark: (0.105, 0.105, 0.115))
+
+    private static func adaptive(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
+        #if os(iOS)
+        Color(UIColor { traits in
+            let c = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(red: c.0, green: c.1, blue: c.2, alpha: 1)
+        })
+        #else
+        Color(red: light.0, green: light.1, blue: light.2)
+        #endif
+    }
+}
+
+extension View {
+    /// 写在页边的批注：不加底色卡片，左边一条细竖线，像用笔在纸边划了一道
+    func marginRule(_ color: Color) -> some View {
+        padding(.leading, 12)
+            .padding(.vertical, 2)
+            .overlay(alignment: .leading) {
+                Rectangle().fill(color.opacity(0.7)).frame(width: 2)
+            }
+    }
+}
+
+/// 不带边框、不带图标的文字按钮，用在笔记本页面上
+struct InkTextButtonStyle: ButtonStyle {
+    var color: Color = Ink.pen
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.callout.weight(.medium))
+            .foregroundStyle(color.opacity(isEnabled ? (configuration.isPressed ? 0.5 : 1) : 0.35))
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+    }
+}

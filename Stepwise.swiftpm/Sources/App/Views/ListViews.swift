@@ -36,16 +36,14 @@ struct SidebarView: View {
                 Section {
                     HStack(spacing: 10) {
                         Image(systemName: "bookmark.fill")
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Ink.red)
                         Text("错题本").font(.headline)
                         Spacer()
                         let count = store.starredEntries.count
                         if count > 0 {
                             Text("\(count)")
-                                .font(.caption.weight(.semibold)).monospacedDigit()
-                                .padding(.horizontal, 8).padding(.vertical, 2)
-                                .background(Color.red.opacity(0.15), in: Capsule())
-                                .foregroundStyle(.red)
+                                .font(.callout).monospacedDigit()
+                                .foregroundStyle(.secondary)
                         }
                     }
                     .padding(.vertical, 6)
@@ -199,8 +197,8 @@ struct FolderNode: View {
             FolderContents(parent: folder.id, actions: actions)
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: targeted ? "folder.fill.badge.plus" : "folder.fill")
-                    .foregroundStyle(Color.accentColor)
+                Image(systemName: targeted ? "folder.badge.plus" : "folder")
+                    .foregroundStyle(.secondary)
                 Text(folder.name).font(.headline).lineLimit(1)
                 Spacer()
                 let count = store.setCount(inTree: folder.id)
@@ -324,11 +322,10 @@ struct QuestionListView: View {
                                 HStack(spacing: 6) {
                                     Text("第 \(q.label) 题").font(.subheadline.weight(.semibold))
                                     if q.isStarred {
-                                        Image(systemName: "bookmark.fill").font(.caption).foregroundStyle(.red)
+                                        Image(systemName: "bookmark.fill").font(.caption).foregroundStyle(Ink.red)
                                     }
                                     if q.isGenerated {
-                                        Text("AI 新题").font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
-                                            .background(.purple.opacity(0.15), in: Capsule()).foregroundStyle(.purple)
+                                        Text("变式").font(.caption).foregroundStyle(.secondary)
                                     }
                                     if store.isBusy(q.id) { ProgressView().controlSize(.mini) }
                                 }
@@ -351,12 +348,17 @@ struct StatusIcon: View {
     let status: QuestionStatus
 
     var body: some View {
-        switch status {
-        case .todo: Image(systemName: "circle").foregroundStyle(.secondary)
-        case .wrong: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
-        case .passed: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .revealed: Image(systemName: "eye.circle.fill").foregroundStyle(.blue)
+        // 像在目录旁边用笔做的记号：没做的空着一个小圈，做对打勾，做错打叉
+        Group {
+            switch status {
+            case .todo: Image(systemName: "circle").foregroundStyle(.tertiary)
+            case .wrong: Image(systemName: "xmark").foregroundStyle(Ink.red)
+            case .passed: Image(systemName: "checkmark").foregroundStyle(Ink.green)
+            case .revealed: Image(systemName: "eye").foregroundStyle(Ink.blue)
+            }
         }
+        .font(.callout.weight(.semibold))
+        .frame(width: 18)
     }
 }
 
@@ -383,8 +385,7 @@ struct MistakeBookView: View {
                                     Text("第 \(q.label) 题").font(.subheadline.weight(.semibold))
                                     if let rounds = q.reviewRounds {
                                         Text(rounds == 0 ? "复习中" : "复习中 · 已用 \(rounds) 轮")
-                                            .font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
-                                            .background(.orange.opacity(0.15), in: Capsule()).foregroundStyle(.orange)
+                                            .font(.caption).foregroundStyle(Ink.red)
                                     }
                                     if store.isBusy(q.id) { ProgressView().controlSize(.mini) }
                                 }

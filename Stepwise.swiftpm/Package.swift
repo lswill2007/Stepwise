@@ -19,7 +19,7 @@ let products: [Product] = [
         displayVersion: "1.0",
         bundleVersion: "1",
         appIcon: .asset("AppIcon"),
-        accentColor: .presetColor(.indigo),
+        accentColor: .asset("AccentColor"),
         // 第一版只支持 iPad
         supportedDeviceFamilies: [
             .pad

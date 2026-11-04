@@ -8,16 +8,14 @@ struct StatusPill: View {
     var body: some View {
         let (text, color): (String, Color) = {
             switch status {
-            case .todo: return ("未作答", .gray)
-            case .wrong: return ("待订正", .orange)
-            case .passed: return ("已通过", .green)
-            case .revealed: return ("已看答案", .blue)
+            case .todo: return ("未作答", .secondary)
+            case .wrong: return ("待订正", Ink.red)
+            case .passed: return ("已做对", Ink.green)
+            case .revealed: return ("看过答案", Ink.blue)
             }
         }()
-        Text(text).font(.caption.weight(.medium))
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color)
+        // 只是一行小字，不做成彩色胶囊
+        Text(text).font(.caption).foregroundStyle(color)
     }
 }
 
@@ -37,34 +35,28 @@ struct MessageRow: View {
                     ForEach(message.imageIDs, id: \.self) { StoredImage(id: $0, maxHeight: 220) }
                 }
                 .padding(14)
-                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             }
 
         case .verdictCorrect:
-            card(title: "回答正确", icon: "checkmark.circle.fill", color: .green)
+            card(title: "对了", color: Ink.red)
 
         case .verdictWrong:
-            card(title: "还不对，问题在这里", icon: "xmark.circle.fill", color: .orange)
+            card(title: "还不对", color: Ink.red)
 
         case .hint:
-            card(title: "提示", icon: "lightbulb.fill", color: .yellow)
+            card(title: "提示", color: .secondary)
 
         case .solution:
-            card(title: "完整解答", icon: "text.book.closed.fill", color: .blue)
+            card(title: "完整答案", color: Ink.blue)
 
         case .hintRequest, .solutionRequest:
             VStack(alignment: .trailing, spacing: 6) {
-                Text(message.text).font(.callout)
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(Color.secondary.opacity(0.12), in: Capsule())
+                Text(message.text).font(.callout).foregroundStyle(.secondary)
                 if let note = message.note {
-                    HStack {
-                        Spacer(minLength: 80)
-                        Text(note)
-                            .padding(12)
-                            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    Text("我卡在：\(note)")
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -75,7 +67,7 @@ struct MessageRow: View {
                     Spacer(minLength: 80)
                     RichText(message.text)
                         .padding(12)
-                        .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
+                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
@@ -89,8 +81,7 @@ struct MessageRow: View {
                             .frame(maxWidth: .infinity, alignment: .trailing)
                     }
                 }
-                .padding(14)
-                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+                .marginRule(Ink.pen)
             }
         }
     }
@@ -103,12 +94,12 @@ struct MessageRow: View {
         return "用时 \(seconds) 秒"
     }
 
-    private func card(title: String, icon: String, color: Color) -> some View {
+    private func card(title: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Label(title, systemImage: icon)
+                Text(title)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(color == .yellow ? Color.orange : color)
+                    .foregroundStyle(color)
                 Spacer(minLength: 8)
                 if let timing = timingText {
                     Text(timing).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
@@ -116,9 +107,8 @@ struct MessageRow: View {
             }
             RichText(message.text)
         }
-        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
+        .marginRule(color)
     }
 }
 
@@ -128,21 +118,18 @@ struct NewQuestionCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("新题已加入题目列表：第 \(question.label) 题", systemImage: "plus.square.on.square")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.purple)
+            Text("第 \(question.label) 题 · 已加到题目列表")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
             RichText(question.content, scale: 0.95)
-            Button {
-                store.selectedQuestionID = question.id
-            } label: {
-                Label("去做这道题", systemImage: "arrow.right")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.purple)
+            Button("去做这道题 →") { store.selectedQuestionID = question.id }
+                .buttonStyle(InkTextButtonStyle())
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        // 像夹在笔记本里的一张卡片
+        .background(Color.secondary.opacity(0.05))
+        .overlay(Rectangle().stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
     }
 }
 

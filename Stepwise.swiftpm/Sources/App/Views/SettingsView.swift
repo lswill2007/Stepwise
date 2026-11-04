@@ -323,10 +323,7 @@ struct FollowUpSettingsView: View {
                             }
                             Spacer()
                             if action.makesQuestion {
-                                Text("出新题").font(.caption2.weight(.medium))
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(Color.purple.opacity(0.15), in: Capsule())
-                                    .foregroundStyle(.purple)
+                                Text("出新题").font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
