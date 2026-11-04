@@ -171,7 +171,7 @@ enum Tutor {
         if lineNumbers {
             s += """
 
-            - 手写图片左边的灰色数字是行号。判 wrong 时，在反馈的最后为每一处错误单独写一行 <mark line="行号">不超过 12 个字的短评</mark>，行号是出错的那一行左边的数字，最多 3 处；短评是写在手写纸上的纯文字，不要用 LaTeX 和 $，数学符号直接写成 ≠、≤、√、² 这样的字符；判 correct 时不要写 mark。
+            - 手写图片左边的灰色数字是行号。判 wrong 时，在反馈的最后为每一处错误单独写一行 <mark line="行号">不超过 12 个字的短评</mark>，行号是出错的那一行左边的数字，最多 3 处；短评里的公式用 $...$ 包住；判 correct 时不要写 mark。
             """
         }
         return s
@@ -360,8 +360,8 @@ enum Tutor {
         for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
             guard let line = Int(ns.substring(with: match.range(at: 1))), line > 0 else { continue }
             let note = ns.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
-            // 短评画在手写纸上，不能排版公式：LaTeX 换成 ≠、² 这样的字符
-            marks.append(InkMark(line: line, note: clip(plainPreview(note), 20)))
+            // 短评里可以有公式，太长才截断，免得把公式截成两半
+            marks.append(InkMark(line: line, note: note.count > 80 ? clip(note, 80) : note))
         }
         let stripped = regex.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: ns.length), withTemplate: "")
         return (stripped.trimmingCharacters(in: .whitespacesAndNewlines), Array(marks.prefix(3)))

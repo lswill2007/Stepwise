@@ -534,54 +534,82 @@ extension InkRegion {
     var rect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
 }
 
-/// 手写区上的标注，像老师用红笔改作业：错的那一行下面画波浪线，前面写上序号，后面有地方就写短评
+/// 手写区上的标注，像老师用红笔改作业：错的那一行下面画波浪线，前面写上序号，后面写短评。
+/// 波浪线和序号画在 Canvas 上；短评里可能有公式，用 RichText（KaTeX）叠在对应的位置
 struct InkAnnotations: View {
     let marks: [InkMark]
     let region: CGRect?
     /// 某一行笔迹的左右范围
     let span: (Int) -> ClosedRange<CGFloat>?
 
+    /// 一处错误在手写区上的位置
+    private struct Placement {
+        let number: Int
+        let note: String
+        /// 波浪线的左右端和所在的行
+        let x0: CGFloat
+        let x1: CGFloat
+        let rowTop: CGFloat
+        /// 短评的位置和宽度
+        let noteOrigin: CGPoint
+        let noteWidth: CGFloat
+    }
+
     var body: some View {
-        Canvas { context, size in
-            let spacing = RuledPaper.lineSpacing
-            for (i, mark) in marks.enumerated() {
-                let rowTop = RuledPaper.top(ofRow: mark.line)
-                guard rowTop < size.height else { continue }
-                let range = span(mark.line) ?? 40...(size.width * 0.5)
-                let x0 = max(28, range.lowerBound)
-                let x1 = min(size.width - 8, max(range.upperBound, x0 + 40))
-                let y = rowTop + spacing + 2
-                // 波浪线
-                var wave = Path()
-                wave.move(to: CGPoint(x: x0, y: y))
-                var x = x0
-                var up = true
-                while x < x1 {
-                    let next = min(x + 7, x1)
-                    wave.addQuadCurve(to: CGPoint(x: next, y: y), control: CGPoint(x: (x + next) / 2, y: y + (up ? -3.5 : 3.5)))
-                    x = next
-                    up.toggle()
+        GeometryReader { geo in
+            let placements = place(in: geo.size)
+            ZStack(alignment: .topLeading) {
+                Canvas { context, size in
+                    let spacing = RuledPaper.lineSpacing
+                    for p in placements {
+                        // 波浪线
+                        let y = p.rowTop + spacing + 2
+                        var wave = Path()
+                        wave.move(to: CGPoint(x: p.x0, y: y))
+                        var x = p.x0
+                        var up = true
+                        while x < p.x1 {
+                            let next = min(x + 7, p.x1)
+                            wave.addQuadCurve(to: CGPoint(x: next, y: y), control: CGPoint(x: (x + next) / 2, y: y + (up ? -3.5 : 3.5)))
+                            x = next
+                            up.toggle()
+                        }
+                        context.stroke(wave, with: .color(Ink.red.opacity(0.9)), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+                        let number = context.resolve(Text(MarginNotes.circled(p.number)).font(.system(size: 17, weight: .bold)).foregroundColor(Ink.red))
+                        context.draw(number, at: CGPoint(x: max(12, p.x0 - 16), y: p.rowTop + spacing / 2 + 4))
+                    }
+                    if let region {
+                        let box = Path(roundedRect: region, cornerRadius: 8)
+                        context.fill(box, with: .color(Ink.blue.opacity(0.05)))
+                        context.stroke(box, with: .color(Ink.blue.opacity(0.75)), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                    }
                 }
-                context.stroke(wave, with: .color(Ink.red.opacity(0.9)), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
-                let middle = rowTop + spacing / 2 + 4
-                let number = context.resolve(Text(MarginNotes.circled(i + 1)).font(.system(size: 17, weight: .bold)).foregroundColor(Ink.red))
-                context.draw(number, at: CGPoint(x: max(12, x0 - 16), y: middle))
-                let note = context.resolve(Text(Tutor.plainPreview(mark.note)).font(.system(size: 14, weight: .medium)).foregroundColor(Ink.red))
-                let noteSize = note.measure(in: CGSize(width: 600, height: spacing))
-                if x1 + 12 + noteSize.width < size.width - 6 {
-                    let background = CGRect(x: x1 + 8, y: middle - noteSize.height / 2 - 2,
-                                            width: noteSize.width + 8, height: noteSize.height + 4)
-                    context.fill(Path(roundedRect: background, cornerRadius: 4), with: .color(.white.opacity(0.85)))
-                    context.draw(note, at: CGPoint(x: x1 + 12, y: middle), anchor: .leading)
+                ForEach(placements, id: \.number) { p in
+                    RichText(p.note, scale: 0.82, tone: .paperRed)
+                        .frame(width: p.noteWidth, alignment: .leading)
+                        .offset(x: p.noteOrigin.x, y: p.noteOrigin.y)
                 }
-            }
-            if let region {
-                let box = Path(roundedRect: region, cornerRadius: 8)
-                context.fill(box, with: .color(Ink.blue.opacity(0.05)))
-                context.stroke(box, with: .color(Ink.blue.opacity(0.75)), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
             }
         }
         .allowsHitTesting(false)
+    }
+
+    /// 短评写在波浪线右边；右边太窄就写在波浪线下面
+    private func place(in size: CGSize) -> [Placement] {
+        let spacing = RuledPaper.lineSpacing
+        return marks.enumerated().compactMap { i, mark in
+            let rowTop = RuledPaper.top(ofRow: mark.line)
+            guard rowTop < size.height else { return nil }
+            let range = span(mark.line) ?? 40...(size.width * 0.5)
+            let x0 = max(28, range.lowerBound)
+            let x1 = min(size.width - 8, max(range.upperBound, x0 + 40))
+            let roomRight = size.width - x1 - 18
+            let origin = roomRight >= 150
+                ? CGPoint(x: x1 + 10, y: rowTop + 10)
+                : CGPoint(x: x0, y: rowTop + spacing + 8)
+            return Placement(number: i + 1, note: mark.note, x0: x0, x1: x1, rowTop: rowTop,
+                             noteOrigin: origin, noteWidth: max(80, size.width - origin.x - 8))
+        }
     }
 }
 
@@ -810,10 +838,14 @@ struct MarginNotes: View {
                 if !marks.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(marks.enumerated()), id: \.offset) { i, mark in
-                            // 序号和手写区上的对应，不用再写第几行
-                            Text("\(Self.circled(i + 1)) \(Tutor.plainPreview(mark.note))")
-                                .font(.callout)
-                                .foregroundStyle(Ink.red)
+                            // 序号和手写区上的对应，不用再写第几行；短评里的公式用 KaTeX 排版
+                            HStack(alignment: .top, spacing: 6) {
+                                Text(Self.circled(i + 1))
+                                    .font(.callout)
+                                    .foregroundStyle(Ink.red)
+                                    .padding(.top, 3)
+                                RichText(mark.note, scale: 0.92, tone: .red)
+                            }
                         }
                     }
                 }

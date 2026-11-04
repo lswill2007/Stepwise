@@ -1,24 +1,31 @@
 import SwiftUI
 import WebKit
 
+/// 文字颜色：默认跟随深浅色；red 是红笔批注；paperRed 写在手写纸上（纸一直是白的，深色模式也用浅色模式的红）
+enum RichTone: String {
+    case normal = "", red, paperRed = "paper-red"
+}
+
 /// 显示 Markdown + LaTeX 公式（KaTeX 排版）。
 /// 行内公式 $...$ 或 \(...\)，独立公式 $$...$$ 或 \[...\]，化学式 \ce{...}。
 struct RichText: View {
     let text: String
     var scale: Double = 1
+    var tone: RichTone = .normal
 
     @State private var height: CGFloat
 
-    init(_ text: String, scale: Double = 1) {
+    init(_ text: String, scale: Double = 1, tone: RichTone = .normal) {
         self.text = text
         self.scale = scale
+        self.tone = tone
         // 渲染完成前的估计高度，减少跳动
         let lines = text.components(separatedBy: "\n").reduce(0) { $0 + max(1, $1.count / 45 + 1) }
         _height = State(initialValue: CGFloat(min(lines, 40)) * 26 * CGFloat(scale))
     }
 
     var body: some View {
-        MathWebView(text: text, scale: scale, height: $height)
+        MathWebView(text: text, scale: scale, tone: tone, height: $height)
             .frame(height: max(height, 18))
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -33,6 +40,7 @@ final class MathWebCoordinator: NSObject, WKNavigationDelegate {
     private var loaded = false
     private var lastContent: String?
     private var lastScale: Double?
+    private var lastTone: RichTone = .normal
 
     init(height: Binding<CGFloat>) {
         self.height = height
@@ -62,10 +70,11 @@ final class MathWebCoordinator: NSObject, WKNavigationDelegate {
         return web
     }
 
-    func update(text: String, scale: Double) {
-        guard text != lastContent || scale != lastScale else { return }
+    func update(text: String, scale: Double, tone: RichTone) {
+        guard text != lastContent || scale != lastScale || tone != lastTone else { return }
         lastContent = text
         lastScale = scale
+        lastTone = tone
         if loaded { push() }
     }
 
@@ -73,7 +82,7 @@ final class MathWebCoordinator: NSObject, WKNavigationDelegate {
         guard let text = lastContent,
               let data = try? JSONSerialization.data(withJSONObject: [text]),
               let json = String(data: data, encoding: .utf8) else { return }
-        webView?.evaluateJavaScript("setContent(\(json)[0], \(lastScale ?? 1))")
+        webView?.evaluateJavaScript("setContent(\(json)[0], \(lastScale ?? 1), '\(lastTone.rawValue)')")
     }
 
     func receivedHeight(_ value: CGFloat) {
@@ -104,38 +113,40 @@ private final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
 struct MathWebView: UIViewRepresentable {
     let text: String
     let scale: Double
+    let tone: RichTone
     @Binding var height: CGFloat
 
     func makeCoordinator() -> MathWebCoordinator { MathWebCoordinator(height: $height) }
 
     func makeUIView(context: Context) -> WKWebView {
         let web = context.coordinator.makeWebView()
-        context.coordinator.update(text: text, scale: scale)
+        context.coordinator.update(text: text, scale: scale, tone: tone)
         return web
     }
 
     func updateUIView(_ web: WKWebView, context: Context) {
         context.coordinator.height = $height
-        context.coordinator.update(text: text, scale: scale)
+        context.coordinator.update(text: text, scale: scale, tone: tone)
     }
 }
 #else
 struct MathWebView: NSViewRepresentable {
     let text: String
     let scale: Double
+    let tone: RichTone
     @Binding var height: CGFloat
 
     func makeCoordinator() -> MathWebCoordinator { MathWebCoordinator(height: $height) }
 
     func makeNSView(context: Context) -> WKWebView {
         let web = context.coordinator.makeWebView()
-        context.coordinator.update(text: text, scale: scale)
+        context.coordinator.update(text: text, scale: scale, tone: tone)
         return web
     }
 
     func updateNSView(_ web: WKWebView, context: Context) {
         context.coordinator.height = $height
-        context.coordinator.update(text: text, scale: scale)
+        context.coordinator.update(text: text, scale: scale, tone: tone)
     }
 }
 #endif
@@ -192,6 +203,9 @@ enum MathTemplate {
     html,body{margin:0;padding:0;background:transparent}
     body{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Helvetica Neue",sans-serif;font-size:calc(1em * var(--scale));line-height:1.7;color:#1c1c1e;overflow-wrap:anywhere;-webkit-text-size-adjust:100%;-webkit-user-select:text;-webkit-touch-callout:default}
     @media (prefers-color-scheme: dark){body{color:#f2f2f7}}
+    body.red{color:#bd291f}
+    @media (prefers-color-scheme: dark){body.red{color:#f5786b}}
+    body.paper-red{color:#bd291f;line-height:1.45}
     #c{display:flow-root}
     #c>:first-child{margin-top:0}
     #c>:last-child{margin-bottom:0}
@@ -330,8 +344,9 @@ enum MathTemplate {
 
     function draw() { box.innerHTML = md(SRC); post(); }
 
-    function setContent(s, scale) {
+    function setContent(s, scale, tone) {
       SRC = s;
+      document.body.className = tone || "";
       document.documentElement.style.setProperty("--scale", scale || 1);
       draw();
     }
