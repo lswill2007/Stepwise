@@ -18,7 +18,7 @@ let products: [Product] = [
         teamIdentifier: "",
         displayVersion: "1.0",
         bundleVersion: "1",
-        appIcon: .asset("AppIcon"),
+        appIcon: .placeholder(icon: .leaf),
         accentColor: .asset("AccentColor"),
         // 第一版只支持 iPad
         supportedDeviceFamilies: [

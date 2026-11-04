@@ -4,7 +4,6 @@
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",Arial,sans-serif}
 main{max-width:760px;margin:0 auto;padding:40px 20px 64px}
 header{display:flex;align-items:center;gap:16px;margin-bottom:28px}
-header img{width:64px;height:64px;border-radius:15px}
 h1{font-size:28px;margin:0}
 h2{font-size:19px;margin:32px 0 8px}
 p,li{color:var(--muted)}
