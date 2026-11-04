@@ -177,13 +177,13 @@ struct QuestionBlock: View {
                     HStack(alignment: .top, spacing: 18) {
                         work
                         MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, nextID: nextID, wide: true,
-                                    selection: $selectedNote)
+                                    selection: $selectedNote, onSelect: showAskRegion)
                             .frame(width: 290)
                     }
                 } else {
                     work
                     MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, nextID: nextID, wide: false,
-                                selection: $selectedNote)
+                                selection: $selectedNote, onSelect: showAskRegion)
                 }
 
                 QuestionNotes(setID: setID, qID: qID, wide: wide)
@@ -197,6 +197,12 @@ struct QuestionBlock: View {
             .onDisappear {
                 saveDraft()
                 model.saveNow()
+            }
+            // 圈选提问的回答到了：在手写区上标出问的是哪里
+            .onChange(of: MarginNotes.selected(MarginNotes.items(q, wide: wide), selectedNote)?.id) { _, _ in
+                if let current = MarginNotes.selected(MarginNotes.items(q, wide: wide), selectedNote) {
+                    showAskRegion(current)
+                }
             }
             // 打字停顿 1 秒自动保存
             .onChange(of: draft) {
@@ -343,15 +349,21 @@ struct QuestionBlock: View {
         let verdict = items.last { $0.kind == .verdictWrong || $0.kind == .verdictCorrect }
         let marks = verdict?.kind == .verdictWrong ? verdict?.marks ?? [] : []
         var region = model.circledRegion
-        if region == nil, store.pending[qID]?.inMargin == true {
+        // 问过的地方：继续写字后就不再标出，免得蓝框挡着书写
+        if region == nil, model.askRegionVisible, store.pending[qID]?.inMargin == true {
             region = q.messages.last { $0.role == .user && $0.region != nil }?.region?.rect
         }
-        if region == nil, let selected = MarginNotes.selected(items, selectedNote), selected.kind == .chat {
+        if region == nil, model.askRegionVisible, let selected = MarginNotes.selected(items, selectedNote), selected.kind == .chat {
             region = selected.region?.rect
         }
         return InkAnnotations(marks: marks, region: region, span: model.inkSpan(inRow:))
             // 手写纸一直是白的，批注用浅色模式的红笔、蓝笔
             .environment(\.colorScheme, .light)
+    }
+
+    /// 选中页边的圈选提问时，重新在手写区上标出问的是哪里
+    private func showAskRegion(_ note: ChatMessage) {
+        if note.kind == .chat, note.region != nil { model.askRegionVisible = true }
     }
 
     /// 圈选提问的弹窗从圈住的地方弹出
@@ -662,6 +674,8 @@ struct MarginNotes: View {
     let wide: Bool
     /// 和手写区共用：选中圈选提问时，手写区上标出圈住的地方
     @Binding var selection: UUID?
+    /// 点了某个小标签（包括点已经选中的那个），用来重新显示圈选提问的蓝框
+    var onSelect: (ChatMessage) -> Void = { _ in }
     @State private var showCorrectDetail = false
     @State private var flash = false
 
@@ -753,6 +767,7 @@ struct MarginNotes: View {
                 let selected = m.id == current?.id
                 Button {
                     selection = m.id
+                    onSelect(m)
                 } label: {
                     Text(tabTitle(m, index: index, in: items))
                         .font(.caption.weight(selected ? .semibold : .regular))

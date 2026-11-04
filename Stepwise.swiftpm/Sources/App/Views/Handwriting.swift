@@ -134,6 +134,8 @@ final class HandwritingModel: ObservableObject {
     @Published var height: CGFloat
     /// 刚用“圈选提问”圈住的地方，等学生写下要问什么
     @Published var circledRegion: CGRect?
+    /// 手写区上要不要标出圈选提问的蓝框。一开始继续写字就藏起来，免得挡着书写；点页边的“问”再显示
+    @Published var askRegionVisible = false
 
     let tools: InkTools
     private(set) var drawing = PKDrawing()
@@ -189,6 +191,8 @@ final class HandwritingModel: ObservableObject {
             height = newDrawing.bounds.maxY + Self.growStep
         }
         tools.active = self
+        // 只在变化时赋值，平时写字不会让整道题的页面跟着刷新
+        if askRegionVisible { askRegionVisible = false }
         scheduleSave()
     }
 
@@ -202,6 +206,7 @@ final class HandwritingModel: ObservableObject {
                             width: span.upperBound - span.lowerBound, height: RuledPaper.lineSpacing)
         }
         circledRegion = region.insetBy(dx: -4, dy: -4)
+        askRegionVisible = true
         tools.finishAsk()
     }
 
@@ -474,6 +479,7 @@ final class HandwritingModel: ObservableObject {
     func clear() {}
     func saveNow() {}
     @Published var circledRegion: CGRect?
+    @Published var askRegionVisible = false
     func addSpace() {}
     func inkSpan(inRow row: Int) -> ClosedRange<CGFloat>? { nil }
     func exportJPEG(highlight: CGRect? = nil) -> Data? { nil }
