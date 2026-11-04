@@ -156,6 +156,11 @@ struct QuestionBlock: View {
     @State private var selectedNote: UUID?
     /// 圈选提问的弹窗。等圈的那一笔抬起来再弹出，否则会被同一次触摸关掉
     @State private var showStepAsk = false
+    /// 完整答案放大到题目下方（全宽显示），不放在页边
+    @AppStorage("solutionBelow") private var solutionBelow = false
+
+    /// 完整答案放在页边：页面够宽、且没有选择放大到题目下方
+    private var solutionInMargin: Bool { wide && !solutionBelow }
 
     var body: some View {
         if let q = store.question(setID, qID) {
@@ -198,11 +203,10 @@ struct QuestionBlock: View {
                 saveDraft()
                 model.saveNow()
             }
-            // 圈选提问的回答到了：在手写区上标出问的是哪里
-            .onChange(of: MarginNotes.selected(MarginNotes.items(q, wide: wide), selectedNote)?.id) { _, _ in
-                if let current = MarginNotes.selected(MarginNotes.items(q, wide: wide), selectedNote) {
-                    showAskRegion(current)
-                }
+            // 圈选提问的回答刚到：在手写区上标出问的是哪里。
+            // 只看最新一条消息，答案换位置等原因让页边改选了别的批注时不弹出蓝框
+            .onChange(of: q.messages.last?.id) { _, _ in
+                if let last = q.messages.last, last.role == .assistant { showAskRegion(last) }
             }
             // 打字停顿 1 秒自动保存
             .onChange(of: draft) {
@@ -345,7 +349,7 @@ struct QuestionBlock: View {
 
     /// 画在手写区上的标注：这一轮批改标出的错误行（红色波浪线），选中的圈选提问圈住的地方（蓝框）
     private func annotations(_ q: Question) -> some View {
-        let items = MarginNotes.items(q, wide: wide)
+        let items = MarginNotes.items(q, solutionInMargin: solutionInMargin)
         let verdict = items.last { $0.kind == .verdictWrong || $0.kind == .verdictCorrect }
         let marks = verdict?.kind == .verdictWrong ? verdict?.marks ?? [] : []
         var region = model.circledRegion
@@ -678,10 +682,12 @@ struct MarginNotes: View {
     var onSelect: (ChatMessage) -> Void = { _ in }
     @State private var showCorrectDetail = false
     @State private var flash = false
+    @AppStorage("solutionBelow") private var solutionBelow = false
+    private var solutionInMargin: Bool { wide && !solutionBelow }
 
     var body: some View {
         if let q = store.question(setID, qID) {
-            let items = Self.items(q, wide: wide)
+            let items = Self.items(q, solutionInMargin: solutionInMargin)
             let current = Self.selected(items, selection)
             let pending = store.pending[qID].flatMap { showsInMargin($0) ? $0 : nil }
             VStack(alignment: .leading, spacing: 10) {
@@ -716,7 +722,7 @@ struct MarginNotes: View {
     }
 
     /// 页边的批注：这次作答的所有提示和圈选提问、最近一次提交的批改、（页面宽时）完整答案，按时间排
-    static func items(_ q: Question, wide: Bool) -> [ChatMessage] {
+    static func items(_ q: Question, solutionInMargin: Bool) -> [ChatMessage] {
         let lastSubmission = q.messages.lastIndex { $0.kind == .submission }
         let lastSolution = q.messages.lastIndex { $0.kind == .solution }
         return q.messages.indices.compactMap { i in
@@ -725,7 +731,7 @@ struct MarginNotes: View {
             case .hint: return m
             case .verdictCorrect, .verdictWrong: return lastSubmission.map { i > $0 } == true ? m : nil
             case .chat: return m.role == .assistant && m.region != nil ? m : nil
-            case .solution: return wide && i == lastSolution ? m : nil
+            case .solution: return solutionInMargin && i == lastSolution ? m : nil
             default: return nil
             }
         }
@@ -744,7 +750,7 @@ struct MarginNotes: View {
         switch pending.kind {
         case .verdictWrong, .verdictCorrect, .hint: return true
         case .chat: return pending.inMargin
-        case .solution: return wide
+        case .solution: return solutionInMargin
         default: return false
         }
     }
@@ -901,7 +907,16 @@ struct MarginNotes: View {
         case .solution:
             // 和左边自己的作答并排对照
             VStack(alignment: .leading, spacing: 6) {
-                Text("完整答案").font(.caption.weight(.semibold)).foregroundStyle(Ink.blue)
+                HStack {
+                    Text("完整答案").font(.caption.weight(.semibold)).foregroundStyle(Ink.blue)
+                    Spacer()
+                    // 页边太窄，长的推导看不清时可以放大到题目下方
+                    Button("放大到题目下方 ↓") {
+                        withAnimation(.easeInOut(duration: 0.25)) { solutionBelow = true }
+                    }
+                    .buttonStyle(InkTextButtonStyle(color: Ink.blue))
+                    .font(.caption)
+                }
                 RichText(message.text, scale: 0.92)
             }
             .marginRule(Ink.blue)
@@ -1017,13 +1032,15 @@ struct QuestionNotes: View {
     @EnvironmentObject var store: AppStore
     let setID: UUID
     let qID: UUID
-    /// 页面宽时完整答案放在页边，和自己的作答并排对照
+    /// 页面宽时完整答案放在页边，和自己的作答并排对照；选择放大后放在这里
     let wide: Bool
     @State private var showSolution = false
+    @AppStorage("solutionBelow") private var solutionBelow = false
+    private var solutionInMargin: Bool { wide && !solutionBelow }
 
     var body: some View {
         if let q = store.question(setID, qID) {
-            let solution = wide ? nil : q.messages.last { $0.kind == .solution }
+            let solution = solutionInMargin ? nil : q.messages.last { $0.kind == .solution }
             let pending = store.pending[qID]
             VStack(alignment: .leading, spacing: 12) {
                 if let solution {
@@ -1031,16 +1048,29 @@ struct QuestionNotes: View {
                         RichText(solution.text)
                             .padding(.top, 8)
                     } label: {
-                        Text("完整答案")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Ink.blue)
+                        HStack {
+                            Text("完整答案")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Ink.blue)
+                            Spacer()
+                            if wide {
+                                Button("放回页边 →") {
+                                    withAnimation(.easeInOut(duration: 0.25)) { solutionBelow = false }
+                                }
+                                .buttonStyle(InkTextButtonStyle(color: Ink.blue))
+                                .font(.caption)
+                            }
+                        }
                     }
                     .tint(Ink.blue)
                     .marginRule(Ink.blue)
-                    // 刚看的答案直接展开
+                    // 刚看的答案、刚放大过来的答案直接展开
                     .onChange(of: solution.id) { showSolution = true }
+                    // 从页边放大过来（包括切到全屏时）直接展开
+                    .onAppear { if wide && solutionBelow { showSolution = true } }
+                    .onChange(of: wide) { if wide && solutionBelow { showSolution = true } }
                 }
-                if let pending, pending.kind == .solution, !wide {
+                if let pending, pending.kind == .solution, !solutionInMargin {
                     PendingNote(pending: pending)
                         .onDisappear { showSolution = true }
                 }
