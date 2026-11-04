@@ -419,7 +419,7 @@ struct QuestionBlock: View {
                     model.saveNow()
                     store.check(setID, qID, answer: draft, handwriting: model.exportJPEG())
                 } label: {
-                    Text("批改").padding(.horizontal, 10)
+                    Text("批改").lineLimit(1).fixedSize().padding(.horizontal, 10)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(busy || empty)
@@ -429,6 +429,7 @@ struct QuestionBlock: View {
                     store.requestHint(setID, qID)
                 }
                 .lineLimit(1)
+                .fixedSize()
                 .disabled(busy)
 
                 // 先写几句卡在哪里，再要提示

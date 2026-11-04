@@ -12,20 +12,23 @@ struct RichText: View {
     let text: String
     var scale: Double = 1
     var tone: RichTone = .normal
+    /// 选中文字时回调（选中的文字；取消选中时为空）。笔记里用来选中提问
+    var onSelect: ((String) -> Void)?
 
     @State private var height: CGFloat
 
-    init(_ text: String, scale: Double = 1, tone: RichTone = .normal) {
+    init(_ text: String, scale: Double = 1, tone: RichTone = .normal, onSelect: ((String) -> Void)? = nil) {
         self.text = text
         self.scale = scale
         self.tone = tone
+        self.onSelect = onSelect
         // 渲染完成前的估计高度，减少跳动
         let lines = text.components(separatedBy: "\n").reduce(0) { $0 + max(1, $1.count / 45 + 1) }
         _height = State(initialValue: CGFloat(min(lines, 40)) * 26 * CGFloat(scale))
     }
 
     var body: some View {
-        MathWebView(text: text, scale: scale, tone: tone, height: $height)
+        MathWebView(text: text, scale: scale, tone: tone, onSelect: onSelect, height: $height)
             .frame(height: max(height, 18))
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -36,6 +39,7 @@ struct RichText: View {
 @MainActor
 final class MathWebCoordinator: NSObject, WKNavigationDelegate {
     var height: Binding<CGFloat>
+    var onSelect: ((String) -> Void)?
     weak var webView: WKWebView?
     private var loaded = false
     private var lastContent: String?
@@ -49,6 +53,7 @@ final class MathWebCoordinator: NSObject, WKNavigationDelegate {
     func makeWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
         config.userContentController.add(WeakScriptHandler(self), name: "height")
+        config.userContentController.add(WeakScriptHandler(self), name: "selection")
         let web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = self
         #if os(iOS)
@@ -89,6 +94,10 @@ final class MathWebCoordinator: NSObject, WKNavigationDelegate {
         if abs(height.wrappedValue - value) > 0.5 { height.wrappedValue = value }
     }
 
+    func receivedSelection(_ text: String) {
+        onSelect?(text)
+    }
+
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         MainActor.assumeIsolated {
             loaded = true
@@ -103,6 +112,10 @@ private final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
     init(_ target: MathWebCoordinator) { self.target = target }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "selection", let text = message.body as? String {
+            MainActor.assumeIsolated { target?.receivedSelection(text) }
+            return
+        }
         guard let number = message.body as? NSNumber else { return }
         let value = CGFloat(number.doubleValue)
         MainActor.assumeIsolated { target?.receivedHeight(value) }
@@ -114,11 +127,13 @@ struct MathWebView: UIViewRepresentable {
     let text: String
     let scale: Double
     let tone: RichTone
+    let onSelect: ((String) -> Void)?
     @Binding var height: CGFloat
 
     func makeCoordinator() -> MathWebCoordinator { MathWebCoordinator(height: $height) }
 
     func makeUIView(context: Context) -> WKWebView {
+        context.coordinator.onSelect = onSelect
         let web = context.coordinator.makeWebView()
         context.coordinator.update(text: text, scale: scale, tone: tone)
         return web
@@ -126,6 +141,7 @@ struct MathWebView: UIViewRepresentable {
 
     func updateUIView(_ web: WKWebView, context: Context) {
         context.coordinator.height = $height
+        context.coordinator.onSelect = onSelect
         context.coordinator.update(text: text, scale: scale, tone: tone)
     }
 }
@@ -134,11 +150,13 @@ struct MathWebView: NSViewRepresentable {
     let text: String
     let scale: Double
     let tone: RichTone
+    let onSelect: ((String) -> Void)?
     @Binding var height: CGFloat
 
     func makeCoordinator() -> MathWebCoordinator { MathWebCoordinator(height: $height) }
 
     func makeNSView(context: Context) -> WKWebView {
+        context.coordinator.onSelect = onSelect
         let web = context.coordinator.makeWebView()
         context.coordinator.update(text: text, scale: scale, tone: tone)
         return web
@@ -146,6 +164,7 @@ struct MathWebView: NSViewRepresentable {
 
     func updateNSView(_ web: WKWebView, context: Context) {
         context.coordinator.height = $height
+        context.coordinator.onSelect = onSelect
         context.coordinator.update(text: text, scale: scale, tone: tone)
     }
 }
@@ -244,6 +263,16 @@ enum MathTemplate {
       try { window.webkit.messageHandlers.height.postMessage(h); } catch (e) {}
     }
     new ResizeObserver(post).observe(box);
+
+    // 选中文字：停顿一下再告诉 App（笔记里选中提问）
+    var selTimer = null;
+    document.addEventListener("selectionchange", function () {
+      clearTimeout(selTimer);
+      selTimer = setTimeout(function () {
+        var s = String(window.getSelection() || "").trim();
+        try { window.webkit.messageHandlers.selection.postMessage(s); } catch (e) {}
+      }, 300);
+    });
 
     function loadScript(url, ok, fail) {
       var s = document.createElement("script"), done = false;

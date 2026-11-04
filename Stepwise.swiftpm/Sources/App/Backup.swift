@@ -17,9 +17,13 @@ struct LibraryBackup: Codable {
     var drawings: [String: Data]
     /// 题集所在的文件夹（连同上级文件夹），导入后保持同样的分类；旧版本的备份没有
     var folders: [Folder]?
+    /// 笔记；笔记里的练习题在 sets 里（noteID 指向笔记）。旧版本的备份没有
+    var notes: [NoteDoc]?
 
-    init(sets: [QuestionSet], folders allFolders: [Folder] = []) {
+    /// notes：要一起导出的笔记，它们的练习题集由调用方放进 sets
+    init(sets: [QuestionSet], folders allFolders: [Folder] = [], notes: [NoteDoc] = []) {
         self.sets = sets
+        self.notes = notes.isEmpty ? nil : notes
         var needed: [Folder] = []
         for set in sets {
             var current = allFolders.first { $0.id == set.folderID }
@@ -52,7 +56,12 @@ struct LibraryBackup: Codable {
     func write() throws -> URL {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HHmm"
-        let name = sets.count == 1 ? sets[0].title : "\(sets.count) 个题集"
+        let questionSets = sets.filter { $0.noteID == nil }
+        let noteCount = notes?.count ?? 0
+        let name = questionSets.count == 1 && noteCount == 0 ? questionSets[0].title
+            : noteCount == 1 && questionSets.isEmpty ? notes![0].title
+            : [questionSets.isEmpty ? nil : "\(questionSets.count) 个题集", noteCount == 0 ? nil : "\(noteCount) 篇笔记"]
+                .compactMap { $0 }.joined(separator: " ")
         let safeName = name.components(separatedBy: CharacterSet(charactersIn: "/\\:?*\"<>|")).joined(separator: "-")
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Stepwise 备份 \(safeName) \(formatter.string(from: exportedAt)).json")
@@ -81,10 +90,11 @@ struct BackupError: LocalizedError {
 struct BackupFile: Transferable {
     let sets: [QuestionSet]
     var folders: [Folder] = []
+    var notes: [NoteDoc] = []
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(exportedContentType: .json) { file in
-            SentTransferredFile(try LibraryBackup(sets: file.sets, folders: file.folders).write())
+            SentTransferredFile(try LibraryBackup(sets: file.sets, folders: file.folders, notes: file.notes).write())
         }
     }
 }
@@ -95,6 +105,7 @@ extension AppStore {
         var questions = 0
         /// 本机已有、作为副本导入的题集数
         var copies = 0
+        var notes = 0
     }
 
     /// 导入备份：只新增，不覆盖本机已有的内容。
@@ -105,6 +116,9 @@ extension AppStore {
         let existingQuestionIDs = Set(sets.flatMap { $0.questions.map(\.id) })
         var result = ImportResult()
         var imported: [QuestionSet] = []
+        // 副本导入时换了 id：笔记要跟着找到自己的练习题集和练习题
+        var setIDMap: [UUID: UUID] = [:]
+        var questionIDMap: [UUID: UUID] = [:]
         // 先补上本机没有的文件夹；文件夹 id 一样就是同一个文件夹
         for f in backup.folders ?? [] where !folders.contains(where: { $0.id == f.id }) {
             folders.append(f)
@@ -122,10 +136,13 @@ extension AppStore {
             var idMap: [UUID: UUID] = [:]
             if clash {
                 for id in originalIDs { idMap[id] = UUID() }
-                set.id = UUID()
+                let newID = UUID()
+                setIDMap[set.id] = newID
+                set.id = newID
                 set.title += "（导入）"
-                result.copies += 1
+                if set.noteID == nil { result.copies += 1 }
             }
+            questionIDMap.merge(idMap) { $1 }
             if clash || !imageMap.isEmpty {
                 for i in set.questions.indices {
                     Self.remap(&set.questions[i], ids: idMap, images: imageMap)
@@ -144,13 +161,35 @@ extension AppStore {
                     DrawingStore.save(data, for: q.id)
                 }
             }
-            result.sets += 1
-            result.questions += set.questions.count
+            if set.noteID == nil {
+                result.sets += 1
+                result.questions += set.questions.count
+            }
             imported.append(set)
         }
 
+        // 笔记：本机已有同一篇时作为副本导入；练习题集和练习题跟着换过的 id
+        var importedNotes: [NoteDoc] = []
+        for var doc in backup.notes ?? [] {
+            let oldNoteID = doc.id
+            if notes.contains(where: { $0.id == doc.id }) {
+                doc.id = UUID()
+                doc.title += "（导入）"
+            }
+            doc.exerciseSetID = setIDMap[doc.exerciseSetID] ?? doc.exerciseSetID
+            for i in doc.blocks.indices {
+                if let q = doc.blocks[i].questionID { doc.blocks[i].questionID = questionIDMap[q] ?? q }
+            }
+            for i in imported.indices where imported[i].id == doc.exerciseSetID || imported[i].noteID == oldNoteID {
+                imported[i].noteID = doc.id
+            }
+            importedNotes.append(doc)
+        }
+        notes.insert(contentsOf: importedNotes, at: 0)
+        result.notes = importedNotes.count
+
         sets.insert(contentsOf: imported, at: 0)
-        if select, let first = imported.first {
+        if select, let first = imported.first(where: { $0.noteID == nil }) {
             selectedSetID = first.id
             selectedQuestionID = first.questions.first(where: { !$0.status.isDone })?.id ?? first.questions.first?.id
         }

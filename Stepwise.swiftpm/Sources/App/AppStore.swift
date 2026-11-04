@@ -36,6 +36,17 @@ final class AppStore: ObservableObject {
     /// 错题复习结果提示
     @Published var reviewOutcomes: [UUID: ReviewOutcome] = [:]
 
+    // MARK: 笔记
+    /// 笔记模式的文档，单独存在 notes.json
+    @Published var notes: [NoteDoc] = [] { didSet { scheduleNotesSave() } }
+    @Published var selectedNoteID: UUID?
+    /// 正在生成或回答的笔记（每篇笔记同时只有一个）
+    @Published var noteJobs: [UUID: NoteJob] = [:]
+    /// 左侧笔记目录点了哪一块，笔记就滚到哪一块
+    @Published var noteJump: UUID?
+    var noteTasks: [UUID: Task<Void, Never>] = [:]
+    private var notesSaveTask: Task<Void, Never>?
+
     /// 左侧“错题本”这一项的固定 id
     static let mistakeBookID = UUID(uuidString: "00000000-0000-0000-0000-00000000E001")!
     /// 错题本里几轮内做对就移出
@@ -140,6 +151,8 @@ final class AppStore: ObservableObject {
         .appendingPathComponent("library.json")
     private static let foldersURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("folders.json")
+    nonisolated private static let notesURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("notes.json")
 
     init() {
         if let data = try? Data(contentsOf: Self.libraryURL) {
@@ -152,6 +165,10 @@ final class AppStore: ObservableObject {
                 try? data.write(to: backup)
             }
         }
+        if let data = try? Data(contentsOf: Self.notesURL),
+           let decoded = try? JSONDecoder().decode([NoteDoc].self, from: data) {
+            notes = decoded
+        }
         if let data = try? Data(contentsOf: Self.foldersURL),
            let decoded = try? JSONDecoder().decode([Folder].self, from: data) {
             folders = decoded
@@ -160,7 +177,7 @@ final class AppStore: ObservableObject {
         loadProviders()
         activeProviderID = UserDefaults.standard.string(forKey: "activeProvider") ?? "anthropic"
         // 打开 App 时直接回到最近的题集，停在第一道还没完成的题
-        if let recent = sets.first {
+        if let recent = questionSets.first {
             selectedSetID = recent.id
             selectedQuestionID = recent.questions.first(where: { !$0.status.isDone })?.id ?? recent.questions.first?.id
         }
@@ -186,6 +203,21 @@ final class AppStore: ObservableObject {
         saveTask?.cancel()
         if let data = try? JSONEncoder().encode(sets) {
             try? data.write(to: Self.libraryURL, options: .atomic)
+        }
+        notesSaveTask?.cancel()
+        if let data = try? JSONEncoder().encode(notes) {
+            try? data.write(to: Self.notesURL, options: .atomic)
+        }
+    }
+
+    /// 笔记在流式生成时变化很频繁，停一会儿再写盘
+    private func scheduleNotesSave() {
+        notesSaveTask?.cancel()
+        let snapshot = notes
+        notesSaveTask = Task.detached(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled, let data = try? JSONEncoder().encode(snapshot) else { return }
+            try? data.write(to: Self.notesURL, options: .atomic)
         }
     }
 
@@ -825,7 +857,7 @@ extension AppStore {
 
     func sets(in folderID: UUID?) -> [QuestionSet] {
         // 指向已经不存在的文件夹的题集放到最外层，不会丢
-        sets.filter { set in
+        questionSets.filter { set in
             let actual = folder(set.folderID) == nil ? nil : set.folderID
             return actual == folderID
         }

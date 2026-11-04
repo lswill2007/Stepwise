@@ -125,6 +125,39 @@ struct QuestionSet: Codable, Identifiable, Equatable {
     var questions: [Question]
     /// 所在的文件夹；nil 表示放在最外层（旧版本的数据没有这个字段）
     var folderID: UUID?
+    /// 笔记里的练习题也存成一个题集（借用做题、批改的全部功能），记着属于哪篇笔记；这种题集不显示在左侧题集列表里
+    var noteID: UUID?
 
     var doneCount: Int { questions.filter { $0.status.isDone }.count }
+}
+
+/// 笔记模式：导入 PDF 后按要求生成的可编辑文档
+struct NoteDoc: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var title: String
+    var createdAt = Date()
+    /// 来源文件名和生成要求，显示在标题下面
+    var sourceName = ""
+    var prompt = ""
+    /// 笔记里的练习题所在的题集（不显示在题集列表里）
+    var exerciseSetID: UUID
+    var blocks: [NoteBlock] = []
+}
+
+/// 笔记里的一块
+struct NoteBlock: Codable, Identifiable, Equatable {
+    enum Kind: String, Codable {
+        case text       // 笔记正文（Markdown + LaTeX），AI 生成或自己写的
+        case exercise   // 练习题：题目、手写区、批改都用做题页的
+        case answer     // 选中文字提问后 AI 的回答
+    }
+
+    var id = UUID()
+    var kind: Kind
+    var text = ""
+    /// 练习题在题集里的 id
+    var questionID: UUID?
+    /// 提问时选中的文字和问题
+    var quote: String?
+    var question: String?
 }

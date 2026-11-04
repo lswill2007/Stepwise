@@ -83,7 +83,8 @@ struct SettingsView: View {
                 do {
                     let backup = try LibraryBackup.read(from: result.get())
                     let r = store.importBackup(backup, select: false)
-                    var message = "已导入 \(r.sets) 个题集，共 \(r.questions) 道题，放在左侧题集列表的最上面。"
+                    var message = "已导入 \(r.sets) 个题集，共 \(r.questions) 道题"
+                    message += r.notes > 0 ? "，以及 \(r.notes) 篇笔记，都放在左侧列表的最上面。" : "，放在左侧题集列表的最上面。"
                     if r.copies > 0 { message += "其中 \(r.copies) 个题集本机已经有了，作为副本导入（名称后面带“导入”）。" }
                     importMessage = message
                 } catch {
@@ -191,7 +192,7 @@ struct SettingsView: View {
         } header: {
             Text("备份与迁移")
         } footer: {
-            Text("导出的文件包含题目、参考答案、作答和对话记录、图片和手写笔迹，可以存到“文件”或隔空投送到另一台 iPad，再在那里导入。不包含 API Key 和设置。导入只会新增题集，不会覆盖本机已有的内容。")
+            Text("导出的文件包含题目、参考答案、作答和对话记录、笔记、图片和手写笔迹，可以存到“文件”或隔空投送到另一台 iPad，再在那里导入。不包含 API Key 和设置。导入只会新增题集，不会覆盖本机已有的内容。")
         }
     }
 
@@ -238,17 +239,21 @@ struct SettingsView: View {
 struct ExportView: View {
     @EnvironmentObject var store: AppStore
     @State private var selected: Set<UUID> = []
+    @State private var selectedNotes: Set<UUID> = []
     @State private var initialized = false
 
     var body: some View {
-        let chosen = store.sets.filter { selected.contains($0.id) }
-        let allSelected = !store.sets.isEmpty && chosen.count == store.sets.count
+        let chosen = store.questionSets.filter { selected.contains($0.id) }
+        let chosenNotes = store.notes.filter { selectedNotes.contains($0.id) }
+        // 笔记里的练习题集跟着笔记一起导出
+        let noteSets = chosenNotes.compactMap { store.set($0.exerciseSetID) }
+        let allSelected = !store.questionSets.isEmpty && chosen.count == store.questionSets.count
         List {
             Section {
-                if store.sets.isEmpty {
+                if store.questionSets.isEmpty {
                     Text("还没有题集").foregroundStyle(.secondary)
                 }
-                ForEach(store.sets) { set in
+                ForEach(store.questionSets) { set in
                     Button {
                         if selected.contains(set.id) { selected.remove(set.id) } else { selected.insert(set.id) }
                     } label: {
@@ -268,9 +273,9 @@ struct ExportView: View {
                 HStack {
                     Text("选择要导出的题集")
                     Spacer()
-                    if !store.sets.isEmpty {
+                    if !store.questionSets.isEmpty {
                         Button(allSelected ? "全不选" : "全选") {
-                            selected = allSelected ? [] : Set(store.sets.map(\.id))
+                            selected = allSelected ? [] : Set(store.questionSets.map(\.id))
                         }
                         .font(.callout)
                         .textCase(nil)
@@ -278,13 +283,36 @@ struct ExportView: View {
                 }
             }
 
+            if !store.notes.isEmpty {
+                Section("选择要导出的笔记") {
+                    ForEach(store.notes) { doc in
+                        Button {
+                            if selectedNotes.contains(doc.id) { selectedNotes.remove(doc.id) } else { selectedNotes.insert(doc.id) }
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: selectedNotes.contains(doc.id) ? "checkmark.circle.fill" : "circle")
+                                    .font(.title3)
+                                    .foregroundStyle(selectedNotes.contains(doc.id) ? Color.accentColor : Color.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(doc.title).foregroundStyle(.primary)
+                                    Text("\(doc.blocks.count) 块 · \(doc.blocks.filter { $0.kind == .exercise }.count) 道练习")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             Section {
-                ShareLink(item: BackupFile(sets: chosen, folders: store.folders),
-                          preview: SharePreview("Stepwise 备份（\(chosen.count) 个题集）")) {
-                    Label(chosen.isEmpty ? "请先选择题集" : "导出 \(chosen.count) 个题集，共 \(chosen.reduce(0) { $0 + $1.questions.count }) 道题",
+                let parts = [chosen.isEmpty ? nil : "\(chosen.count) 个题集",
+                             chosenNotes.isEmpty ? nil : "\(chosenNotes.count) 篇笔记"].compactMap { $0 }
+                ShareLink(item: BackupFile(sets: chosen + noteSets, folders: store.folders, notes: chosenNotes),
+                          preview: SharePreview("Stepwise 备份（\(parts.joined(separator: "、"))）")) {
+                    Label(parts.isEmpty ? "请先选择题集或笔记" : "导出 " + parts.joined(separator: "、"),
                           systemImage: "square.and.arrow.up")
                 }
-                .disabled(chosen.isEmpty)
+                .disabled(parts.isEmpty)
             } footer: {
                 Text("可以存到“文件”、隔空投送到另一台 iPad，或用其他 App 发送。在另一台设备上打开设置 → 导入题目和做题记录。")
             }
@@ -293,7 +321,8 @@ struct ExportView: View {
         .onAppear {
             // 默认全选
             if !initialized {
-                selected = Set(store.sets.map(\.id))
+                selected = Set(store.questionSets.map(\.id))
+                selectedNotes = Set(store.notes.map(\.id))
                 initialized = true
             }
         }
