@@ -28,6 +28,7 @@ struct SettingsView: View {
 
                 gradingSection
                 followUpSection
+                noteSection
                 answerSection
 
                 Section("模型服务商") {
@@ -148,7 +149,7 @@ struct SettingsView: View {
     /// 单独给某项用途选模型：先选服务商，再选模型；不选则跟随当前模型
     @ViewBuilder
     private func modelOverride(_ title: String, providerID: Binding<String?>, model: Binding<String>,
-                               resolved: ProviderConfig?) -> some View {
+                               resolved: ProviderConfig?, recommend: ModelBrowser.Recommend = .fastVision) -> some View {
         Picker(title, selection: Binding(
             get: { providerID.wrappedValue ?? "" },
             set: { id in
@@ -164,7 +165,8 @@ struct SettingsView: View {
 
         if let id = providerID.wrappedValue, let p = store.providers.first(where: { $0.id == id }) {
             NavigationLink {
-                ModelBrowser(title: title, models: p.allModels, selection: model, favorites: favoritesBinding(for: p.id))
+                ModelBrowser(title: title, models: p.allModels, selection: model, favorites: favoritesBinding(for: p.id),
+                             recommend: recommend)
             } label: {
                 LabeledContent("模型", value: model.wrappedValue.isEmpty ? "未选择" : model.wrappedValue)
             }
@@ -231,6 +233,19 @@ struct SettingsView: View {
             Text("做完一道题之后")
         } footer: {
             Text("做对或看完答案后，题目下方会显示这些快捷操作，可以增删、改文字、调整顺序。出新题建议选推理能力强的模型（名字里常带 pro、opus、reasoner、thinking）。新题会记住原题的作答记录，批改时会特别留意你在原题上犯过的错。")
+        }
+    }
+
+    // MARK: - 笔记
+
+    private var noteSection: some View {
+        Section {
+            modelOverride("整理笔记模型", providerID: $store.noteProviderID, model: $store.noteModel,
+                          resolved: store.noteProvider, recommend: .longContext)
+        } header: {
+            Text("笔记")
+        } footer: {
+            Text("导入资料生成笔记时用的模型。资料长、公式多时，建议选上下文长、归纳能力强、能看图的模型，例如 Gemini 2.5 Pro / 3 Pro、Claude Sonnet 4.5、GPT-5、GPT-4.1、通义 Qwen-VL-Max；只有文字的资料也可以用 Kimi K2、DeepSeek。选模型时，推荐的模型排在最上面。笔记里的提问用当前模型，出练习题用出新题模型。")
         }
     }
 }

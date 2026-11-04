@@ -115,8 +115,9 @@ struct NoteImportView: View {
                     }
                     .disabled(currentMaterial == nil)
                 } footer: {
-                    if let p = store.activeProvider {
-                        Text("将使用 \(p.name) · \(p.model.isEmpty ? "未选择模型" : p.model)。生成时会打开笔记，写完一块显示一块。")
+                    if let p = store.noteProvider ?? store.activeProvider {
+                        Text("将使用 \(p.name) · \(p.model.isEmpty ? "未选择模型" : p.model)。生成时会打开笔记，写完一块显示一块。"
+                             + (store.noteProvider == nil ? "资料长时，可以在设置 → 笔记里单独选一个整理长资料能力强的模型。" : ""))
                     }
                 }
             }

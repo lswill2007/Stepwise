@@ -218,6 +218,30 @@ enum ModelInfo {
         return score
     }
 
+    /// 整理长资料（生成笔记）的推荐顺序：上下文长、理解和归纳能力强；能看图的靠前（公式多的 PDF 按图片发送）
+    private static let recommendedLongContext = [
+        "gemini-3-pro", "gemini-2.5-pro", "claude-sonnet-4-5", "claude-opus-4", "claude-sonnet-4", "gpt-5",
+        "gpt-4.1", "qwen3-vl-plus", "qwen-vl-max", "doubao-seed-1.6", "glm-4.5v", "kimi-k2", "kimi-latest",
+        "qwen3-max", "qwen-long", "deepseek-v3", "deepseek-chat"
+    ]
+
+    /// 适合整理长资料生成笔记；分数越高越推荐，nil 表示不在推荐里
+    static func longContextScore(_ model: String) -> Int? {
+        guard !isNonChat(model) else { return nil }
+        let name = baseName(model).replacingOccurrences(of: ".", with: "-")
+        // 名字里写明上下文很长的（moonshot-v1-128k 等）也推荐，排在上面这些后面
+        let longMarkers = ["-128k", "-200k", "-256k", "-1m", "long"]
+        let index = recommendedLongContext.firstIndex(where: { name.contains($0.replacingOccurrences(of: ".", with: "-")) })
+            ?? (longMarkers.contains(where: name.contains) ? recommendedLongContext.count : nil)
+        guard let index else { return nil }
+        // 轻量版本（gpt-5-mini、flash 等）整理长资料不够稳。注意 gemini 里本身就有 “mini”，要匹配 “-mini”
+        if ["-mini", "nano", "lite", "flash", "-fast"].contains(where: name.contains) { return nil }
+        var score = 1000 - index * 10
+        if likelyVision(model) { score += 3 }
+        if name.contains("preview") || name.range(of: #"\d{6,}"#, options: .regularExpression) != nil { score -= 3 }
+        return score
+    }
+
     /// 可能支持看图（手写作答、图片题需要）
     static func likelyVision(_ model: String) -> Bool {
         let name = baseName(model)

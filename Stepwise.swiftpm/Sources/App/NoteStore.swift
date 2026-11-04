@@ -160,7 +160,7 @@ extension AppStore {
 
     /// 导入资料后开始生成笔记：先建好空笔记并打开，AI 写完一块就加一块
     func startNoteGeneration(material: ImportedMaterial, prompt: String, exercises: Bool, title: String) throws {
-        let client = try makeClient(for: .split)
+        let client = try makeClient(for: .note)
         let chunks = Importer.chunks(for: material)
         guard !chunks.isEmpty else { throw LLMError(message: "没有可以整理的内容。") }
         let givenTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)

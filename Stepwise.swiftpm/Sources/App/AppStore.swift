@@ -20,6 +20,8 @@ enum ReviewOutcome: Equatable {
 /// AI 请求的用途，决定用哪个模型、是否用快速模式
 enum RequestPurpose {
     case check, hint, solution, chat, newQuestion, presolve, split
+    /// 导入资料生成笔记：可以单独选一个整理长资料能力强的模型
+    case note
 
     /// 批改和提示：可以用单独的批改模型和快速模式
     var isGrading: Bool { self == .check || self == .hint }
@@ -119,6 +121,14 @@ final class AppStore: ObservableObject {
         didSet { UserDefaults.standard.set(questionModel, forKey: "questionModel") }
     }
 
+    /// 单独的整理笔记模型（导入资料生成笔记时用，一般选上下文长、能力强的）；为 nil 时跟随当前模型
+    @Published var noteProviderID: String? = UserDefaults.standard.string(forKey: "noteProvider") {
+        didSet { UserDefaults.standard.set(noteProviderID, forKey: "noteProvider") }
+    }
+    @Published var noteModel: String = UserDefaults.standard.string(forKey: "noteModel") ?? "" {
+        didSet { UserDefaults.standard.set(noteModel, forKey: "noteModel") }
+    }
+
     /// 导入后在后台预先求解没有参考答案的题
     @Published var presolveAnswers: Bool = UserDefaults.standard.object(forKey: "presolveAnswers") as? Bool ?? true {
         didSet { UserDefaults.standard.set(presolveAnswers, forKey: "presolveAnswers") }
@@ -130,6 +140,8 @@ final class AppStore: ObservableObject {
     var gradingProvider: ProviderConfig? { overrideProvider(id: gradingProviderID, model: gradingModel) }
     /// 实际用于出新题的服务商
     var questionProvider: ProviderConfig? { overrideProvider(id: questionProviderID, model: questionModel) }
+    /// 实际用于生成笔记的服务商
+    var noteProvider: ProviderConfig? { overrideProvider(id: noteProviderID, model: noteModel) }
 
     private func overrideProvider(id: String?, model: String) -> ProviderConfig? {
         guard let id, var config = providers.first(where: { $0.id == id }), config.hasKey else { return nil }
@@ -297,6 +309,9 @@ final class AppStore: ObservableObject {
         }
         if purpose == .newQuestion || purpose == .presolve, let question = questionProvider {
             return LLMClient(config: question, apiKey: question.apiKey)
+        }
+        if purpose == .note, let note = noteProvider {
+            return LLMClient(config: note, apiKey: note.apiKey)
         }
         guard let config = activeProvider else { throw LLMError(message: "请先在设置里选择一个模型服务商。") }
         return LLMClient(config: config, apiKey: config.apiKey)
@@ -697,7 +712,7 @@ final class AppStore: ObservableObject {
         case .check:
             let blocks = [summary, summary == nil ? nil : Tutor.regradeNote, current.prompt ?? current.text]
             result.append(LLMMessage(role: .user, parts: images(current) + [.text(blocks.compactMap { $0 }.joined(separator: "\n\n"))]))
-        case .hint, .solution, .presolve, .split:
+        case .hint, .solution, .presolve, .split, .note:
             var blocks = [summary]
             var parts: [LLMContent] = []
             if purpose == .hint, let last = earlier.last(where: { $0.kind == .submission }) {
