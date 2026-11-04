@@ -176,7 +176,6 @@ struct QuestionBlock: View {
                 let work = VStack(alignment: .leading, spacing: 12) {
                     writingArea(q)
                     actionRow(q)
-                    if q.status.isDone { followUpRow }
                 }
                 if wide {
                     HStack(alignment: .top, spacing: 18) {
@@ -266,6 +265,18 @@ struct QuestionBlock: View {
             .buttonStyle(.plain)
             .accessibilityLabel(q.isStarred ? "移出错题本" : "加入错题本")
             Menu {
+                // 做完之后的快捷操作（出新题、总结技巧……）收在这里，页面上只留批改、提示、看答案
+                if q.status.isDone {
+                    Section("做完之后") {
+                        ForEach(store.followUps.filter { !$0.title.isEmpty && !$0.prompt.isEmpty }) { action in
+                            Button(action.title) {
+                                store.sendChat(setID, qID, text: action.prompt, makesQuestion: action.makesQuestion)
+                            }
+                        }
+                        Button("提问…") { showAsk = true }
+                    }
+                    .disabled(store.isBusy(qID))
+                }
                 Button("编辑题目", systemImage: "square.and.pencil") { editing = true }
                 Button("完整记录", systemImage: "clock.arrow.circlepath") { showHistory = true }
                     .disabled(q.messages.isEmpty && (q.previousAttempts ?? []).isEmpty)
@@ -275,6 +286,7 @@ struct QuestionBlock: View {
                     .frame(width: 32, height: 32)
             }
             .accessibilityLabel("这道题的更多操作")
+            .popover(isPresented: $showAsk) { askPopover }
         }
     }
 
@@ -436,21 +448,6 @@ struct QuestionBlock: View {
             }
         }
         .buttonStyle(InkTextButtonStyle())
-    }
-
-    /// 做完之后：自定义的快捷操作，以及自由提问。回答写成这道题下面的笔记
-    private var followUpRow: some View {
-        FlowLayout(spacing: 18) {
-            ForEach(store.followUps.filter { !$0.title.isEmpty && !$0.prompt.isEmpty }) { action in
-                Button(action.title) {
-                    store.sendChat(setID, qID, text: action.prompt, makesQuestion: action.makesQuestion)
-                }
-            }
-            Button("提问…") { showAsk = true }
-                .popover(isPresented: $showAsk) { askPopover }
-        }
-        .buttonStyle(InkTextButtonStyle())
-        .disabled(store.isBusy(qID))
     }
 
     private func hintNotePopover(_ q: Question) -> some View {
