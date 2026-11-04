@@ -566,7 +566,7 @@ struct InkAnnotations: View {
                 let middle = rowTop + spacing / 2 + 4
                 let number = context.resolve(Text(MarginNotes.circled(i + 1)).font(.system(size: 17, weight: .bold)).foregroundColor(Ink.red))
                 context.draw(number, at: CGPoint(x: max(12, x0 - 16), y: middle))
-                let note = context.resolve(Text(mark.note).font(.system(size: 14, weight: .medium)).foregroundColor(Ink.red))
+                let note = context.resolve(Text(Tutor.plainPreview(mark.note)).font(.system(size: 14, weight: .medium)).foregroundColor(Ink.red))
                 let noteSize = note.measure(in: CGSize(width: 600, height: spacing))
                 if x1 + 12 + noteSize.width < size.width - 6 {
                     let background = CGRect(x: x1 + 8, y: middle - noteSize.height / 2 - 2,
@@ -810,7 +810,8 @@ struct MarginNotes: View {
                 if !marks.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(marks.enumerated()), id: \.offset) { i, mark in
-                            Text("\(Self.circled(i + 1)) 第 \(mark.line) 行：\(mark.note)")
+                            // 序号和手写区上的对应，不用再写第几行
+                            Text("\(Self.circled(i + 1)) \(Tutor.plainPreview(mark.note))")
                                 .font(.callout)
                                 .foregroundStyle(Ink.red)
                         }
