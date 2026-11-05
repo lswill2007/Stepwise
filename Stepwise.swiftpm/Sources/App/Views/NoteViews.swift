@@ -1,6 +1,9 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+#if os(iOS)
+import WebKit
+#endif
 
 // MARK: - 导入资料生成笔记
 
@@ -349,7 +352,8 @@ struct NoteDocView: View {
                     }
                     .padding(.horizontal, 40)
                     .padding(.top, 20)
-                    .frame(maxWidth: 900)
+                    // 页面宽时右边留出页边，圈出来问的批注写在那里
+                    .frame(maxWidth: commentMargin == nil ? 900 : 1140)
                     .frame(maxWidth: .infinity)
                 }
                 .onChange(of: store.noteJump) {
@@ -399,6 +403,16 @@ struct NoteDocView: View {
     /// 练习题手写区和页边批注够不够并排
     private var wide: Bool { min(width, 900) - 80 - 32 >= 760 }
 
+    /// 笔记文字按固定的纸宽排版，再整体缩放到页面上：文字不会因为页面变宽变窄重新换行，
+    /// 涂鸦、荧光笔和圈出来问的位置才能一直对得上
+    private var paperScale: CGFloat {
+        let column = min(width, commentMargin == nil ? 900 : 1140) - 80 - (commentMargin.map { $0 + 16 } ?? 0) - 40
+        return min(max(column / NotePaper.width, 0.5), 1.25)
+    }
+
+    /// 页边批注的宽度；页面不够宽时为 nil，批注写在这一块下面
+    private var commentMargin: CGFloat? { width >= 760 ? (width >= 1000 ? 260 : 210) : nil }
+
     // MARK: 标题
 
     private func header(_ doc: NoteDoc, job: NoteJob?) -> some View {
@@ -428,12 +442,22 @@ struct NoteDocView: View {
                               streaming: store.noteJobs[noteID]?.afterBlock == block.id,
                               busy: store.noteJobs[noteID] != nil,
                               ink: block.kind == .text && HandwritingModel.isAvailable ? ink.model(for: block.id) : nil,
+                              comments: (doc.comments ?? []).filter { $0.blockID == block.id },
+                              commentMargin: commentMargin,
+                              paperScale: paperScale,
                               onSelect: { handleSelection($0, in: block.id) },
                               onExercises: { exercises(count: $0, after: block) }) {
                 blockMenu(block, in: doc)
             }
         case .exercise:
-            VStack(alignment: .leading, spacing: 0) {
+            exerciseView(block, in: doc)
+                // 练习题和有页边的文字块对齐
+                .padding(.trailing, commentMargin.map { $0 + 16 } ?? 0)
+        }
+    }
+
+    private func exerciseView(_ block: NoteBlock, in doc: NoteDoc) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     Text("练习").font(.caption.weight(.semibold)).foregroundStyle(Ink.red)
                     Spacer()
@@ -449,7 +473,6 @@ struct NoteDocView: View {
             // 像夹在笔记里的一张练习纸
             .background(Color.secondary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.15)))
-        }
     }
 
     private func blockMenu(_ block: NoteBlock, in doc: NoteDoc) -> some View {
@@ -623,6 +646,12 @@ struct NoteTextBlockView<MenuContent: View>: View {
     let busy: Bool
     /// 这一块上的涂鸦（笔、荧光笔）；为 nil 时不能涂鸦
     let ink: HandwritingModel?
+    /// 圈在这一块上的页边批注
+    let comments: [NoteComment]
+    /// 页边宽度；为 nil 时批注写在这一块下面
+    let commentMargin: CGFloat?
+    /// 笔记文字（纸宽固定）缩放到页面上的比例
+    let paperScale: CGFloat
     let onSelect: (String) -> Void
     /// 小节下面的“出例题”，参数是出几道
     let onExercises: (Int) -> Void
@@ -636,6 +665,35 @@ struct NoteTextBlockView<MenuContent: View>: View {
     private var isEditing: Bool { editing == block.id }
 
     var body: some View {
+        // 页面宽时批注写在右边页边，和这一块顶端对齐；窄时写在这一块下面
+        if let commentMargin {
+            // 批注浮在页边，不占版面：长批注往下延伸也不会把下面的笔记推开
+            content
+                .padding(.trailing, commentMargin + 16)
+                .overlay(alignment: .topTrailing) {
+                    commentColumn.frame(width: commentMargin, alignment: .leading)
+                }
+                .zIndex(comments.isEmpty ? 0 : 1)
+        } else {
+            VStack(alignment: .trailing, spacing: 8) {
+                content
+                commentColumn.frame(maxWidth: 420, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var commentColumn: some View {
+        if !comments.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(comments.enumerated()), id: \.element.id) { i, comment in
+                    NoteCommentView(noteID: noteID, comment: comment, number: i + 1)
+                }
+            }
+        }
+    }
+
+    private var content: some View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 6) {
                 if block.kind == .answer {
@@ -667,12 +725,20 @@ struct NoteTextBlockView<MenuContent: View>: View {
                     }
                 } else {
                     RichText(block.text, onSelect: onSelect, host: inkHost)
+                        // 圈出来问过的地方：淡淡的虚线框和序号，对应页边的批注
+                        .overlay(alignment: .topLeading) { circledMarks }
                         // 涂鸦层盖在文字上：笔写字、画荧光笔；手指照样能选字、翻页
                         .overlay {
                             if let ink {
                                 NotebookCanvas(model: ink, tools: ink.tools, host: inkHost)
                             }
                         }
+                        .overlay(alignment: .topLeading) {
+                            if let ink {
+                                CircleAskAnchor(ink: ink, busy: busy) { send($0, ink: ink) }
+                            }
+                        }
+                        .modifier(NotePaper(scale: paperScale))
                     // 每个小节下面可以出几道例题
                     if block.kind == .text {
                         HStack {
@@ -701,6 +767,47 @@ struct NoteTextBlockView<MenuContent: View>: View {
         .onChange(of: focused) { if !focused && isEditing { commit() } }
     }
 
+    /// 页边批注对应的圈：收起的批注不画
+    private var circledMarks: some View {
+        Canvas { context, _ in
+            for (i, comment) in comments.enumerated() where !comment.minimized {
+                let box = Path(roundedRect: comment.region.rect, cornerRadius: 8)
+                context.stroke(box, with: .color(Ink.blue.opacity(0.5)), style: StrokeStyle(lineWidth: 1.2, dash: [4, 4]))
+                let label = context.resolve(Text("\(i + 1)").font(.system(size: 11, weight: .bold)).foregroundColor(Ink.blue))
+                context.draw(label, at: CGPoint(x: comment.region.rect.maxX + 6, y: comment.region.rect.minY + 4), anchor: .leading)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func send(_ question: String, ink: HandwritingModel) {
+        guard let region = ink.circledRegion else { return }
+        let ask = { (image: Data?) in
+            store.askCircled(noteID, blockID: block.id, region: InkRegion(region), question: question, image: image)
+        }
+        #if os(iOS)
+        // 把圈住的那一小段（排版后的文字和公式，加上上面的笔迹）截图发给 AI
+        guard let web = inkHost.view as? WKWebView else { ask(nil); return }
+        let config = WKSnapshotConfiguration()
+        config.rect = region.intersection(web.bounds)
+        let strokes = ink.drawingImage(in: config.rect)
+        web.takeSnapshot(with: config) { image, _ in
+            guard let image else { ask(nil); return }
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 2
+            let combined = UIGraphicsImageRenderer(size: image.size, format: format).image { _ in
+                UIColor.white.setFill()
+                UIRectFill(CGRect(origin: .zero, size: image.size))
+                image.draw(at: .zero)
+                strokes?.draw(in: CGRect(origin: .zero, size: image.size))
+            }
+            ask(combined.jpegData(compressionQuality: 0.85).flatMap { ImageUtil.normalizedJPEG($0, maxPixel: 1280) })
+        }
+        #else
+        ask(nil)
+        #endif
+    }
+
     private var answerHeader: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(block.question ?? "提问").font(.caption.weight(.semibold)).foregroundStyle(Ink.blue)
@@ -727,5 +834,227 @@ private struct AnswerRule: ViewModifier {
     let isAnswer: Bool
     func body(content: Content) -> some View {
         if isAnswer { content.marginRule(Ink.blue) } else { content }
+    }
+}
+
+/// 圈完一处：在圈住的地方画虚线框，从那里弹出提问框
+private struct CircleAskAnchor: View {
+    @ObservedObject var ink: HandwritingModel
+    let busy: Bool
+    let send: (String) -> Void
+    @State private var showAsk = false
+
+    var body: some View {
+        let r = ink.circledRegion ?? .zero
+        ZStack(alignment: .topLeading) {
+            Color.clear
+            if ink.circledRegion != nil {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Ink.blue.opacity(0.8), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                    .frame(width: r.width, height: r.height)
+                    .offset(x: r.minX, y: r.minY)
+            }
+            Color.clear
+                .frame(width: max(r.width, 1), height: max(r.height, 1))
+                .padding(.leading, max(0, r.minX))
+                .padding(.top, max(0, r.minY))
+                .popover(isPresented: $showAsk) {
+                    CircleAskPopover(busy: busy) { question in
+                        send(question)
+                        showAsk = false
+                    }
+                    .onDisappear { ink.circledRegion = nil }
+                }
+        }
+        .allowsHitTesting(false)
+        .onChange(of: ink.circledRegion) {
+            guard ink.circledRegion != nil else { return }
+            // 等圈的那一笔抬起来再弹出，否则会被同一次触摸关掉
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                if ink.circledRegion != nil { showAsk = true }
+            }
+        }
+    }
+}
+
+/// 圈完一处后弹出：常用问题，或者写下想问的（可以直接用 Apple Pencil 写，系统转成文字）
+private struct CircleAskPopover: View {
+    let busy: Bool
+    let send: (String) -> Void
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    static let quick = ["这是什么意思？", "为什么是这样？", "举个例子", "和前面有什么联系？"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("问圈出来的这段").font(.headline)
+            TextField("想问什么…", text: $text, axis: .vertical)
+                .focused($focused)
+                .lineLimit(1...4)
+                .padding(10)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                .onSubmit { submit(text) }
+            FlowLayout(spacing: 14) {
+                ForEach(Self.quick, id: \.self) { q in
+                    Button(q) { submit(q) }
+                }
+            }
+            .buttonStyle(InkTextButtonStyle())
+            Button { submit(text) } label: {
+                Text("发送").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            if busy {
+                Text("正在回答上一个问题，稍等一下").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(18)
+        .frame(width: 360)
+        // 直接打字：弹出就聚焦输入框
+        .onAppear { focused = true }
+    }
+
+    private func submit(_ q: String) {
+        guard !busy, !q.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        send(q)
+    }
+}
+
+/// 页边的一条批注：小字、支持 LaTeX；双击放大；可以记到笔记里；收起成一个小对话图标
+struct NoteCommentView: View {
+    @EnvironmentObject var store: AppStore
+    let noteID: UUID
+    let comment: NoteComment
+    let number: Int
+    @State private var enlarged = false
+
+    private var streaming: Bool { store.noteJobs[noteID]?.commentID == comment.id }
+
+    var body: some View {
+        if comment.minimized {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { store.mutateComment(noteID, comment.id) { $0.minimized = false } }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "bubble.left.fill")
+                    Text("\(number)").font(.caption2.weight(.bold))
+                }
+                .font(.callout)
+                .foregroundStyle(Ink.blue.opacity(0.8))
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                .background(Ink.blue.opacity(0.08), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("展开批注 \(number)")
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("\(number)").font(.caption2.weight(.bold)).foregroundStyle(Ink.blue)
+                    Text(comment.question).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(2)
+                    Spacer(minLength: 0)
+                    if !streaming && !comment.answer.isEmpty {
+                        Menu {
+                            Button("放大查看", systemImage: "arrow.up.left.and.arrow.down.right") { enlarged = true }
+                            Button("删除批注", systemImage: "trash", role: .destructive) { store.deleteComment(noteID, comment.id) }
+                        } label: {
+                            Image(systemName: "ellipsis").font(.caption).foregroundStyle(.secondary).frame(width: 22, height: 18)
+                        }
+                    }
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { store.mutateComment(noteID, comment.id) { $0.minimized = true } }
+                    } label: {
+                        Image(systemName: "minus").font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(InkTextButtonStyle(color: .secondary))
+                    .accessibilityLabel("收起批注")
+                }
+                if comment.answer.isEmpty {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("正在写…").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    RichText(comment.answer, scale: 0.82)
+                        // 文字显示在网页视图里，点击会被它吃掉：盖一层透明的来接双击
+                        .overlay {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture(count: 2) { enlarged = true }
+                        }
+                }
+                if !streaming && !comment.answer.isEmpty {
+                    if comment.savedToNote {
+                        Label("已记到笔记", systemImage: "checkmark").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Button {
+                            store.saveCommentToNote(noteID, comment.id)
+                        } label: {
+                            Label("把这个点记到笔记中", systemImage: "plus").font(.caption.weight(.medium))
+                        }
+                        .buttonStyle(InkTextButtonStyle())
+                    }
+                }
+            }
+            .padding(10)
+            .background(Ink.blue.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(alignment: .leading) {
+                Rectangle().fill(Ink.blue.opacity(0.5)).frame(width: 2).padding(.vertical, 8)
+            }
+            .sheet(isPresented: $enlarged) {
+                NavigationStack {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text(comment.question).font(.title3.weight(.semibold))
+                            RichText(comment.answer, scale: 1.15)
+                        }
+                        .padding(24)
+                    }
+                    .navigationTitle("批注 \(number)")
+                    #if os(iOS)
+                    .navigationBarTitleDisplayMode(.inline)
+                    #endif
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("关闭") { enlarged = false } }
+                        if !comment.savedToNote {
+                            ToolbarItem(placement: .primaryAction) {
+                                Button("记到笔记中") {
+                                    store.saveCommentToNote(noteID, comment.id)
+                                    enlarged = false
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 笔记文字的“纸”：固定宽度排版，整体缩放到页面上，占位大小跟着缩放
+struct NotePaper: ViewModifier {
+    static let width: CGFloat = 520
+    let scale: CGFloat
+
+    func body(content: Content) -> some View {
+        PaperLayout(width: Self.width, scale: scale) {
+            content.scaleEffect(scale, anchor: .topLeading)
+        }
+    }
+}
+
+/// 按纸宽给里面的内容排版，对外报告缩放后的大小
+private struct PaperLayout: Layout {
+    let width: CGFloat
+    let scale: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let height = subviews.first?.sizeThatFits(ProposedViewSize(width: width, height: nil)).height ?? 0
+        return CGSize(width: width * scale, height: height * scale)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: width, height: nil))
     }
 }

@@ -139,6 +139,24 @@ extension Tutor {
         """
     }
 
+    /// 用笔圈出来问：圈住的地方截了图，问题写在后面
+    static func noteCircleInstruction(block: String, question: String, hasImage: Bool) -> String {
+        """
+        \(hasImage ? "【我圈出的部分】见图片（笔记里圈住的一小段，可能带着我的笔迹）。\n\n" : "")【这段所在的笔记原文】
+        \(clip(block, 3000))
+
+        【我的问题】\(question)
+
+        像老师写在页边的小字批注一样回答：紧扣圈住的内容，几句话说清楚，必要时写出关键推导；公式用 $...$。不要开场白。
+        """
+    }
+
+    /// 把一条批注整理成一句笔记要点（记到笔记里时用，不调用 AI）
+    static func notePoint(from comment: NoteComment) -> String {
+        "**\(comment.question.trimmingCharacters(in: .whitespacesAndNewlines))**\n\n" +
+            comment.answer.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// selection：从排版后的页面选中的文字（公式可能显示不全），block：选中的文字所在的笔记块原文
     /// exerciseCount：出几道练习题；0 表示不是出题，是回答问题
     static func noteAskInstruction(selection: String, block: String, question: String, exerciseCount: Int = 0) -> String {

@@ -7,6 +7,8 @@ struct NoteJob: Equatable {
     var partial = ""
     /// 提问时：显示在哪一块后面
     var afterBlock: UUID?
+    /// 圈出来问时：正在写哪一条页边批注
+    var commentID: UUID?
     var startedAt = Date()
 }
 
@@ -242,6 +244,66 @@ extension AppStore {
             } else if !failedParts.isEmpty {
                 self.errorMessage = "共 \(chunks.count) 部分，其中第 \(failedParts.map(String.init).joined(separator: "、")) 部分没有生成成功，笔记可能不完整。"
             }
+        }
+    }
+
+    // MARK: 用笔圈出来问
+
+    func mutateComment(_ docID: UUID, _ commentID: UUID, _ change: (inout NoteComment) -> Void) {
+        mutateNote(docID) { doc in
+            guard let i = doc.comments?.firstIndex(where: { $0.id == commentID }) else { return }
+            change(&doc.comments![i])
+        }
+    }
+
+    func deleteComment(_ docID: UUID, _ commentID: UUID) {
+        if noteJobs[docID]?.commentID == commentID { stopNoteJob(docID) }
+        mutateNote(docID) { $0.comments?.removeAll { $0.id == commentID } }
+    }
+
+    /// 把一条批注记到笔记里：作为引用块插在被圈的那一块后面
+    func saveCommentToNote(_ docID: UUID, _ commentID: UUID) {
+        guard let comment = note(docID)?.comments?.first(where: { $0.id == commentID }), !comment.answer.isEmpty else { return }
+        insertBlock(NoteBlock(kind: .text, text: Tutor.notePoint(from: comment)), in: docID, after: comment.blockID)
+        mutateComment(docID, commentID) { $0.savedToNote = true; $0.minimized = true }
+    }
+
+    /// 用笔圈住笔记里的一段提问。回答写成页边的一条小字批注
+    func askCircled(_ docID: UUID, blockID: UUID, region: InkRegion, question: String, image: Data?) {
+        let question = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty, noteTasks[docID] == nil, let doc = note(docID),
+              let block = doc.blocks.first(where: { $0.id == blockID }) else { return }
+        let client: LLMClient
+        do { client = try makeClient(for: .chat) } catch {
+            if !(error is ConsentRequired) { errorMessage = error.localizedDescription }
+            return
+        }
+        let comment = NoteComment(blockID: blockID, region: region, question: question)
+        mutateNote(docID) { $0.comments = ($0.comments ?? []) + [comment] }
+        let parts: [LLMContent] = (image.map { [LLMContent.image($0)] } ?? [])
+            + [.text(Tutor.noteCircleInstruction(block: block.text, question: question, hasImage: image != nil))]
+        let system = Tutor.noteAskSystem(doc: doc)
+        noteJobs[docID] = NoteJob(label: "正在回答…", commentID: comment.id)
+        noteTasks[docID] = Task { [weak self] in
+            var full = ""
+            var lastFlush = Date.distantPast
+            do {
+                for try await piece in client.stream(system: system, messages: [LLMMessage(role: .user, parts: parts)]) {
+                    full += piece
+                    if Date().timeIntervalSince(lastFlush) > 0.15 {
+                        self?.mutateComment(docID, comment.id) { $0.answer = full }
+                        lastFlush = Date()
+                    }
+                }
+                try Task.checkCancellation()
+                self?.mutateComment(docID, comment.id) { $0.answer = full.trimmingCharacters(in: .whitespacesAndNewlines) }
+            } catch {
+                if !(error is CancellationError) { self?.errorMessage = error.localizedDescription }
+                // 没写出内容就撤掉这条批注
+                if full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { self?.deleteComment(docID, comment.id) }
+            }
+            self?.noteJobs[docID] = nil
+            self?.noteTasks[docID] = nil
         }
     }
 

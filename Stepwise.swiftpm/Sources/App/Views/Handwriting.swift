@@ -188,7 +188,8 @@ final class HandwritingModel: ObservableObject {
     /// 新建或重建画布时调用：放入笔迹、应用当前工具
     func attach(_ canvas: PadCanvasView) {
         self.canvas = canvas
-        canvas.pendingDrawing = drawing
+        // 没有要恢复的笔迹就不用等画布排好版
+        canvas.pendingDrawing = drawing.strokes.isEmpty ? nil : drawing
         appliedTools = nil
         applyTools()
     }
@@ -216,6 +217,16 @@ final class HandwritingModel: ObservableObject {
         // 只在变化时赋值，平时写字不会让整道题的页面跟着刷新
         if askRegionVisible { askRegionVisible = false }
         scheduleSave()
+    }
+
+    /// 某一块地方的笔迹图片（圈出来问时和下面的文字截图合在一起）
+    func drawingImage(in rect: CGRect) -> UIImage? {
+        guard !drawing.strokes.isEmpty, rect.width > 1, rect.height > 1 else { return nil }
+        var image: UIImage?
+        UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
+            image = drawing.image(from: rect, scale: 2)
+        }
+        return image
     }
 
     /// 圈选提问画完一笔：这一笔不留在纸上，记下圈住的地方。只点了一下就当作圈住这一行
@@ -395,9 +406,28 @@ struct NotebookCanvas: UIViewRepresentable {
         }
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+            guard let pad = canvasView as? PadCanvasView else { return }
+            // 恢复的笔迹还没放进去，用户就开始写了：把恢复的笔迹和新写的合在一起
+            if let pending = pad.pendingDrawing, penDown {
+                pad.pendingDrawing = nil
+                var merged = pending
+                merged.strokes.append(contentsOf: canvasView.drawing.strokes)
+                DispatchQueue.main.async {
+                    if pad.drawing != merged { pad.drawing = merged }
+                }
+                let byPen = penDown
+                penDown = false
+                if byPen, model.tools.tool == .ask, let stroke = canvasView.drawing.strokes.last {
+                    // 圈的这一笔不留：只放回恢复的笔迹
+                    DispatchQueue.main.async { pad.drawing = pending }
+                    model.circled(stroke.renderBounds)
+                } else {
+                    model.drawingChanged(merged)
+                }
+                return
+            }
             // 恢复、重新放入笔迹时的变化不算；把圈选的一笔撤掉时也会进来，笔迹没变就不算
-            guard let pad = canvasView as? PadCanvasView, pad.pendingDrawing == nil, !pad.isRefreshing,
-                  canvasView.drawing != model.drawing else { return }
+            guard pad.pendingDrawing == nil, !pad.isRefreshing, canvasView.drawing != model.drawing else { return }
             let byPen = penDown
             penDown = false
             // 圈选提问：用户刚画的这一笔只用来圈出地方，不留在纸上

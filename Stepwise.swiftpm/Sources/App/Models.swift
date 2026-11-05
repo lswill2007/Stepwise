@@ -144,6 +144,25 @@ struct NoteDoc: Codable, Identifiable, Equatable {
     /// 笔记里的练习题所在的题集（不显示在题集列表里）
     var exerciseSetID: UUID
     var blocks: [NoteBlock] = []
+    /// 用笔圈出来问的批注，写在页边（旧数据没有）
+    var comments: [NoteComment]?
+    /// 所在的文件夹；做题时会到同一个文件夹里找相关的笔记（旧数据没有，放在最外层）
+    var folderID: UUID?
+}
+
+/// 笔记页边的一条批注：用笔圈住一段，问一句，AI 的回答像小字写在页边
+struct NoteComment: Codable, Identifiable, Equatable {
+    var id = UUID()
+    /// 圈在哪一块、哪个位置（这一块里的坐标）
+    var blockID: UUID
+    var region: InkRegion
+    var question: String
+    var answer = ""
+    /// 收起成一个小对话图标
+    var minimized = false
+    /// 已经记到笔记里了
+    var savedToNote = false
+    var createdAt = Date()
 }
 
 /// 笔记里的一块
