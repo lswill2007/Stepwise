@@ -37,6 +37,8 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var hintLevel: Int?
     /// 批改时标出的出错位置，画在手写区对应的那一行
     var marks: [InkMark]?
+    /// 学生用橡皮擦掉的批注（marks 里的序号，从 0 开始）
+    var erasedMarks: [Int]?
     /// 用笔圈出来提问时圈住的地方（手写区坐标）；问题和回答都记着，回答贴在页边
     var region: InkRegion?
 }

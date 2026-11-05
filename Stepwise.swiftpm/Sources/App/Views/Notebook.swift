@@ -226,7 +226,7 @@ struct QuestionBlock: View {
                 }
             }
             .confirmationDialog("擦掉这道题的全部手写？", isPresented: $confirmClearInk, titleVisibility: .visible) {
-                Button("全部擦掉", role: .destructive) { model.clear() }
+                Button("全部擦掉", role: .destructive) { clearAll() }
             }
         }
     }
@@ -328,6 +328,7 @@ struct QuestionBlock: View {
                     .background(RuledPaper())
                     // 批改标出的错误行、圈选提问圈住的地方
                     .overlay { annotations(q) }
+                    .onAppear { model.onEraserTouch = { eraserTouched($0) } }
                     .overlay(alignment: .topLeading) { askAnchor }
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.2)))
@@ -363,7 +364,7 @@ struct QuestionBlock: View {
     private func annotations(_ q: Question) -> some View {
         let items = MarginNotes.items(q, solutionInMargin: solutionInMargin)
         let verdict = items.last { $0.kind == .verdictWrong || $0.kind == .verdictCorrect }
-        let marks = verdict?.kind == .verdictWrong ? verdict?.marks ?? [] : []
+        let marks = verdict.map(Self.visibleMarks) ?? []
         var region = model.circledRegion
         // 问过的地方：继续写字后就不再标出，免得蓝框挡着书写
         if region == nil, model.askRegionVisible, store.pending[qID]?.inMargin == true {
@@ -375,6 +376,50 @@ struct QuestionBlock: View {
         return InkAnnotations(marks: marks, region: region, span: model.inkSpan(inRow:))
             // 手写纸一直是白的，批注用浅色模式的红笔、蓝笔
             .environment(\.colorScheme, .light)
+    }
+
+    /// 手写区上还要画的批注：答错时的标注里没被橡皮擦掉的，序号保持原来的
+    static func visibleMarks(_ verdict: ChatMessage) -> [InkAnnotations.Numbered] {
+        guard verdict.kind == .verdictWrong else { return [] }
+        let erased = Set(verdict.erasedMarks ?? [])
+        return (verdict.marks ?? []).enumerated().compactMap { i, mark in
+            erased.contains(i) ? nil : InkAnnotations.Numbered(index: i, mark: mark)
+        }
+    }
+
+    /// 橡皮擦经过批注所在的那一行（波浪线、序号、短评）：擦掉这一处批注；经过圈选提问的蓝框：藏起蓝框
+    private func eraserTouched(_ point: CGPoint) {
+        guard let q = store.question(setID, qID) else { return }
+        let items = MarginNotes.items(q, solutionInMargin: solutionInMargin)
+        if model.askRegionVisible, let selected = MarginNotes.selected(items, selectedNote),
+           let region = selected.region?.rect, region.insetBy(dx: -12, dy: -12).contains(point) {
+            model.askRegionVisible = false
+        }
+        guard let verdict = items.last(where: { $0.kind == .verdictWrong || $0.kind == .verdictCorrect }) else { return }
+        let spacing = RuledPaper.lineSpacing
+        let hit = Self.visibleMarks(verdict).filter { item in
+            let top = RuledPaper.top(ofRow: item.mark.line)
+            // 这一行和它下面的波浪线
+            return point.y >= top - 4 && point.y <= top + spacing + 12
+        }
+        guard !hit.isEmpty else { return }
+        store.mutate(setID, qID) { q in
+            guard let i = q.messages.firstIndex(where: { $0.id == verdict.id }) else { return }
+            q.messages[i].erasedMarks = Array(Set(q.messages[i].erasedMarks ?? []).union(hit.map(\.index))).sorted()
+        }
+    }
+
+    /// 擦掉全部：手写和批改标注一起擦掉
+    private func clearAll() {
+        model.clear()
+        model.askRegionVisible = false
+        guard let q = store.question(setID, qID),
+              let verdict = MarginNotes.items(q, solutionInMargin: solutionInMargin)
+                .last(where: { $0.kind == .verdictWrong }), let marks = verdict.marks, !marks.isEmpty else { return }
+        store.mutate(setID, qID) { q in
+            guard let i = q.messages.firstIndex(where: { $0.id == verdict.id }) else { return }
+            q.messages[i].erasedMarks = Array(marks.indices)
+        }
     }
 
     /// 选中页边的圈选提问时，重新在手写区上标出问的是哪里
@@ -548,82 +593,55 @@ extension InkRegion {
     var rect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
 }
 
-/// 手写区上的标注，像老师用红笔改作业：错的那一行下面画波浪线，前面写上序号，后面写短评。
-/// 波浪线和序号画在 Canvas 上；短评里可能有公式，用 RichText（KaTeX）叠在对应的位置
+/// 手写区上的标注：错的那一行下面一道淡淡的红色波浪线，前面一个序号。
+/// 只做定位，不写字，免得和笔迹、和别的批注挤在一起；说明都写在页边，序号对得上
 struct InkAnnotations: View {
-    let marks: [InkMark]
+    /// 一处批注和它原来的序号（擦掉前面几处后，后面的序号不变，和页边对得上）
+    struct Numbered {
+        let index: Int
+        let mark: InkMark
+    }
+
+    let marks: [Numbered]
     let region: CGRect?
     /// 某一行笔迹的左右范围
     let span: (Int) -> ClosedRange<CGFloat>?
 
-    /// 一处错误在手写区上的位置
-    private struct Placement {
-        let number: Int
-        let note: String
-        /// 波浪线的左右端和所在的行
-        let x0: CGFloat
-        let x1: CGFloat
-        let rowTop: CGFloat
-        /// 短评的位置和宽度
-        let noteOrigin: CGPoint
-        let noteWidth: CGFloat
-    }
-
     var body: some View {
-        GeometryReader { geo in
-            let placements = place(in: geo.size)
-            ZStack(alignment: .topLeading) {
-                Canvas { context, size in
-                    let spacing = RuledPaper.lineSpacing
-                    for p in placements {
-                        // 波浪线
-                        let y = p.rowTop + spacing + 2
-                        var wave = Path()
-                        wave.move(to: CGPoint(x: p.x0, y: y))
-                        var x = p.x0
-                        var up = true
-                        while x < p.x1 {
-                            let next = min(x + 7, p.x1)
-                            wave.addQuadCurve(to: CGPoint(x: next, y: y), control: CGPoint(x: (x + next) / 2, y: y + (up ? -3.5 : 3.5)))
-                            x = next
-                            up.toggle()
-                        }
-                        context.stroke(wave, with: .color(Ink.red.opacity(0.9)), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
-                        let number = context.resolve(Text(MarginNotes.circled(p.number)).font(.system(size: 17, weight: .bold)).foregroundColor(Ink.red))
-                        context.draw(number, at: CGPoint(x: max(12, p.x0 - 16), y: p.rowTop + spacing / 2 + 4))
-                    }
-                    if let region {
-                        let box = Path(roundedRect: region, cornerRadius: 8)
-                        context.fill(box, with: .color(Ink.blue.opacity(0.05)))
-                        context.stroke(box, with: .color(Ink.blue.opacity(0.75)), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
-                    }
+        Canvas { context, size in
+            let spacing = RuledPaper.lineSpacing
+            // 同一行的几处批注只画一道波浪线，序号并排
+            let rows = Dictionary(grouping: marks, by: \.mark.line)
+            for (line, items) in rows {
+                let rowTop = RuledPaper.top(ofRow: line)
+                guard rowTop < size.height else { continue }
+                let range = span(line) ?? 40...(size.width * 0.5)
+                let x0 = max(30, range.lowerBound)
+                let x1 = min(size.width - 8, max(range.upperBound, x0 + 40))
+                let y = rowTop + spacing + 2
+                var wave = Path()
+                wave.move(to: CGPoint(x: x0, y: y))
+                var x = x0
+                var up = true
+                while x < x1 {
+                    let next = min(x + 7, x1)
+                    wave.addQuadCurve(to: CGPoint(x: next, y: y), control: CGPoint(x: (x + next) / 2, y: y + (up ? -3 : 3)))
+                    x = next
+                    up.toggle()
                 }
-                ForEach(placements, id: \.number) { p in
-                    RichText(p.note, scale: 0.82, tone: .paperRed)
-                        .frame(width: p.noteWidth, alignment: .leading)
-                        .offset(x: p.noteOrigin.x, y: p.noteOrigin.y)
-                }
+                context.stroke(wave, with: .color(Ink.red.opacity(0.6)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                let numbers = items.map(\.index).sorted().map { MarginNotes.circled($0 + 1) }.joined()
+                let label = context.resolve(Text(numbers).font(.system(size: 15, weight: .semibold)).foregroundColor(Ink.red))
+                // 序号放在这一行左边的空白处，靠右对齐到笔迹前面
+                context.draw(label, at: CGPoint(x: max(6, x0 - 6), y: rowTop + spacing / 2 + 4), anchor: .trailing)
+            }
+            if let region {
+                let box = Path(roundedRect: region, cornerRadius: 8)
+                context.fill(box, with: .color(Ink.blue.opacity(0.05)))
+                context.stroke(box, with: .color(Ink.blue.opacity(0.75)), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
             }
         }
         .allowsHitTesting(false)
-    }
-
-    /// 短评写在波浪线右边；右边太窄就写在波浪线下面
-    private func place(in size: CGSize) -> [Placement] {
-        let spacing = RuledPaper.lineSpacing
-        return marks.enumerated().compactMap { i, mark in
-            let rowTop = RuledPaper.top(ofRow: mark.line)
-            guard rowTop < size.height else { return nil }
-            let range = span(mark.line) ?? 40...(size.width * 0.5)
-            let x0 = max(28, range.lowerBound)
-            let x1 = min(size.width - 8, max(range.upperBound, x0 + 40))
-            let roomRight = size.width - x1 - 18
-            let origin = roomRight >= 150
-                ? CGPoint(x: x1 + 10, y: rowTop + 10)
-                : CGPoint(x: x0, y: rowTop + spacing + 8)
-            return Placement(number: i + 1, note: mark.note, x0: x0, x1: x1, rowTop: rowTop,
-                             noteOrigin: origin, noteWidth: max(80, size.width - origin.x - 8))
-        }
     }
 }
 
@@ -854,18 +872,34 @@ struct MarginNotes: View {
                     timing(message)
                 }
                 let marks = message.marks ?? []
+                let erased = Set(message.erasedMarks ?? [])
                 if !marks.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(marks.enumerated()), id: \.offset) { i, mark in
-                            // 序号和手写区上的对应，不用再写第几行；短评里的公式用 KaTeX 排版
+                            // 序号和手写区上的对应，不用再写第几行；短评里的公式用 KaTeX 排版。手写区上擦掉的变淡
                             HStack(alignment: .top, spacing: 6) {
                                 Text(Self.circled(i + 1))
-                                    .font(.callout)
+                                    .font(.body.weight(.semibold))
                                     .foregroundStyle(Ink.red)
-                                    .padding(.top, 3)
-                                RichText(mark.note, scale: 0.92, tone: .red)
+                                    .padding(.top, 2)
+                                RichText(mark.note, scale: 0.98, tone: .red)
+                            }
+                            .opacity(erased.contains(i) ? 0.4 : 1)
+                        }
+                        HStack(spacing: 12) {
+                            Text(erased.isEmpty ? "改好了就用橡皮擦掉红笔批注" : "已擦掉 \(erased.count) 处")
+                                .font(.caption).foregroundStyle(.secondary)
+                            if !erased.isEmpty {
+                                Button("全部显示") {
+                                    store.mutate(setID, qID) { q in
+                                        if let j = q.messages.firstIndex(where: { $0.id == message.id }) { q.messages[j].erasedMarks = nil }
+                                    }
+                                }
+                                .buttonStyle(InkTextButtonStyle())
+                                .font(.caption)
                             }
                         }
+                        .padding(.top, 2)
                     }
                 }
                 RichText(message.text, scale: 0.92)

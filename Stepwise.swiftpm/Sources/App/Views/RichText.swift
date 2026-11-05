@@ -1,9 +1,9 @@
 import SwiftUI
 import WebKit
 
-/// 文字颜色：默认跟随深浅色；red 是红笔批注；paperRed 写在手写纸上（纸一直是白的，深色模式也用浅色模式的红）
+/// 文字颜色：默认跟随深浅色；red 是页边的红笔批注
 enum RichTone: String {
-    case normal = "", red, paperRed = "paper-red"
+    case normal = "", red
 }
 
 /// 显示 Markdown + LaTeX 公式（KaTeX 排版）。
@@ -224,7 +224,6 @@ enum MathTemplate {
     @media (prefers-color-scheme: dark){body{color:#f2f2f7}}
     body.red{color:#bd291f}
     @media (prefers-color-scheme: dark){body.red{color:#f5786b}}
-    body.paper-red{color:#bd291f;line-height:1.45}
     #c{display:flow-root}
     #c>:first-child{margin-top:0}
     #c>:last-child{margin-bottom:0}

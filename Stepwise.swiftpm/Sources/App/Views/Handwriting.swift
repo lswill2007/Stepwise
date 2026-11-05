@@ -134,6 +134,8 @@ final class HandwritingModel: ObservableObject {
     @Published var height: CGFloat
     /// 刚用“圈选提问”圈住的地方，等学生写下要问什么
     @Published var circledRegion: CGRect?
+    /// 橡皮擦经过的位置（手写区坐标）：用来擦掉叠在纸上的批改标注，它们不是笔迹，PencilKit 的橡皮擦不到
+    var onEraserTouch: ((CGPoint) -> Void)?
     /// 手写区上要不要标出圈选提问的蓝框。一开始继续写字就藏起来，免得挡着书写；点页边的“问”再显示
     @Published var askRegionVisible = false
 
@@ -321,6 +323,8 @@ struct NotebookCanvas: UIViewRepresentable {
         let pencil = UIPencilInteraction()
         pencil.delegate = context.coordinator
         canvas.addInteraction(pencil)
+        // 跟着书写手势看橡皮擦经过哪里，好擦掉批改标注
+        canvas.drawingGestureRecognizer.addTarget(context.coordinator, action: #selector(Coordinator.drawingGesture(_:)))
         model.attach(canvas)
         return canvas
     }
@@ -337,6 +341,13 @@ struct NotebookCanvas: UIViewRepresentable {
         /// 用户正在用笔（或手指）写，下一次笔迹变化是用户写的
         private var penDown = false
         init(model: HandwritingModel) { self.model = model }
+
+        @objc func drawingGesture(_ gesture: UIGestureRecognizer) {
+            // 很快的一笔可能只收到“结束”，也要算
+            guard model.tools.tool == .eraser, [.began, .changed, .ended].contains(gesture.state),
+                  let view = gesture.view else { return }
+            model.onEraserTouch?(gesture.location(in: view))
+        }
 
         func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
             penDown = true
@@ -480,6 +491,7 @@ final class HandwritingModel: ObservableObject {
     func saveNow() {}
     @Published var circledRegion: CGRect?
     @Published var askRegionVisible = false
+    var onEraserTouch: ((CGPoint) -> Void)?
     func addSpace() {}
     func inkSpan(inRow row: Int) -> ClosedRange<CGFloat>? { nil }
     func exportJPEG(highlight: CGRect? = nil) -> Data? { nil }
