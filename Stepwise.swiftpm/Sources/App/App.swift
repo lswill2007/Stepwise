@@ -3,22 +3,31 @@ import SwiftUI
 @main
 struct StepwiseApp: App {
     @StateObject private var store = AppStore()
+    @StateObject private var tracker = StudyTracker()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
+                .environmentObject(tracker)
+                // 一分钟内有操作就算学习时间
+                .background(ActivityDetector { tracker.touch() })
+                .onAppear { tracker.start() }
         }
         // 退到后台时立即保存题库，避免被系统关闭时丢失最后的改动
         .onChange(of: scenePhase) {
-            if scenePhase != .active { store.saveNow() }
+            if scenePhase != .active {
+                store.saveNow()
+                tracker.save()
+            }
         }
     }
 }
 
 struct RootView: View {
     @EnvironmentObject var store: AppStore
+    @AppStorage("clockEnabled") private var clockEnabled = false
     @State private var showImport = false
     @State private var showNoteImport = false
     @State private var showSettings = false
@@ -51,6 +60,10 @@ struct RootView: View {
             } else {
                 ContentUnavailableView("选择一个题集开始", systemImage: "pencil.and.list.clipboard")
             }
+        }
+        // 时钟浮在所有页面上面
+        .overlay {
+            if clockEnabled { FloatingClock() }
         }
         .sheet(isPresented: $showImport) {
             ImportView()

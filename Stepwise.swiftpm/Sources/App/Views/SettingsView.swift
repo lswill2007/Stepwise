@@ -7,10 +7,41 @@ struct SettingsView: View {
     @State private var showConsent = false
     @State private var showImporter = false
     @State private var importMessage: String?
+    @AppStorage("clockEnabled") private var clockEnabled = false
+    @AppStorage("clockScale") private var clockScale: Double = 1
 
     var body: some View {
         NavigationStack(path: $path) {
             Form {
+                Section {
+                    StudySummaryRow()
+                    NavigationLink {
+                        StudyLogView()
+                    } label: {
+                        Label("学习日志和周报", systemImage: "chart.bar")
+                    }
+                } footer: {
+                    Text("一分钟内有操作（写字、翻页、点按）的时间算作学习，停下来不动的时间不算。只记在本机。")
+                }
+
+                Section {
+                    Toggle(isOn: $clockEnabled) {
+                        Label("时钟", systemImage: "clock")
+                    }
+                    if clockEnabled {
+                        LabeledContent("大小") {
+                            Slider(value: $clockScale, in: 0.6...3)
+                                .frame(maxWidth: 220)
+                        }
+                        Button("放回右上角") {
+                            UserDefaults.standard.set(0.85, forKey: "clockX")
+                            UserDefaults.standard.set(0.06, forKey: "clockY")
+                        }
+                    }
+                } footer: {
+                    Text("时钟浮在页面上，颜色和系统深浅色相反，看得清楚；可以拖到任何位置，双指缩放。")
+                }
+
                 Section {
                     if let p = store.activeProvider {
                         LabeledContent("服务商", value: p.name)
