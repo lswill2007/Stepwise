@@ -47,8 +47,8 @@ final class PadCanvasView: PKCanvasView {
 
 /// 笔记本里所有手写区共用的工具：换一次笔，每道题都生效
 final class InkTools: ObservableObject {
-    /// ask：圈选提问，用笔圈出一步，圈的这一笔不留在纸上
-    enum Tool { case pen, eraser, lasso, ask }
+    /// marker：荧光笔；ask：圈选提问，用笔圈出一步，圈的这一笔不留在纸上
+    enum Tool { case pen, marker, eraser, lasso, ask }
     enum EraserKind: String { case area, stroke }
 
     @Published var tool: Tool = .pen
@@ -59,6 +59,17 @@ final class InkTools: ObservableObject {
     @Published var allowFinger: Bool {
         didSet { UserDefaults.standard.set(allowFinger, forKey: "handwritingAllowFinger") }
     }
+    /// 笔和荧光笔的颜色（十六进制）、粗细，记住上次的选择
+    @Published var penColor: String { didSet { UserDefaults.standard.set(penColor, forKey: "inkPenColor") } }
+    @Published var penWidth: Double { didSet { UserDefaults.standard.set(penWidth, forKey: "inkPenWidth") } }
+    @Published var markerColor: String { didSet { UserDefaults.standard.set(markerColor, forKey: "inkMarkerColor") } }
+    @Published var markerWidth: Double { didSet { UserDefaults.standard.set(markerWidth, forKey: "inkMarkerWidth") } }
+
+    static let penColors = ["#1C1C1E", "#1F4FA8", "#C0392B", "#2E7D32"]
+    static let penWidths: [Double] = [2, 3, 5]
+    static let markerColors = ["#FFE066", "#A5E887", "#FFA8C5", "#9CD3FF"]
+    static let markerWidths: [Double] = [10, 16, 26]
+
     /// 当前是不是“按住侧边”的临时橡皮擦
     @Published private(set) var isTemporaryEraser = false
 
@@ -72,12 +83,21 @@ final class InkTools: ObservableObject {
     init() {
         eraserKind = EraserKind(rawValue: UserDefaults.standard.string(forKey: "handwritingEraserKind") ?? "") ?? .area
         allowFinger = UserDefaults.standard.bool(forKey: "handwritingAllowFinger")
+        let d = UserDefaults.standard
+        penColor = d.string(forKey: "inkPenColor") ?? Self.penColors[0]
+        penWidth = d.object(forKey: "inkPenWidth") as? Double ?? 3
+        markerColor = d.string(forKey: "inkMarkerColor") ?? Self.markerColors[0]
+        markerWidth = d.object(forKey: "inkMarkerWidth") as? Double ?? 16
     }
 
-    static func pkTool(_ tool: Tool, _ eraser: EraserKind) -> PKTool {
+    /// 应用到画布上的工具；key 变了才重新设置
+    var styleKey: String { "\(tool)-\(eraserKind)-\(allowFinger)-\(penColor)-\(penWidth)-\(markerColor)-\(markerWidth)" }
+
+    func pkTool() -> PKTool {
         switch tool {
-        case .pen: return PKInkingTool(.pen, color: .black, width: 3)
-        case .eraser: return eraser == .stroke ? PKEraserTool(.vector) : PKEraserTool(.bitmap, width: 18)
+        case .pen: return PKInkingTool(.pen, color: UIColor(hex: penColor), width: penWidth)
+        case .marker: return PKInkingTool(.marker, color: UIColor(hex: markerColor), width: markerWidth)
+        case .eraser: return eraserKind == .stroke ? PKEraserTool(.vector) : PKEraserTool(.bitmap, width: 18)
         case .lasso: return PKLassoTool()
         case .ask: return PKInkingTool(.pen, color: .systemBlue, width: 2)
         }
@@ -177,10 +197,10 @@ final class HandwritingModel: ObservableObject {
     private var appliedTools: String?
 
     func applyTools() {
-        let key = "\(tools.tool)-\(tools.eraserKind)-\(tools.allowFinger)"
+        let key = tools.styleKey
         guard let canvas, key != appliedTools else { return }
         appliedTools = key
-        canvas.tool = InkTools.pkTool(tools.tool, tools.eraserKind)
+        canvas.tool = tools.pkTool()
         canvas.drawingPolicy = tools.allowFinger ? .anyInput : .pencilOnly
     }
 
@@ -305,10 +325,18 @@ final class HandwritingModel: ObservableObject {
     }
 }
 
+/// 笔记上的涂鸦层盖在文字上面：画布本身不接收触摸，书写手势挂到下面的文字视图上。
+/// 这样手指照样能选字、翻页、点按钮，只有笔的触摸被认成书写
+final class InkHost {
+    weak var view: UIView?
+}
+
 /// 笔记本里的一块手写区：横线纸背景；画布不自己滚动，手指拖动滚的是整本笔记
 struct NotebookCanvas: UIViewRepresentable {
     @ObservedObject var model: HandwritingModel
     @ObservedObject var tools: InkTools
+    /// 笔记上的涂鸦层：书写手势挂到这个视图（下面的文字）上
+    var host: InkHost?
 
     func makeUIView(context: Context) -> PadCanvasView {
         let canvas = PadCanvasView()
@@ -326,12 +354,25 @@ struct NotebookCanvas: UIViewRepresentable {
         // 跟着书写手势看橡皮擦经过哪里，好擦掉批改标注
         canvas.drawingGestureRecognizer.addTarget(context.coordinator, action: #selector(Coordinator.drawingGesture(_:)))
         model.attach(canvas)
+        // 文字视图可能还没建好，下一轮再挂一次
+        attachToHost(canvas)
+        DispatchQueue.main.async { attachToHost(canvas) }
         return canvas
     }
 
     func updateUIView(_ uiView: PadCanvasView, context: Context) {
+        attachToHost(uiView)
         // 工具在任何一块手写区换了，所有手写区跟着换
         if model.canvas !== uiView { model.attach(uiView) } else { model.applyTools() }
+    }
+
+    /// 涂鸦层：书写手势挂到文字视图上，画布不挡触摸；框选时画布要能拖动选中的笔迹
+    private func attachToHost(_ canvas: PadCanvasView) {
+        guard let host else { return }
+        canvas.isUserInteractionEnabled = tools.tool == .lasso
+        if let target = host.view, canvas.drawingGestureRecognizer.view !== target {
+            target.addGestureRecognizer(canvas.drawingGestureRecognizer)
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
@@ -408,6 +449,8 @@ struct NotebookCanvas: UIViewRepresentable {
 /// 浮在笔记本底部的工具条：笔、橡皮、框选、撤销、手指书写
 struct InkPalette: View {
     @ObservedObject var tools: InkTools
+    /// 正在调颜色粗细的工具（再点一次已选中的笔或荧光笔时弹出）
+    @State private var styling: InkTools.Tool?
 
     var body: some View {
         VStack(spacing: 6) {
@@ -419,6 +462,15 @@ struct InkPalette: View {
             }
             HStack(spacing: 4) {
                 toolButton(.pen, title: "笔", icon: "pencil.tip")
+                    .popover(isPresented: Binding(get: { styling == .pen }, set: { if !$0 { styling = nil } })) {
+                        stylePicker(colors: InkTools.penColors, color: $tools.penColor,
+                                    widths: InkTools.penWidths, width: $tools.penWidth, marker: false)
+                    }
+                toolButton(.marker, title: "荧光笔", icon: "highlighter")
+                    .popover(isPresented: Binding(get: { styling == .marker }, set: { if !$0 { styling = nil } })) {
+                        stylePicker(colors: InkTools.markerColors, color: $tools.markerColor,
+                                    widths: InkTools.markerWidths, width: $tools.markerWidth, marker: true)
+                    }
                 toolButton(.eraser, title: tools.eraserKind == .stroke ? "整笔擦" : "橡皮",
                            icon: tools.eraserKind == .stroke ? "eraser.line.dashed" : "eraser")
                     .contextMenu { eraserPicker }
@@ -449,6 +501,45 @@ struct InkPalette: View {
         }
     }
 
+    /// 选颜色和粗细
+    private func stylePicker(colors: [String], color: Binding<String>, widths: [Double], width: Binding<Double>,
+                             marker: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(marker ? "荧光笔" : "笔").font(.headline)
+            HStack(spacing: 14) {
+                ForEach(colors, id: \.self) { hex in
+                    Button {
+                        color.wrappedValue = hex
+                    } label: {
+                        Circle()
+                            .fill(Color(UIColor(hex: hex)))
+                            .frame(width: 30, height: 30)
+                            .overlay(Circle().stroke(Color.primary, lineWidth: color.wrappedValue == hex ? 2.5 : 0).padding(-4))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("颜色")
+                }
+            }
+            HStack(spacing: 14) {
+                ForEach(widths, id: \.self) { w in
+                    Button {
+                        width.wrappedValue = w
+                    } label: {
+                        Capsule()
+                            .fill(Color(UIColor(hex: color.wrappedValue)))
+                            .frame(width: 40, height: max(2, w * (marker ? 0.6 : 1.4)))
+                            .frame(width: 52, height: 30)
+                            .background(width.wrappedValue == w ? Color.secondary.opacity(0.15) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("粗细")
+                }
+            }
+        }
+        .padding(18)
+    }
+
     private var eraserPicker: some View {
         Picker("橡皮擦类型", selection: $tools.eraserKind) {
             Label("局部擦除", systemImage: "eraser").tag(InkTools.EraserKind.area)
@@ -459,9 +550,20 @@ struct InkPalette: View {
     private func toolButton(_ tool: InkTools.Tool, title: String, icon: String) -> some View {
         let selected = tools.tool == tool
         return Button {
-            tools.select(tool)
+            if selected && (tool == .pen || tool == .marker) {
+                styling = tool
+            } else {
+                tools.select(tool)
+            }
         } label: {
-            Label(title, systemImage: icon)
+            Label {
+                if selected { Text(title) }
+            } icon: {
+                // 笔和荧光笔的图标用当前颜色，一眼看出用的是什么笔
+                Image(systemName: icon)
+                    .foregroundStyle(tool == .pen || tool == .marker
+                                     ? Color(UIColor(hex: tool == .pen ? tools.penColor : tools.markerColor)) : Color.primary)
+            }
                 .lineLimit(1)
                 .fixedSize()
                 .font(.callout.weight(selected ? .semibold : .regular))
@@ -497,9 +599,12 @@ final class HandwritingModel: ObservableObject {
     func exportJPEG(highlight: CGRect? = nil) -> Data? { nil }
 }
 
+final class InkHost {}
+
 struct NotebookCanvas: View {
     @ObservedObject var model: HandwritingModel
     @ObservedObject var tools: InkTools
+    var host: InkHost?
     var body: some View { Color.clear }
 }
 
@@ -508,4 +613,15 @@ struct InkPalette: View {
     var body: some View { EmptyView() }
 }
 
+#endif
+
+#if os(iOS)
+extension UIColor {
+    /// "#RRGGBB"
+    convenience init(hex: String) {
+        let value = UInt64(hex.trimmingCharacters(in: CharacterSet(charactersIn: "#")), radix: 16) ?? 0
+        self.init(red: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
+                  blue: CGFloat(value & 0xFF) / 255, alpha: 1)
+    }
+}
 #endif

@@ -427,6 +427,7 @@ struct NoteDocView: View {
             NoteTextBlockView(noteID: noteID, block: block, editing: $editing,
                               streaming: store.noteJobs[noteID]?.afterBlock == block.id,
                               busy: store.noteJobs[noteID] != nil,
+                              ink: block.kind == .text && HandwritingModel.isAvailable ? ink.model(for: block.id) : nil,
                               onSelect: { handleSelection($0, in: block.id) },
                               onExercises: { exercises(count: $0, after: block) }) {
                 blockMenu(block, in: doc)
@@ -549,7 +550,8 @@ struct NoteDocView: View {
                 askBar(sel, busy: busy)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if HandwritingModel.isAvailable && doc.blocks.contains(where: { $0.kind == .exercise }) {
+            // 笔记上可以直接涂鸦、画荧光笔，练习题要手写：工具条一直在
+            if HandwritingModel.isAvailable {
                 InkPalette(tools: ink.tools)
             }
         }
@@ -619,6 +621,8 @@ struct NoteTextBlockView<MenuContent: View>: View {
     let streaming: Bool
     /// 有 AI 任务在进行，不能再出题
     let busy: Bool
+    /// 这一块上的涂鸦（笔、荧光笔）；为 nil 时不能涂鸦
+    let ink: HandwritingModel?
     let onSelect: (String) -> Void
     /// 小节下面的“出例题”，参数是出几道
     let onExercises: (Int) -> Void
@@ -626,6 +630,8 @@ struct NoteTextBlockView<MenuContent: View>: View {
 
     @State private var draft = ""
     @FocusState private var focused: Bool
+    /// 文字视图，涂鸦层把书写手势挂上去
+    @State private var inkHost = InkHost()
 
     private var isEditing: Bool { editing == block.id }
 
@@ -660,7 +666,13 @@ struct NoteTextBlockView<MenuContent: View>: View {
                             .buttonStyle(InkTextButtonStyle(color: .secondary))
                     }
                 } else {
-                    RichText(block.text, onSelect: onSelect)
+                    RichText(block.text, onSelect: onSelect, host: inkHost)
+                        // 涂鸦层盖在文字上：笔写字、画荧光笔；手指照样能选字、翻页
+                        .overlay {
+                            if let ink {
+                                NotebookCanvas(model: ink, tools: ink.tools, host: inkHost)
+                            }
+                        }
                     // 每个小节下面可以出几道例题
                     if block.kind == .text {
                         HStack {

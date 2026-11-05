@@ -51,7 +51,10 @@ extension AppStore {
 
     func deleteNote(_ id: UUID) {
         stopNoteJob(id)
-        if let doc = note(id) { deleteSet(doc.exerciseSetID) }
+        if let doc = note(id) {
+            deleteSet(doc.exerciseSetID)
+            DrawingStore.delete(doc.blocks.map(\.id))
+        }
         notes.removeAll { $0.id == id }
         if selectedNoteID == id { selectedNoteID = nil }
     }
@@ -99,6 +102,7 @@ extension AppStore {
                 }
             }
         }
+        DrawingStore.delete([blockID])
         mutateNote(docID) { $0.blocks.removeAll { $0.id == blockID } }
         renumberExercises(docID)
     }

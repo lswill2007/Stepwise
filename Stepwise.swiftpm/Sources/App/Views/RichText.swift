@@ -14,21 +14,25 @@ struct RichText: View {
     var tone: RichTone = .normal
     /// 选中文字时回调（选中的文字；取消选中时为空）。笔记里用来选中提问
     var onSelect: ((String) -> Void)?
+    /// 拿到显示文字的视图：笔记的涂鸦层把书写手势挂上去
+    var host: InkHost?
 
     @State private var height: CGFloat
 
-    init(_ text: String, scale: Double = 1, tone: RichTone = .normal, onSelect: ((String) -> Void)? = nil) {
+    init(_ text: String, scale: Double = 1, tone: RichTone = .normal, onSelect: ((String) -> Void)? = nil,
+         host: InkHost? = nil) {
         self.text = text
         self.scale = scale
         self.tone = tone
         self.onSelect = onSelect
+        self.host = host
         // 渲染完成前的估计高度，减少跳动
         let lines = text.components(separatedBy: "\n").reduce(0) { $0 + max(1, $1.count / 45 + 1) }
         _height = State(initialValue: CGFloat(min(lines, 40)) * 26 * CGFloat(scale))
     }
 
     var body: some View {
-        MathWebView(text: text, scale: scale, tone: tone, onSelect: onSelect, height: $height)
+        MathWebView(text: text, scale: scale, tone: tone, onSelect: onSelect, host: host, height: $height)
             .frame(height: max(height, 18))
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -128,6 +132,7 @@ struct MathWebView: UIViewRepresentable {
     let scale: Double
     let tone: RichTone
     let onSelect: ((String) -> Void)?
+    let host: InkHost?
     @Binding var height: CGFloat
 
     func makeCoordinator() -> MathWebCoordinator { MathWebCoordinator(height: $height) }
@@ -136,6 +141,9 @@ struct MathWebView: UIViewRepresentable {
         context.coordinator.onSelect = onSelect
         let web = context.coordinator.makeWebView()
         context.coordinator.update(text: text, scale: scale, tone: tone)
+        #if os(iOS)
+        host?.view = web
+        #endif
         return web
     }
 
@@ -151,6 +159,7 @@ struct MathWebView: NSViewRepresentable {
     let scale: Double
     let tone: RichTone
     let onSelect: ((String) -> Void)?
+    let host: InkHost?
     @Binding var height: CGFloat
 
     func makeCoordinator() -> MathWebCoordinator { MathWebCoordinator(height: $height) }
@@ -159,6 +168,9 @@ struct MathWebView: NSViewRepresentable {
         context.coordinator.onSelect = onSelect
         let web = context.coordinator.makeWebView()
         context.coordinator.update(text: text, scale: scale, tone: tone)
+        #if os(iOS)
+        host?.view = web
+        #endif
         return web
     }
 

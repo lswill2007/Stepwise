@@ -13,7 +13,7 @@ struct LibraryBackup: Codable {
     var sets: [QuestionSet]
     /// 图片文件名 → JPEG 数据
     var images: [String: Data]
-    /// 题目 id → 手写笔迹（PencilKit 数据）
+    /// 题目 id（笔记块 id）→ 手写笔迹、笔记上的涂鸦（PencilKit 数据）
     var drawings: [String: Data]
     /// 题集所在的文件夹（连同上级文件夹），导入后保持同样的分类；旧版本的备份没有
     var folders: [Folder]?
@@ -41,6 +41,9 @@ struct LibraryBackup: Codable {
         var drawings: [String: Data] = [:]
         for q in sets.flatMap(\.questions) {
             drawings[q.id.uuidString] = DrawingStore.load(q.id)
+        }
+        for block in notes.flatMap(\.blocks) {
+            drawings[block.id.uuidString] = DrawingStore.load(block.id)
         }
         self.drawings = drawings
     }
@@ -172,9 +175,18 @@ extension AppStore {
         var importedNotes: [NoteDoc] = []
         for var doc in backup.notes ?? [] {
             let oldNoteID = doc.id
-            if notes.contains(where: { $0.id == doc.id }) {
+            let copy = notes.contains(where: { $0.id == doc.id })
+            if copy {
                 doc.id = UUID()
                 doc.title += "（导入）"
+            }
+            // 笔记上的涂鸦：副本的块换新 id，涂鸦跟着换
+            for i in doc.blocks.indices {
+                let oldID = doc.blocks[i].id
+                if copy { doc.blocks[i].id = UUID() }
+                if let data = backup.drawings[oldID.uuidString], !DrawingStore.exists(doc.blocks[i].id) {
+                    DrawingStore.save(data, for: doc.blocks[i].id)
+                }
             }
             doc.exerciseSetID = setIDMap[doc.exerciseSetID] ?? doc.exerciseSetID
             for i in doc.blocks.indices {
