@@ -47,6 +47,11 @@ final class AppStore: ObservableObject {
     /// 左侧笔记目录点了哪一块，笔记就滚到哪一块
     @Published var noteJump: UUID?
     var noteTasks: [UUID: Task<Void, Never>] = [:]
+    /// 做题卡住时找到的相关笔记（题目 id → 引导）；正在找的任务
+    @Published var noteGuides: [UUID: NoteGuide] = [:]
+    var noteGuideTasks: [UUID: Task<Void, Never>] = [:]
+    /// 正在看的引导：笔记页上临时荧光笔标出重点，页边有“详细记录”
+    @Published var activeNoteGuide: NoteGuide?
     private var notesSaveTask: Task<Void, Never>?
 
     /// 左侧“错题本”这一项的固定 id
@@ -368,6 +373,7 @@ final class AppStore: ObservableObject {
             q.reviewRounds = nil
         }
         reviewOutcomes[qID] = nil
+        noteGuides[qID] = nil
         DrawingStore.delete([qID])
     }
 
@@ -416,6 +422,7 @@ final class AppStore: ObservableObject {
             q.reviewRounds = 0
         }
         reviewOutcomes[qID] = nil
+        noteGuides[qID] = nil
         DrawingStore.delete([qID])
     }
 
@@ -528,12 +535,16 @@ final class AppStore: ObservableObject {
                     q.status = .wrong
                 }
             }
+            // 做错了：看看同一个文件夹的笔记里有没有相关的知识点（在 mutate 外面，不能边改题库边读）
+            if correct { self?.noteGuides[qID] = nil } else { self?.findRelatedNote(setID, qID, wrong: true) }
         }
     }
 
     /// note：学生补充的文字说明（卡在哪里），可以为空
     func requestHint(_ setID: UUID, _ qID: UUID, note: String? = nil) {
         guard let q = question(setID, qID) else { return }
+        // 不会做：先看看笔记里有没有相关的知识点
+        findRelatedNote(setID, qID, wrong: false)
         let level = q.hintCount + 1
         let note = note?.trimmingCharacters(in: .whitespacesAndNewlines)
         var message = ChatMessage(role: .user, kind: .hintRequest, text: "需要进一步提示（第 \(level) 次）",

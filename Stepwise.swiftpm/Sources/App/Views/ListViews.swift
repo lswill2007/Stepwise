@@ -291,6 +291,10 @@ struct NoteRow: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(doc.title).font(.headline).lineLimit(2)
+                if store.folder(doc.folderID) != nil {
+                    Label(store.folderPath(doc.folderID), systemImage: "folder")
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
                 HStack(spacing: 6) {
                     if store.noteJobs[doc.id] != nil {
                         ProgressView().controlSize(.mini)
@@ -317,6 +321,10 @@ struct NoteRow: View {
     @ViewBuilder
     private var menuItems: some View {
         Button("重命名", systemImage: "pencil", action: rename)
+        // 放进和题集同一个文件夹：做这个文件夹里的题卡住时，会先引导去看这篇笔记
+        MoveMenu(excluding: nil, current: store.folder(doc.folderID)?.id) { folderID in
+            store.mutateNote(doc.id) { $0.folderID = folderID }
+        }
         Button("删除", systemImage: "trash", role: .destructive, action: delete)
     }
 }

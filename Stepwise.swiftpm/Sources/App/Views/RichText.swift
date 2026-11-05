@@ -16,23 +16,26 @@ struct RichText: View {
     var onSelect: ((String) -> Void)?
     /// 拿到显示文字的视图：笔记的涂鸦层把书写手势挂上去
     var host: InkHost?
+    /// 临时荧光笔标出的一句话（看笔记时的重点）；找不到这句话就把整块淡淡地标一下
+    var highlight: String?
 
     @State private var height: CGFloat
 
     init(_ text: String, scale: Double = 1, tone: RichTone = .normal, onSelect: ((String) -> Void)? = nil,
-         host: InkHost? = nil) {
+         host: InkHost? = nil, highlight: String? = nil) {
         self.text = text
         self.scale = scale
         self.tone = tone
         self.onSelect = onSelect
         self.host = host
+        self.highlight = highlight
         // 渲染完成前的估计高度，减少跳动
         let lines = text.components(separatedBy: "\n").reduce(0) { $0 + max(1, $1.count / 45 + 1) }
         _height = State(initialValue: CGFloat(min(lines, 40)) * 26 * CGFloat(scale))
     }
 
     var body: some View {
-        MathWebView(text: text, scale: scale, tone: tone, onSelect: onSelect, host: host, height: $height)
+        MathWebView(text: text, scale: scale, tone: tone, highlight: highlight, onSelect: onSelect, host: host, height: $height)
             .frame(height: max(height, 18))
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -49,6 +52,7 @@ final class MathWebCoordinator: NSObject, WKNavigationDelegate {
     private var lastContent: String?
     private var lastScale: Double?
     private var lastTone: RichTone = .normal
+    private var lastHighlight: String?
 
     init(height: Binding<CGFloat>) {
         self.height = height
@@ -79,19 +83,20 @@ final class MathWebCoordinator: NSObject, WKNavigationDelegate {
         return web
     }
 
-    func update(text: String, scale: Double, tone: RichTone) {
-        guard text != lastContent || scale != lastScale || tone != lastTone else { return }
+    func update(text: String, scale: Double, tone: RichTone, highlight: String? = nil) {
+        guard text != lastContent || scale != lastScale || tone != lastTone || highlight != lastHighlight else { return }
         lastContent = text
         lastScale = scale
         lastTone = tone
+        lastHighlight = highlight
         if loaded { push() }
     }
 
     private func push() {
         guard let text = lastContent,
-              let data = try? JSONSerialization.data(withJSONObject: [text]),
+              let data = try? JSONSerialization.data(withJSONObject: [text, lastHighlight ?? ""]),
               let json = String(data: data, encoding: .utf8) else { return }
-        webView?.evaluateJavaScript("setContent(\(json)[0], \(lastScale ?? 1), '\(lastTone.rawValue)')")
+        webView?.evaluateJavaScript("setContent(\(json)[0], \(lastScale ?? 1), '\(lastTone.rawValue)', \(json)[1])")
     }
 
     func receivedHeight(_ value: CGFloat) {
@@ -131,6 +136,7 @@ struct MathWebView: UIViewRepresentable {
     let text: String
     let scale: Double
     let tone: RichTone
+    let highlight: String?
     let onSelect: ((String) -> Void)?
     let host: InkHost?
     @Binding var height: CGFloat
@@ -140,7 +146,7 @@ struct MathWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         context.coordinator.onSelect = onSelect
         let web = context.coordinator.makeWebView()
-        context.coordinator.update(text: text, scale: scale, tone: tone)
+        context.coordinator.update(text: text, scale: scale, tone: tone, highlight: highlight)
         #if os(iOS)
         host?.view = web
         #endif
@@ -150,7 +156,7 @@ struct MathWebView: UIViewRepresentable {
     func updateUIView(_ web: WKWebView, context: Context) {
         context.coordinator.height = $height
         context.coordinator.onSelect = onSelect
-        context.coordinator.update(text: text, scale: scale, tone: tone)
+        context.coordinator.update(text: text, scale: scale, tone: tone, highlight: highlight)
     }
 }
 #else
@@ -158,6 +164,7 @@ struct MathWebView: NSViewRepresentable {
     let text: String
     let scale: Double
     let tone: RichTone
+    let highlight: String?
     let onSelect: ((String) -> Void)?
     let host: InkHost?
     @Binding var height: CGFloat
@@ -167,7 +174,7 @@ struct MathWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         context.coordinator.onSelect = onSelect
         let web = context.coordinator.makeWebView()
-        context.coordinator.update(text: text, scale: scale, tone: tone)
+        context.coordinator.update(text: text, scale: scale, tone: tone, highlight: highlight)
         #if os(iOS)
         host?.view = web
         #endif
@@ -177,7 +184,7 @@ struct MathWebView: NSViewRepresentable {
     func updateNSView(_ web: WKWebView, context: Context) {
         context.coordinator.height = $height
         context.coordinator.onSelect = onSelect
-        context.coordinator.update(text: text, scale: scale, tone: tone)
+        context.coordinator.update(text: text, scale: scale, tone: tone, highlight: highlight)
     }
 }
 #endif
@@ -255,6 +262,8 @@ enum MathTemplate {
     .katex .base{margin:.2em 0}
     .katex-display{margin:.5em 0;overflow-x:auto;overflow-y:hidden;padding:.2em 0}
     .tex{font-family:ui-monospace,Menlo,monospace;font-size:.92em;opacity:.75}
+    mark.hl{background:rgba(255,214,0,.5);color:inherit;border-radius:3px;padding:0 1px}
+    #c.hl-all{background:rgba(255,214,0,.16);border-radius:6px}
     </style>
     </head><body><div id="c"></div>
     <script>
@@ -382,10 +391,31 @@ enum MathTemplate {
         .replace(/\u0001(\d+)\u0001/g, function (m, k) { return "<pre><code>" + esc(codes[k]) + "</code></pre>"; });
     }
 
-    function draw() { box.innerHTML = md(SRC); post(); }
+    var HL = "";
+    // 临时荧光笔：在排版后的文字里找到这句话包上 <mark>；找不到就把整块淡淡地标一下
+    function applyHL() {
+      box.classList.remove("hl-all");
+      if (!HL) return;
+      var walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT), node;
+      while ((node = walker.nextNode())) {
+        var i = node.nodeValue.indexOf(HL);
+        if (i < 0) continue;
+        var range = document.createRange();
+        range.setStart(node, i);
+        range.setEnd(node, i + HL.length);
+        var mark = document.createElement("mark");
+        mark.className = "hl";
+        range.surroundContents(mark);
+        return;
+      }
+      box.classList.add("hl-all");
+    }
 
-    function setContent(s, scale, tone) {
+    function draw() { box.innerHTML = md(SRC); applyHL(); post(); }
+
+    function setContent(s, scale, tone, hl) {
       SRC = s;
+      HL = hl || "";
       document.body.className = tone || "";
       document.documentElement.style.setProperty("--scale", scale || 1);
       draw();

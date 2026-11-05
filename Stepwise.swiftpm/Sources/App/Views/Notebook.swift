@@ -176,6 +176,10 @@ struct QuestionBlock: View {
                 let work = VStack(alignment: .leading, spacing: 12) {
                     writingArea(q)
                     actionRow(q)
+                    // 做错了或者不会：笔记里有相关的知识点，先引导去看笔记
+                    if q.status != .passed, let guide = store.noteGuides[qID] {
+                        NoteGuideBanner(guide: guide)
+                    }
                 }
                 if wide {
                     HStack(alignment: .top, spacing: 18) {
@@ -1181,5 +1185,37 @@ struct QuestionHistoryView: View {
                 ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
             }
         }
+    }
+}
+
+/// 题目下面：“笔记里讲过这个”，点一下去看笔记
+struct NoteGuideBanner: View {
+    @EnvironmentObject var store: AppStore
+    let guide: NoteGuide
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "book")
+                .foregroundStyle(Ink.blue)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("先看看笔记：\(guide.summary)")
+                    .font(.callout.weight(.medium))
+                if let title = store.note(guide.noteID)?.title {
+                    Text("《\(title)》里讲过").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 8)
+            Button("去看笔记 →") { store.openNoteGuide(guide) }
+                .buttonStyle(InkTextButtonStyle(color: Ink.blue))
+            Button {
+                store.noteGuides[guide.questionID] = nil
+            } label: {
+                Image(systemName: "xmark").font(.caption.weight(.semibold))
+            }
+            .buttonStyle(InkTextButtonStyle(color: .secondary))
+            .accessibilityLabel("不用了")
+        }
+        .padding(.vertical, 4)
+        .marginRule(Ink.blue)
     }
 }

@@ -21,6 +21,9 @@ struct NoteImportView: View {
     /// 出不出例题：不出 / 必要时出 / 更多例题；记住上次的选择
     @AppStorage("noteExerciseLevel") private var exerciseLevel: NoteExerciseLevel = .needed
     @State private var title = ""
+    /// 放到哪个文件夹；默认是当前打开的题集所在的文件夹
+    @State private var folderID: UUID?
+    @State private var folderInitialized = false
 
     @State private var showFilePicker = false
     @State private var photoItems: [PhotosPickerItem] = []
@@ -107,8 +110,27 @@ struct NoteImportView: View {
                     Text(exerciseLevel.detail + "练习题下面就是手写区，可以直接批改。")
                 }
 
-                Section("笔记名称（可选，不填由 AI 起名）") {
+                Section {
                     TextField("例如：第三章 函数 复习", text: $title)
+                    if !store.folders.isEmpty {
+                        Picker("放到文件夹", selection: $folderID) {
+                            Text("最外层").tag(UUID?.none)
+                            ForEach(store.folderTree(), id: \.folder.id) { item in
+                                Text(String(repeating: "    ", count: item.depth) + item.folder.name).tag(Optional(item.folder.id))
+                            }
+                        }
+                        .onAppear {
+                            guard !folderInitialized else { return }
+                            folderInitialized = true
+                            folderID = store.set(store.selectedSetID)?.folderID.flatMap { store.folder($0)?.id }
+                        }
+                    }
+                } header: {
+                    Text("笔记名称（可选，不填由 AI 起名）")
+                } footer: {
+                    if !store.folders.isEmpty {
+                        Text("和题集放在同一个文件夹，做里面的题卡住时会先引导你看这篇笔记。")
+                    }
                 }
 
                 Section {
@@ -209,7 +231,8 @@ struct NoteImportView: View {
             return
         }
         do {
-            try store.startNoteGeneration(material: source, prompt: prompt, exercises: exerciseLevel, title: title)
+            try store.startNoteGeneration(material: source, prompt: prompt, exercises: exerciseLevel, title: title,
+                                          folderID: folderID)
             dismiss()
         } catch {
             if !(error is ConsentRequired) { store.errorMessage = error.localizedDescription }
@@ -318,7 +341,8 @@ struct NoteDocView: View {
     }
 
     @StateObject private var ink = NotebookInk()
-    @State private var width: CGFloat = 800
+    /// 先当作很窄：第一次排版不会把页面撑宽，量到实际宽度后再按实际排
+    @State private var width: CGFloat = 0
     @State private var editing: UUID?
     @State private var selection: Selection?
     @State private var showAskField = false
@@ -445,6 +469,8 @@ struct NoteDocView: View {
                               comments: (doc.comments ?? []).filter { $0.blockID == block.id },
                               commentMargin: commentMargin,
                               paperScale: paperScale,
+                              guide: store.activeNoteGuide?.noteID == noteID && store.activeNoteGuide?.blockID == block.id
+                                  ? store.activeNoteGuide : nil,
                               onSelect: { handleSelection($0, in: block.id) },
                               onExercises: { exercises(count: $0, after: block) }) {
                 blockMenu(block, in: doc)
@@ -652,6 +678,8 @@ struct NoteTextBlockView<MenuContent: View>: View {
     let commentMargin: CGFloat?
     /// 笔记文字（纸宽固定）缩放到页面上的比例
     let paperScale: CGFloat
+    /// 做题卡住时被引导来看的就是这一块：临时荧光笔标出重点，页边有“详细记录”
+    let guide: NoteGuide?
     let onSelect: (String) -> Void
     /// 小节下面的“出例题”，参数是出几道
     let onExercises: (Int) -> Void
@@ -684,8 +712,9 @@ struct NoteTextBlockView<MenuContent: View>: View {
 
     @ViewBuilder
     private var commentColumn: some View {
-        if !comments.isEmpty {
+        if !comments.isEmpty || guide != nil {
             VStack(alignment: .leading, spacing: 10) {
+                if let guide { NoteGuideCard(guide: guide) }
                 ForEach(Array(comments.enumerated()), id: \.element.id) { i, comment in
                     NoteCommentView(noteID: noteID, comment: comment, number: i + 1)
                 }
@@ -724,7 +753,8 @@ struct NoteTextBlockView<MenuContent: View>: View {
                             .buttonStyle(InkTextButtonStyle(color: .secondary))
                     }
                 } else {
-                    RichText(block.text, onSelect: onSelect, host: inkHost)
+                    RichText(block.text, onSelect: onSelect, host: inkHost,
+                             highlight: guide.map { Tutor.highlightKey($0.quote) })
                         // 圈出来问过的地方：淡淡的虚线框和序号，对应页边的批注
                         .overlay(alignment: .topLeading) { circledMarks }
                         // 涂鸦层盖在文字上：笔写字、画荧光笔；手指照样能选字、翻页
@@ -1034,7 +1064,7 @@ struct NoteCommentView: View {
 
 /// 笔记文字的“纸”：固定宽度排版，整体缩放到页面上，占位大小跟着缩放
 struct NotePaper: ViewModifier {
-    static let width: CGFloat = 520
+    static let width: CGFloat = 460
     let scale: CGFloat
 
     func body(content: Content) -> some View {
@@ -1051,10 +1081,45 @@ private struct PaperLayout: Layout {
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let height = subviews.first?.sizeThatFits(ProposedViewSize(width: width, height: nil)).height ?? 0
-        return CGSize(width: width * scale, height: height * scale)
+        // 不比给的宽度更宽：否则会把整页撑宽，量出来的页面宽度又跟着变大
+        return CGSize(width: min(width * scale, proposal.width ?? .infinity), height: height * scale)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: width, height: nil))
+    }
+}
+
+/// 被引导来看笔记时，页边的一张卡：记下这个知识点、回到题目
+private struct NoteGuideCard: View {
+    @EnvironmentObject var store: AppStore
+    let guide: NoteGuide
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("做题时卡在这里", systemImage: "highlighter")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+            if !guide.summary.isEmpty {
+                Button {
+                    store.recordDetail(guide)
+                } label: {
+                    Label("详细记录：\(guide.summary)", systemImage: "plus")
+                        .font(.caption.weight(.medium))
+                        .multilineTextAlignment(.leading)
+                }
+                .buttonStyle(InkTextButtonStyle())
+                .disabled(store.noteJobs[guide.noteID] != nil)
+            }
+            Button {
+                store.returnFromNoteGuide()
+            } label: {
+                Label("回到题目", systemImage: "arrow.uturn.backward").font(.caption.weight(.medium))
+            }
+            .buttonStyle(InkTextButtonStyle(color: Ink.blue))
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
     }
 }

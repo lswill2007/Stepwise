@@ -26,6 +26,8 @@ extension AppStore {
     }
 
     func selectNote(_ id: UUID?) {
+        // 自己翻到别的笔记：临时荧光笔不用再留着
+        if activeNoteGuide?.noteID != id { activeNoteGuide = nil }
         selectedNoteID = id
         if id != nil {
             selectedSetID = nil
@@ -165,13 +167,15 @@ extension AppStore {
     // MARK: 生成笔记
 
     /// 导入资料后开始生成笔记：先建好空笔记并打开，AI 写完一块就加一块
-    func startNoteGeneration(material: ImportedMaterial, prompt: String, exercises: NoteExerciseLevel, title: String) throws {
+    func startNoteGeneration(material: ImportedMaterial, prompt: String, exercises: NoteExerciseLevel, title: String,
+                             folderID: UUID? = nil) throws {
         let client = try makeClient(for: .note)
         let chunks = Importer.chunks(for: material)
         guard !chunks.isEmpty else { throw LLMError(message: "没有可以整理的内容。") }
         let givenTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let docID = createNote(title: givenTitle.isEmpty ? material.name : givenTitle,
                                sourceName: material.name, prompt: prompt)
+        mutateNote(docID) { $0.folderID = folderID }
         noteJobs[docID] = NoteJob(label: "正在生成笔记…")
 
         noteTasks[docID] = Task { [weak self] in
