@@ -15,7 +15,7 @@
 1. 安装 Xcode（App Store）。
 2. 用 Xcode 打开 `Stepwise.swiftpm` 文件夹，选 iPad 模拟器或连接的 iPad，点运行。
 
-首次打开会进入设置：选一个服务商，粘贴 API Key，选好模型，点“设为当前使用”。
+首次打开会进入设置：选一个服务商，粘贴 API Key，选好模型，点“设为当前使用”。申请 API Key、选模型的详细教程见仓库根目录的 README.md。
 
 ## 功能
 
