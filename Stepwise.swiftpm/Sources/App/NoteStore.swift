@@ -159,7 +159,7 @@ extension AppStore {
     // MARK: 生成笔记
 
     /// 导入资料后开始生成笔记：先建好空笔记并打开，AI 写完一块就加一块
-    func startNoteGeneration(material: ImportedMaterial, prompt: String, exercises: Bool, title: String) throws {
+    func startNoteGeneration(material: ImportedMaterial, prompt: String, exercises: NoteExerciseLevel, title: String) throws {
         let client = try makeClient(for: .note)
         let chunks = Importer.chunks(for: material)
         guard !chunks.isEmpty else { throw LLMError(message: "没有可以整理的内容。") }
@@ -243,8 +243,10 @@ extension AppStore {
 
     // MARK: 选中文字提问
 
-    /// 选中笔记里的一段提问。回答写成一块新笔记，插在选中的那一块后面；出练习题时插入一道练习题
-    func askNote(_ docID: UUID, blockID: UUID, selection: String, title: String, prompt: String, makesExercise: Bool) {
+    /// 选中笔记里的一段提问。回答写成一块新笔记，插在选中的那一块后面；
+    /// exerciseCount 大于 0 时是出练习题，依次插在那一块后面
+    func askNote(_ docID: UUID, blockID: UUID, selection: String, title: String, prompt: String, exerciseCount: Int = 0) {
+        let makesExercise = exerciseCount > 0
         guard noteTasks[docID] == nil, let doc = note(docID),
               let block = doc.blocks.first(where: { $0.id == blockID }) else { return }
         let client: LLMClient
@@ -258,17 +260,22 @@ extension AppStore {
         }
         let system = Tutor.noteAskSystem(doc: doc)
         let messages = [LLMMessage(role: .user, parts: [.text(Tutor.noteAskInstruction(
-            selection: selection, block: source, question: prompt, makesExercise: makesExercise))])]
+            selection: selection, block: source, question: prompt, exerciseCount: exerciseCount))])]
 
         if makesExercise {
-            noteJobs[docID] = NoteJob(label: "正在出题…", afterBlock: blockID)
+            noteJobs[docID] = NoteJob(label: exerciseCount > 1 ? "正在出 \(exerciseCount) 道题…" : "正在出题…", afterBlock: blockID)
             noteTasks[docID] = Task { [weak self] in
                 do {
                     let output = try await client.complete(system: system, messages: messages)
                     try Task.checkCancellation()
                     guard let self else { return }
-                    if let item = Tutor.parseNote(output).items.first(where: { $0.kind == .exercise }) {
-                        self.addExercise(to: docID, after: blockID, content: item.text, answer: item.answer)
+                    let items = Tutor.parseNote(output).items.filter { $0.kind == .exercise }.prefix(exerciseCount)
+                    if !items.isEmpty {
+                        // 按顺序一道接一道插在这一块后面
+                        var after = blockID
+                        for item in items {
+                            if let id = self.addExercise(to: docID, after: after, content: item.text, answer: item.answer) { after = id }
+                        }
                     } else {
                         self.errorMessage = "AI 没有按格式出题，请再试一次。"
                     }

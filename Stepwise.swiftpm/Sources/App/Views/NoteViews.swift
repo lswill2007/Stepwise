@@ -15,8 +15,8 @@ struct NoteImportView: View {
     /// 程序根据自动判断结果同步开关时，不要触发重新渲染
     @State private var syncingToggle = false
     @State private var prompt = ""
-    /// 固定选项：在没有例题的重要知识点后面加练习题和手写批改区
-    @State private var withExercises = true
+    /// 出不出例题：不出 / 必要时出 / 更多例题；记住上次的选择
+    @AppStorage("noteExerciseLevel") private var exerciseLevel: NoteExerciseLevel = .needed
     @State private var title = ""
 
     @State private var showFilePicker = false
@@ -92,13 +92,16 @@ struct NoteImportView: View {
                 }
 
                 Section {
-                    Toggle(isOn: $withExercises) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("需要例题")
-                            Text("资料里没有例题的重要知识点后面，加一道练习题和手写批改区")
-                                .font(.caption).foregroundStyle(.secondary)
+                    Picker("例题", selection: $exerciseLevel) {
+                        ForEach(NoteExerciseLevel.allCases) { level in
+                            Text(level.title).tag(level)
                         }
                     }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("例题")
+                } footer: {
+                    Text(exerciseLevel.detail + "练习题下面就是手写区，可以直接批改。")
                 }
 
                 Section("笔记名称（可选，不填由 AI 起名）") {
@@ -203,7 +206,7 @@ struct NoteImportView: View {
             return
         }
         do {
-            try store.startNoteGeneration(material: source, prompt: prompt, exercises: withExercises, title: title)
+            try store.startNoteGeneration(material: source, prompt: prompt, exercises: exerciseLevel, title: title)
             dismiss()
         } catch {
             if !(error is ConsentRequired) { store.errorMessage = error.localizedDescription }
@@ -423,7 +426,9 @@ struct NoteDocView: View {
         case .text, .answer:
             NoteTextBlockView(noteID: noteID, block: block, editing: $editing,
                               streaming: store.noteJobs[noteID]?.afterBlock == block.id,
-                              onSelect: { handleSelection($0, in: block.id) }) {
+                              busy: store.noteJobs[noteID] != nil,
+                              onSelect: { handleSelection($0, in: block.id) },
+                              onExercises: { exercises(count: $0, after: block) }) {
                 blockMenu(block, in: doc)
             }
         case .exercise:
@@ -454,10 +459,6 @@ struct NoteDocView: View {
                 Button("编辑", systemImage: "pencil") { editing = block.id }
             }
             Button("在下面加笔记块", systemImage: "text.badge.plus") { addTextBlock(after: block.id) }
-            Button("在下面出一道练习题", systemImage: "pencil.and.list.clipboard") {
-                askAboutBlock(block, option: Tutor.noteAskOptions.first { $0.makesExercise }!)
-            }
-            .disabled(busy)
             Divider()
             Button("上移", systemImage: "arrow.up") { store.moveBlock(noteID, block.id, by: -1) }
                 .disabled(index == 0)
@@ -531,17 +532,14 @@ struct NoteDocView: View {
 
     private func ask(_ option: Tutor.NoteAskOption, about sel: Selection) {
         store.askNote(noteID, blockID: sel.blockID, selection: sel.text,
-                      title: option.title, prompt: option.prompt, makesExercise: option.makesExercise)
+                      title: option.title, prompt: option.prompt, exerciseCount: option.makesExercise ? 1 : 0)
         selection = nil
     }
 
-    /// 对整块提问（块菜单里“出一道练习题”）
-    private func askAboutBlock(_ block: NoteBlock, option: Tutor.NoteAskOption) {
-        var text = block.text
-        if block.kind == .exercise, let qID = block.questionID, let doc = store.note(noteID) {
-            text = store.question(doc.exerciseSetID, qID)?.content ?? ""
-        }
-        ask(option, about: Selection(blockID: block.id, text: Tutor.clip(text, 600)))
+    /// 小节下面的“出例题”：针对整个小节出几道练习题，插在这一小节后面
+    private func exercises(count: Int, after block: NoteBlock) {
+        store.askNote(noteID, blockID: block.id, selection: Tutor.clip(block.text, 600), title: "出例题",
+                      prompt: "请针对这一小节的内容出 \(count) 道练习题。", exerciseCount: count)
     }
 
     @ViewBuilder
@@ -619,7 +617,11 @@ struct NoteTextBlockView<MenuContent: View>: View {
     @Binding var editing: UUID?
     /// 回答正在写
     let streaming: Bool
+    /// 有 AI 任务在进行，不能再出题
+    let busy: Bool
     let onSelect: (String) -> Void
+    /// 小节下面的“出例题”，参数是出几道
+    let onExercises: (Int) -> Void
     @ViewBuilder let menu: () -> MenuContent
 
     @State private var draft = ""
@@ -659,6 +661,22 @@ struct NoteTextBlockView<MenuContent: View>: View {
                     }
                 } else {
                     RichText(block.text, onSelect: onSelect)
+                    // 每个小节下面可以出几道例题
+                    if block.kind == .text {
+                        HStack {
+                            Spacer()
+                            Menu {
+                                ForEach(1...3, id: \.self) { n in
+                                    Button("出 \(n) 道") { onExercises(n) }
+                                }
+                            } label: {
+                                Label("出例题", systemImage: "pencil.and.list.clipboard")
+                                    .font(.caption)
+                                    .foregroundStyle(busy ? Color.secondary : Ink.pen)
+                            }
+                            .disabled(busy)
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

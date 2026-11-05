@@ -2,12 +2,35 @@ import Foundation
 
 // MARK: - 笔记模式的提示词和输出解析
 
+/// 生成笔记时出不出例题（练习题）
+enum NoteExerciseLevel: String, CaseIterable, Identifiable {
+    case off, needed, more
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .off: return "不出"
+        case .needed: return "必要时出"
+        case .more: return "更多例题"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .off: return "只整理笔记，不加练习题。之后可以在任意小节下面点“出例题”。"
+        case .needed: return "资料里没有例题的重要知识点后面，加一道练习题和手写批改区。"
+        case .more: return "每个重要知识点后面都加 1–2 道练习题，由浅入深，适合复习时多练。"
+        }
+    }
+}
+
 extension Tutor {
     /// 生成笔记时默认的要求
     static let defaultNotePrompt = "整理成预习和复习用的笔记：按小节列出核心概念、公式、方法和易错点"
 
-    /// exercises：没有例题的重要知识点后面加一道练习题
-    static func noteSystem(prompt: String, exercises: Bool, hasImages: Bool, multiPart: Bool, first: Bool) -> String {
+    /// exercises：出不出练习题、出多少
+    static func noteSystem(prompt: String, exercises: NoteExerciseLevel, hasImages: Bool, multiPart: Bool, first: Bool) -> String {
         var s = """
         你是一位擅长整理学习资料的老师。学生上传了一份学习资料（课件、讲义或教材），要用来预习和复习。请按学生的要求，把资料整理成一份结构清晰、讲得明白的学习笔记。
 
@@ -20,18 +43,19 @@ extension Tutor {
         正文（Markdown：列表、**加粗**、表格；公式用 LaTeX）
         </note>
         """
-        if exercises {
-            s += """
-
-
-            练习题：资料里已经有例题的知识点不要再出题。如果某个重要知识点在资料里没有配例题，就在讲这个知识点的 <note> 后面紧接着出一道练习题，检验学生是否真正理解；题目难度适中，能用几步写完：
+        let exerciseFormat = """
             <exercise>
             <content>完整题干（含选项，每个选项单独一行）</content>
             <answer>参考答案和简要解析</answer>
             </exercise>
             """
-        } else {
+        switch exercises {
+        case .off:
             s += "\n\n不要出练习题。"
+        case .needed:
+            s += "\n\n练习题：资料里已经有例题的知识点不要再出题。如果某个重要知识点在资料里没有配例题，就在讲这个知识点的 <note> 后面紧接着出一道练习题，检验学生是否真正理解；题目难度适中，能用几步写完：\n" + exerciseFormat
+        case .more:
+            s += "\n\n练习题：每个重要知识点讲完后，紧接着在它的 <note> 后面出 1–2 道练习题（每道一组标签），由浅入深，检验学生是否真正理解。资料里已有的例题不要照抄，可以出同类的变式；题目能用几步写完：\n" + exerciseFormat
         }
         if first {
             s += "\n\n在最前面用 <title>…</title> 给这份笔记起一个简短的标题（不超过 20 个字）。"
@@ -116,7 +140,8 @@ extension Tutor {
     }
 
     /// selection：从排版后的页面选中的文字（公式可能显示不全），block：选中的文字所在的笔记块原文
-    static func noteAskInstruction(selection: String, block: String, question: String, makesExercise: Bool) -> String {
+    /// exerciseCount：出几道练习题；0 表示不是出题，是回答问题
+    static func noteAskInstruction(selection: String, block: String, question: String, exerciseCount: Int = 0) -> String {
         var s = """
         【我选中的内容】（从排版后的页面复制，公式可能不完整）
         \(clip(selection, 1500))
@@ -126,10 +151,10 @@ extension Tutor {
 
         \(question)
         """
-        if makesExercise {
+        if exerciseCount > 0 {
             s += """
 
-            题目难度适中，能用几步写完。按下面的格式输出，标签外面不要写任何内容：
+            \(exerciseCount > 1 ? "一共出 \(exerciseCount) 道，由浅入深，题目之间不要重复，每道题一组标签。" : "")题目难度适中，能用几步写完。按下面的格式输出，标签外面不要写任何内容：
             <exercise>
             <content>完整题干（含选项，每个选项单独一行）</content>
             <answer>参考答案和简要解析</answer>
