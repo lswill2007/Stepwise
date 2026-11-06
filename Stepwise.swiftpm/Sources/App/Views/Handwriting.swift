@@ -784,9 +784,6 @@ private struct InkOptionsPanel: View {
                 ForEach(InkTools.PenKind.allCases) { Text($0.title).tag($0) }
             }
             .pickerStyle(.segmented)
-            PenPreview(color: Color(UIColor(hex: tools.penColor)), width: tools.penWidth,
-                       pressure: tools.penPressure, flatness: tools.penFlatness, stability: tools.penStability)
-                .frame(height: 56)
             slider("笔尖粗细", $tools.penWidth, InkTools.penWidthRange, String(format: "%.1f", tools.penWidth))
             slider("压力灵敏度", $tools.penPressure, 0...1, percent(tools.penPressure))
             slider("笔尖扁平度", $tools.penFlatness, 0...1, percent(tools.penFlatness))
@@ -880,40 +877,6 @@ private struct InkOptionsPanel: View {
     }
 
     private func percent(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
-}
-
-/// 笔的预览：用和写字一样的算法画一条“S”形线，调参数时立刻能看到效果
-private struct PenPreview: View {
-    let color: Color
-    let width: Double
-    let pressure: Double
-    let flatness: Double
-    let stability: Double
-
-    var body: some View {
-        Canvas { context, size in
-            // 一条带抖动和压力变化的示范笔画
-            let n = 90
-            var points: [InkShape.Point] = (0..<n).map { i in
-                let t = CGFloat(i) / CGFloat(n - 1)
-                let x = 16 + t * (size.width - 32)
-                let y = size.height / 2 + sin(t * .pi * 2.4) * size.height * 0.3 + (i % 3 == 0 ? 1.6 : -0.8)
-                let force = 0.25 + 0.75 * sin(t * .pi)
-                return InkShape.Point(location: CGPoint(x: x, y: y), force: force, size: CGFloat(width) * (0.6 + 0.8 * force))
-            }
-            points = InkShape.smooth(points, stability: stability)
-            let widths = InkShape.widths(points, pressure: pressure, flatness: flatness)
-            for i in 1..<points.count {
-                var segment = Path()
-                segment.move(to: points[i - 1].location)
-                segment.addLine(to: points[i].location)
-                context.stroke(segment, with: .color(color),
-                               style: StrokeStyle(lineWidth: (widths[i - 1] + widths[i]) / 2, lineCap: .round))
-            }
-        }
-        .background(Color.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
-        .environment(\.colorScheme, .light)
-    }
 }
 
 extension UIColor {
