@@ -756,21 +756,18 @@ struct NoteTextBlockView<MenuContent: View>: View {
 
     var body: some View {
         // 页面宽时批注写在右边页边，和这一块顶端对齐；窄时写在这一块下面
-        if let commentMargin, marginOpen {
-            // 批注浮在页边，不占版面：长批注往下延伸也不会把下面的笔记推开
+        // 展开、收起页边用同一个分支，只改留白和批注栏的尺寸：换分支会把这一块（连同排版的网页）整个重建，
+        // 重建时高度一下变成 0，页面就被弹回最上面
+        if let commentMargin {
             content
-                .padding(.trailing, commentMargin + 16)
-                .overlay(alignment: .topTrailing) {
-                    commentColumn.frame(width: commentMargin, alignment: .leading)
-                }
-                .zIndex(comments.isEmpty ? 0 : 1)
-        } else if commentMargin != nil {
-            // 正文居中，批注都收起了：小图标挂在这一块右边外面，点一下展开
-            content
+                // 展开：批注浮在页边，不占版面，长批注往下延伸也不会把下面的笔记推开
+                .padding(.trailing, marginOpen ? commentMargin + 16 : 0)
                 .overlay(alignment: .topTrailing) {
                     commentColumn
-                        .fixedSize()
-                        .alignmentGuide(.trailing) { $0[.leading] - 10 }
+                        .frame(width: marginOpen ? commentMargin : nil, alignment: .leading)
+                        // 收起：小图标挂在这一块右边外面，点一下展开
+                        .fixedSize(horizontal: !marginOpen, vertical: !marginOpen)
+                        .alignmentGuide(.trailing) { marginOpen ? $0[.trailing] : $0[.leading] - 10 }
                 }
                 .zIndex(comments.isEmpty ? 0 : 1)
         } else {
