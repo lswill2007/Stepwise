@@ -66,7 +66,7 @@ struct NotebookView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .overlay(alignment: .bottom) {
             if HandwritingModel.isAvailable && !items.isEmpty {
-                InkPalette(tools: ink.tools).padding(.bottom, 14)
+                InkPalette(tools: ink.tools)
             }
         }
         .overlay {

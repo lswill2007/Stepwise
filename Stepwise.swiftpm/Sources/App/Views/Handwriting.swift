@@ -190,6 +190,9 @@ final class InkTools: ObservableObject {
         isTemporaryEraser = false
     }
 
+    /// 笔（或手指）落到画布上开始写：工具栏自动缩小。不用 @Published，免得每一笔都刷新整个页面
+    let writingBegan = PassthroughSubject<Void, Never>()
+
     func undo() { active?.canvas?.undoManager?.undo() }
     func redo() { active?.canvas?.undoManager?.redo() }
 }
@@ -450,6 +453,7 @@ struct NotebookCanvas: UIViewRepresentable {
 
         func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
             penDown = true
+            model.tools.writingBegan.send()
         }
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
@@ -574,8 +578,12 @@ struct NotebookCanvas: UIViewRepresentable {
 /// 再点一次已选中的工具（或点右边的调节按钮），上方展开这个工具的参数
 struct InkPalette: View {
     @ObservedObject var tools: InkTools
+    /// 手动收起（记住）；shrunk 是开始书写时自动缩小（临时的，下次打开还是展开）
     @AppStorage("inkPaletteCollapsed") private var collapsed = false
+    @State private var shrunk = false
     @State private var showOptions = false
+
+    private var isSmall: Bool { collapsed || shrunk }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -585,32 +593,51 @@ struct InkPalette: View {
                     .padding(.horizontal, 12).padding(.vertical, 5)
                     .background(.regularMaterial, in: Capsule())
             }
-            if showOptions && !collapsed {
+            if showOptions && !isSmall {
                 InkOptionsPanel(tools: tools)
+                    .padding(.horizontal, 12)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if collapsed {
+            if isSmall {
                 collapsedBar
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
-                // 页面窄（侧栏打开、分屏）时去掉文字、按钮小一点
+                // 贴在页面最下沿的一整条；页面窄（侧栏打开、分屏）时去掉文字、按钮小一点
                 ViewThatFits(in: .horizontal) {
                     fullBar(labels: true)
                     fullBar(labels: false)
                 }
+                .padding(.top, 6).padding(.bottom, 2)
+                .frame(maxWidth: .infinity)
+                .background {
+                    Rectangle().fill(.regularMaterial)
+                        .shadow(color: .black.opacity(0.06), radius: 6, y: -2)
+                        .ignoresSafeArea(edges: .bottom)
+                }
+                .overlay(alignment: .top) { Divider() }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .animation(.spring(duration: 0.25), value: showOptions)
-        .animation(.spring(duration: 0.25), value: collapsed)
+        .animation(.spring(duration: 0.25), value: isSmall)
+        // 开始书写：缩成底边的小标签，把纸面让出来；点一下再展开
+        .onReceive(tools.writingBegan) {
+            guard !isSmall else { return }
+            showOptions = false
+            shrunk = true
+        }
         // 换工具时，参数面板跟着换；选了没有参数的工具就收起来
         .onChange(of: tools.tool) {
             if tools.tool == .lasso { showOptions = false }
         }
     }
 
-    /// 收起：只剩当前工具和颜色，点一下展开
+    /// 收起：贴在底边中间的小标签，只剩当前工具和颜色，点一下展开
     private var collapsedBar: some View {
-        Button {
+        let tab = UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14)
+        return Button {
             collapsed = false
+            shrunk = false
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: icon(tools.tool)).font(.title3)
@@ -619,10 +646,13 @@ struct InkPalette: View {
                 }
                 Image(systemName: "chevron.up").font(.caption.weight(.bold)).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(.regularMaterial, in: Capsule())
-            .overlay(Capsule().stroke(Color.secondary.opacity(0.2)))
-            .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+            .padding(.horizontal, 20).padding(.top, 9).padding(.bottom, 4)
+            .contentShape(Rectangle())
+            .background {
+                tab.fill(.regularMaterial)
+                    .shadow(color: .black.opacity(0.1), radius: 6, y: -2)
+                    .ignoresSafeArea(edges: .bottom)
+            }
         }
         .buttonStyle(.plain)
         .accessibilityLabel("展开工具栏")
@@ -649,10 +679,7 @@ struct InkPalette: View {
             }
         }
         .buttonStyle(.borderless)
-        .padding(.horizontal, labels ? 12 : 8).padding(.vertical, 6)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().stroke(Color.secondary.opacity(0.2)))
-        .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+        .padding(.horizontal, labels ? 12 : 8)
     }
 
     private var currentColor: Color? {

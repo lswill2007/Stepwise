@@ -602,9 +602,10 @@ struct NoteDocView: View {
             // 笔记上可以直接涂鸦、画荧光笔，练习题要手写：工具条一直在
             if HandwritingModel.isAvailable {
                 InkPalette(tools: ink.tools)
+            } else {
+                Color.clear.frame(height: 4)
             }
         }
-        .padding(.bottom, 14)
         .animation(.easeInOut(duration: 0.2), value: selection)
     }
 
