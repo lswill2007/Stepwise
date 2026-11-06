@@ -25,6 +25,16 @@ enum NoteExerciseLevel: String, CaseIterable, Identifiable {
     }
 }
 
+/// 问答记到笔记里：原文不动，在提问的那一行后面插入一段解释
+struct NoteInsertion: Equatable {
+    /// 插入后的全文
+    var text: String
+    /// 原文里插入点之前的部分：量出它在纸上有多高，就知道插入点下面的笔迹要往下挪
+    var prefix: String
+    /// 插在了最后：后面没有原文，笔迹不用挪
+    var atEnd: Bool
+}
+
 extension Tutor {
     /// 生成笔记时默认的要求
     static let defaultNotePrompt = "整理成预习和复习用的笔记：按小节列出核心概念、公式、方法和易错点"
@@ -151,11 +161,11 @@ extension Tutor {
         """
     }
 
-    /// 问答之后记到笔记里：不照抄回答，结合整份笔记写一段新内容
+    /// 问答之后记到笔记里：不照抄回答，结合原文在提问的地方补一段解释
     static func noteIntegrateSystem(doc: NoteDoc) -> String {
         let body = doc.blocks.filter { $0.kind == .text }.map(\.text).joined(separator: "\n\n")
         return """
-        你在帮学生完善自己的学习笔记。学生刚才就笔记里的一段提了问题、得到了回答，现在要把这次问答的收获记进笔记。下面是整份笔记，写的内容要和它融为一体。
+        你在帮学生完善自己的学习笔记。学生刚才就笔记里的一处提了问题、得到了回答，现在要把这次问答的收获补进笔记，就补在提问的地方。下面是整份笔记，补的内容要和它融为一体。
 
         【笔记：\(doc.title)】
         \(clip(body, 8000))
@@ -164,10 +174,11 @@ extension Tutor {
         """
     }
 
+    /// section：提问的那一块笔记原文，带上行号发过去，让 AI 说出插在哪一行后面
     static func noteIntegrateInstruction(section: String, quote: String?, question: String, answer: String) -> String {
-        var s = "【要补充的那一节（笔记原文）】\n\(clip(section, 3000))\n\n"
+        var s = "【提问的那一节（笔记原文，每行开头方括号里是行号，只用来定位，不是笔记内容）】\n\(numberedLines(section))\n\n"
         if let quote, !quote.isEmpty {
-            s += "【学生选中的内容】\(clip(quote, 600))\n\n"
+            s += "【学生选中提问的内容】\(clip(quote, 600))\n\n"
         }
         s += """
         【学生的问题】\(question)
@@ -175,13 +186,122 @@ extension Tutor {
         【当时的回答】
         \(clip(answer, 3000))
 
-        请把这次问答里学到的东西，写成一段接在这一节后面的笔记：
-        - 结合上下文：沿用这一节里的符号、例子和说法，读起来像笔记本来就有的一段，和前面衔接自然；
-        - 只写笔记里还没有的内容，已经写过的不要重复；回答里和这个知识点无关的话不要；
+        请把这次问答里学到的东西补进这一节，就补在提问的地方：
+        - 原文一个字都不改，只在某一行后面插入一段解释。选学生提问的那一处所在的行；如果这一行后面紧跟着属于它的公式、列表或表格，就选它们的最后一行；不要选标题行；
+        - 结合原文来写：顺着这一行往下讲，沿用原文里的符号、例子和说法，可以用“也就是说”“这是因为”“比如”这样的话自然接上，读起来像笔记本来就有的一段，不要另起炉灶从头讲；
+        - 只写原文里还没有的内容，已经写过的不要重复；回答里和这个知识点无关的话不要；
         - 写成笔记，不要写成问答：不要出现“你问”“回答”“这个问题”之类的说法，不要开场白，也不要结尾总结；
-        - 简洁：一个加粗的小标题，再加几句话或几条要点，必要时一个公式或很短的例子；不要用 ## 这样的大标题。
+        - 简洁：几句话或几条要点，必要时一个公式或很短的例子；不要加标题。
+
+        按下面的格式输出，标签外面不要写任何内容：
+        <after>行号</after>
+        <insert>要插入的解释</insert>
         """
         return s
+    }
+
+    /// 给原文每个非空行标上行号（从 1 开始，空行不标但占号），让 AI 说出插在哪一行后面
+    static func numberedLines(_ text: String) -> String {
+        var out: [String] = []
+        var total = 0
+        for (i, line) in text.components(separatedBy: "\n").enumerated() {
+            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+            // 太长的块只发前面一部分
+            total += line.count
+            if total > 6000 { out.append("……"); break }
+            out.append("[\(i + 1)] \(line)")
+        }
+        return out.joined(separator: "\n")
+    }
+
+    /// 解析 AI 的输出：插在第几行后面、插入什么。没按格式输出时整段当作要插入的内容
+    static func parseIntegrate(_ output: String) -> (line: Int?, insert: String) {
+        func tag(_ name: String) -> String? {
+            guard let open = output.range(of: "<\(name)>") else { return nil }
+            let rest = output[open.upperBound...]
+            // 还没写完（或者漏了结束标签）：到目前为止的都算
+            let body = rest.range(of: "</\(name)>").map { rest[..<$0.lowerBound] } ?? rest
+            return String(body).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let line = tag("after").flatMap { Int($0.filter { $0.isASCII && $0.isNumber }) }
+        if let insert = tag("insert") { return (line, insert) }
+        // 还在写 <after> 或者 <insert> 的开头
+        if output.contains("<after") || output.contains("<insert") { return (line, "") }
+        return (line, output.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// 在原文第 line 行（从 1 开始）后面插入一段，原文不动。行号不对时按选中的文字找，再找不到就加在最后。
+    /// 插入点会避开公式、代码、表格的中间，标题行后面也不插（往后挪到下一段的末尾）
+    static func insertNote(_ insert: String, into text: String, afterLine line: Int?, quote: String?) -> NoteInsertion {
+        let insert = insert.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = text.components(separatedBy: "\n")
+        func isBlank(_ i: Int) -> Bool { lines[i].trimmingCharacters(in: .whitespaces).isEmpty }
+
+        var index: Int?
+        if let line, lines.indices.contains(line - 1) {
+            // 说的是空行：算它上面那一行
+            index = (0...(line - 1)).last { !isBlank($0) }
+        }
+        if index == nil, let quote {
+            // 选中的文字是从排版后的页面复制的，公式会不一样：先整段找，找不到用开头的一小段
+            let q = quote.trimmingCharacters(in: .whitespacesAndNewlines)
+            for key in [q, String(q.prefix(12)), String(q.suffix(12))] where key.count >= 4 {
+                if let i = lines.indices.last(where: { lines[$0].contains(key) }) { index = i; break }
+            }
+        }
+        guard var i = index else {
+            let head = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return NoteInsertion(text: head.isEmpty ? insert : head + "\n\n" + insert, prefix: head, atEnd: true)
+        }
+
+        // 标题行：挪到它下面那一段的末尾
+        if lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("#") {
+            var j = i + 1
+            while j < lines.count, isBlank(j) { j += 1 }
+            while j + 1 < lines.count, !isBlank(j + 1) { j += 1 }
+            if j < lines.count { i = j }
+        }
+        i = unsplittableEnd(lines, from: i)
+
+        let head = lines[...i].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        let tail = lines[(i + 1)...].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        if tail.isEmpty {
+            return NoteInsertion(text: head + "\n\n" + insert, prefix: head, atEnd: true)
+        }
+        return NoteInsertion(text: head + "\n\n" + insert + "\n\n" + tail, prefix: head, atEnd: false)
+    }
+
+    /// 第 i 行如果在独立公式、代码块、表格中间，返回这一整段的最后一行；否则就是第 i 行
+    private static func unsplittableEnd(_ lines: [String], from target: Int) -> Int {
+        var i = 0
+        while i < lines.count {
+            let t = lines[i].trimmingCharacters(in: .whitespaces)
+            var end = i
+            func until(_ match: (String) -> Bool) -> Int {
+                ((i + 1)..<lines.count).first { match(lines[$0].trimmingCharacters(in: .whitespaces)) } ?? lines.count - 1
+            }
+            func count(_ s: String, _ key: String) -> Int { s.components(separatedBy: key).count - 1 }
+            if t.hasPrefix("```") {
+                end = until { $0.hasPrefix("```") }
+            } else if count(t, "$$") % 2 == 1 {
+                end = until { count($0, "$$") % 2 == 1 }
+            } else if count(t, "\\[") > count(t, "\\]") {
+                end = until { $0.contains("\\]") }
+            } else if count(t, "\\begin{") > count(t, "\\end{") {
+                var depth = count(t, "\\begin{") - count(t, "\\end{")
+                var j = i
+                while depth > 0, j + 1 < lines.count {
+                    j += 1
+                    depth += count(lines[j], "\\begin{") - count(lines[j], "\\end{")
+                }
+                end = j
+            } else if t.hasPrefix("|") {
+                while end + 1 < lines.count, lines[end + 1].trimmingCharacters(in: .whitespaces).hasPrefix("|") { end += 1 }
+            }
+            if target <= end { return end }
+            i = end + 1
+        }
+        return target
     }
 
     /// selection：从排版后的页面选中的文字（公式可能显示不全），block：选中的文字所在的笔记块原文

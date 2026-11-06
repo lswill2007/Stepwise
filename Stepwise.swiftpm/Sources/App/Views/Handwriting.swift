@@ -4,6 +4,28 @@ import SwiftUI
 import PencilKit
 import Combine
 
+extension PKDrawing {
+    /// 中心在 y 以下的笔画往下挪 dy
+    func shifted(below y: CGFloat, by dy: CGFloat) -> PKDrawing {
+        var result = self
+        result.strokes = strokes.map { stroke in
+            guard stroke.renderBounds.midY > y else { return stroke }
+            var moved = stroke
+            moved.transform = stroke.transform.concatenating(CGAffineTransform(translationX: 0, y: dy))
+            return moved
+        }
+        return result
+    }
+}
+
+extension DrawingStore {
+    /// 直接改存下的笔迹（笔记页没开着时用）
+    static func shiftStrokes(_ id: UUID, below y: CGFloat, by dy: CGFloat) {
+        guard let data = load(id), let drawing = try? PKDrawing(data: data) else { return }
+        save(drawing.shifted(below: y, by: dy).dataRepresentation(), for: id)
+    }
+}
+
 /// 框选后画布会成为第一响应者（用于剪切 / 拷贝 / 撤销），这里阻止它顺带弹出键盘
 final class PadCanvasView: PKCanvasView {
     private let noKeyboard = UIView(frame: .zero)
@@ -320,6 +342,18 @@ final class HandwritingModel: ObservableObject {
         pendingSave = nil
         guard let questionID else { return }
         DrawingStore.save(drawing.strokes.isEmpty ? nil : drawing.dataRepresentation(), for: questionID)
+    }
+
+    /// 笔记这一块中间插进了内容：y 以下的笔迹往下挪 dy，屏幕上和存下的一起改
+    func shiftStrokes(below y: CGFloat, by dy: CGFloat) {
+        let shifted = drawing.shifted(below: y, by: dy)
+        guard shifted != drawing else { return }
+        drawing = shifted
+        if let canvas {
+            // 恢复的笔迹还没放上画布：换成挪过的；已经在画布上：直接换（和模型一致，不算用户改的）
+            if canvas.pendingDrawing != nil { canvas.pendingDrawing = shifted } else { canvas.drawing = shifted }
+        }
+        saveNow()
     }
 
     func clear() {
@@ -908,6 +942,11 @@ final class HandwritingModel: ObservableObject {
     func addSpace() {}
     func inkSpan(inRow row: Int) -> ClosedRange<CGFloat>? { nil }
     func exportJPEG(highlight: CGRect? = nil) -> Data? { nil }
+    func shiftStrokes(below y: CGFloat, by dy: CGFloat) {}
+}
+
+extension DrawingStore {
+    static func shiftStrokes(_ id: UUID, below y: CGFloat, by dy: CGFloat) {}
 }
 
 final class InkHost {}

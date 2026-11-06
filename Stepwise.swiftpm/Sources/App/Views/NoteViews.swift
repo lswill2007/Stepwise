@@ -428,6 +428,13 @@ struct NoteDocView: View {
                 if scenePhase != .active { ink.saveAll() }
             }
             .onDisappear { ink.saveAll() }
+            // 问答补进笔记、插在一块中间：这一块插入点下面的笔迹跟着往下挪
+            .onReceive(NotificationCenter.default.publisher(for: .noteInkShift)) { note in
+                guard let request = note.object as? InkShiftRequest,
+                      let model = ink.existingModel(for: request.blockID) else { return }
+                model.shiftStrokes(below: request.below, by: request.by)
+                request.handled = true
+            }
             .onAppear {
                 store.upgradePaperIfClean(noteID)
                 store.renumberExercises(noteID)
@@ -603,12 +610,18 @@ struct NoteDocView: View {
     }
 
     private func progressRow(_ job: NoteJob) -> some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Text(job.label).font(.callout).foregroundStyle(.secondary)
-            Spacer()
-            Button("停止") { store.stopNoteJob(noteID) }
-                .buttonStyle(InkTextButtonStyle(color: .secondary))
+        VStack(alignment: .leading, spacing: 10) {
+            if !job.partial.isEmpty {
+                // 补进笔记时正在写的解释，写完插进上面这一块里提问的地方
+                RichText(job.partial).opacity(0.55)
+            }
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(job.label).font(.callout).foregroundStyle(.secondary)
+                Spacer()
+                Button("停止") { store.stopNoteJob(noteID) }
+                    .buttonStyle(InkTextButtonStyle(color: .secondary))
+            }
         }
     }
 

@@ -320,7 +320,7 @@ enum MathTemplate {
           var link = document.createElement("link");
           link.rel = "stylesheet";
           link.href = base + "katex.min.css";
-          link.onload = function () { draw(); };
+          link.onload = function () { window.CSS_OK = true; draw(); };
           document.head.appendChild(link);
           READY = true;
           draw();

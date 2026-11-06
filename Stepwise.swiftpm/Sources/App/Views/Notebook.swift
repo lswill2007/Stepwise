@@ -13,6 +13,9 @@ final class NotebookInk: ObservableObject {
     }
 
     func saveAll() { models.values.forEach { $0.saveNow() } }
+
+    /// 已经建好的笔迹模型（没打开过的不新建）
+    func existingModel(for id: UUID) -> HandwritingModel? { models[id] }
 }
 
 /// 做题的主界面：整个题集是一本可以一直往下写的笔记本。
