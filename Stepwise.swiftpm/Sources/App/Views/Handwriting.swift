@@ -445,6 +445,9 @@ struct NotebookCanvas: UIViewRepresentable {
         init(model: HandwritingModel) { self.model = model }
 
         @objc func drawingGesture(_ gesture: UIGestureRecognizer) {
+            // 开始写：工具栏自动缩小。笔记上的涂鸦层把书写手势挂在文字视图上，
+            // 不一定会走 canvasViewDidBeginUsingTool，手势也可能只收到“结束”，所以这里也发
+            if [.began, .changed, .ended].contains(gesture.state) { model.tools.writingBegan.send() }
             // 很快的一笔可能只收到“结束”，也要算
             guard model.tools.tool == .eraser, [.began, .changed, .ended].contains(gesture.state),
                   let view = gesture.view else { return }
