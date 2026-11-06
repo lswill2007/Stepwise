@@ -275,10 +275,75 @@ extension AppStore {
     }
 
     /// 把一条批注记到笔记里：作为引用块插在被圈的那一块后面
+    /// 页边批注“记到笔记中”：不照抄回答，AI 结合这一节和整份笔记写一段新内容，接在这一节后面
     func saveCommentToNote(_ docID: UUID, _ commentID: UUID) {
-        guard let comment = note(docID)?.comments?.first(where: { $0.id == commentID }), !comment.answer.isEmpty else { return }
-        insertBlock(NoteBlock(kind: .text, text: Tutor.notePoint(from: comment)), in: docID, after: comment.blockID)
-        mutateComment(docID, commentID) { $0.savedToNote = true; $0.minimized = true }
+        guard let doc = note(docID), let comment = doc.comments?.first(where: { $0.id == commentID }),
+              !comment.answer.isEmpty, let block = doc.blocks.first(where: { $0.id == comment.blockID }) else { return }
+        let started = integrateIntoNote(docID, after: comment.blockID, section: block.text, quote: nil,
+                                        question: comment.question, answer: comment.answer) { [weak self] ok in
+            // 没写成：批注恢复成“没记过”
+            if !ok { self?.mutateComment(docID, commentID) { $0.savedToNote = false } }
+        }
+        if started { mutateComment(docID, commentID) { $0.savedToNote = true; $0.minimized = true } }
+    }
+
+    /// 选中提问得到的“回答”块整理进笔记：AI 结合上一节写成正式的笔记，替换掉这块回答
+    func integrateAnswer(_ docID: UUID, _ answerID: UUID) {
+        guard let doc = note(docID), let index = doc.blocks.firstIndex(where: { $0.id == answerID }) else { return }
+        let answer = doc.blocks[index]
+        guard answer.kind == .answer, !answer.text.isEmpty else { return }
+        // 回答前面最近的一块正文就是提问的那一节
+        let section = doc.blocks[..<index].last(where: { $0.kind == .text })
+        integrateIntoNote(docID, after: answerID, section: section?.text ?? "", quote: answer.quote,
+                          question: answer.question ?? "", answer: answer.text) { [weak self] ok in
+            if ok { self?.deleteBlock(docID, answerID) }
+        }
+    }
+
+    /// 让 AI 把一次问答写成接在某一节后面的新笔记（流式写进一块新的正文）。
+    /// 返回是否开始了；done 在结束时调用，参数是有没有写出内容
+    @discardableResult
+    private func integrateIntoNote(_ docID: UUID, after anchorID: UUID, section: String, quote: String?,
+                                   question: String, answer: String, done: @escaping (Bool) -> Void) -> Bool {
+        guard let doc = note(docID) else { return false }
+        guard noteTasks[docID] == nil else {
+            errorMessage = "上一个任务还没完成，稍等一下再记到笔记里。"
+            return false
+        }
+        let client: LLMClient
+        do { client = try makeClient(for: .note) } catch {
+            if !(error is ConsentRequired) { errorMessage = error.localizedDescription }
+            return false
+        }
+        let newBlock = NoteBlock(kind: .text)
+        insertBlock(newBlock, in: docID, after: anchorID)
+        let system = Tutor.noteIntegrateSystem(doc: doc)
+        let messages = [LLMMessage(role: .user, parts: [.text(Tutor.noteIntegrateInstruction(
+            section: section, quote: quote, question: question, answer: answer))])]
+        noteJobs[docID] = NoteJob(label: "正在整理进笔记…", afterBlock: newBlock.id)
+        noteTasks[docID] = Task { [weak self] in
+            var full = ""
+            var lastFlush = Date.distantPast
+            do {
+                for try await piece in client.stream(system: system, messages: messages) {
+                    full += piece
+                    if Date().timeIntervalSince(lastFlush) > 0.15 {
+                        self?.updateBlockText(docID, newBlock.id, full)
+                        lastFlush = Date()
+                    }
+                }
+                try Task.checkCancellation()
+                self?.updateBlockText(docID, newBlock.id, full.trimmingCharacters(in: .whitespacesAndNewlines))
+            } catch {
+                if !(error is CancellationError) { self?.errorMessage = error.localizedDescription }
+            }
+            let ok = !full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if !ok { self?.deleteBlock(docID, newBlock.id) }
+            self?.noteJobs[docID] = nil
+            self?.noteTasks[docID] = nil
+            done(ok)
+        }
+        return true
     }
 
     /// 用笔圈住笔记里的一段提问。回答写成页边的一条小字批注

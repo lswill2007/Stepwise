@@ -534,6 +534,11 @@ struct NoteDocView: View {
         let busy = store.noteJobs[noteID] != nil
         let index = doc.blocks.firstIndex { $0.id == block.id } ?? 0
         return Menu {
+            if block.kind == .answer && !block.text.isEmpty {
+                // 不照抄回答：结合上一节写成正式的笔记，替换这块回答
+                Button("整理进笔记", systemImage: "text.append") { store.integrateAnswer(noteID, block.id) }
+                    .disabled(busy)
+            }
             if block.kind != .exercise {
                 Button("编辑", systemImage: "pencil") { editing = block.id }
             }
@@ -1068,6 +1073,7 @@ struct NoteCommentView: View {
                             Label("把这个点记到笔记中", systemImage: "plus").font(.caption.weight(.medium))
                         }
                         .buttonStyle(InkTextButtonStyle())
+                        .disabled(store.noteJobs[noteID] != nil)
                     }
                 }
             }
@@ -1097,6 +1103,7 @@ struct NoteCommentView: View {
                                     store.saveCommentToNote(noteID, comment.id)
                                     enlarged = false
                                 }
+                                .disabled(store.noteJobs[noteID] != nil)
                             }
                         }
                     }

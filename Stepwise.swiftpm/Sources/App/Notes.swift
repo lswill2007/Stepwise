@@ -151,10 +151,37 @@ extension Tutor {
         """
     }
 
-    /// 把一条批注整理成一句笔记要点（记到笔记里时用，不调用 AI）
-    static func notePoint(from comment: NoteComment) -> String {
-        "**\(comment.question.trimmingCharacters(in: .whitespacesAndNewlines))**\n\n" +
-            comment.answer.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// 问答之后记到笔记里：不照抄回答，结合整份笔记写一段新内容
+    static func noteIntegrateSystem(doc: NoteDoc) -> String {
+        let body = doc.blocks.filter { $0.kind == .text }.map(\.text).joined(separator: "\n\n")
+        return """
+        你在帮学生完善自己的学习笔记。学生刚才就笔记里的一段提了问题、得到了回答，现在要把这次问答的收获记进笔记。下面是整份笔记，写的内容要和它融为一体。
+
+        【笔记：\(doc.title)】
+        \(clip(body, 8000))
+
+        \(formatRule)
+        """
+    }
+
+    static func noteIntegrateInstruction(section: String, quote: String?, question: String, answer: String) -> String {
+        var s = "【要补充的那一节（笔记原文）】\n\(clip(section, 3000))\n\n"
+        if let quote, !quote.isEmpty {
+            s += "【学生选中的内容】\(clip(quote, 600))\n\n"
+        }
+        s += """
+        【学生的问题】\(question)
+
+        【当时的回答】
+        \(clip(answer, 3000))
+
+        请把这次问答里学到的东西，写成一段接在这一节后面的笔记：
+        - 结合上下文：沿用这一节里的符号、例子和说法，读起来像笔记本来就有的一段，和前面衔接自然；
+        - 只写笔记里还没有的内容，已经写过的不要重复；回答里和这个知识点无关的话不要；
+        - 写成笔记，不要写成问答：不要出现“你问”“回答”“这个问题”之类的说法，不要开场白，也不要结尾总结；
+        - 简洁：一个加粗的小标题，再加几句话或几条要点，必要时一个公式或很短的例子；不要用 ## 这样的大标题。
+        """
+        return s
     }
 
     /// selection：从排版后的页面选中的文字（公式可能显示不全），block：选中的文字所在的笔记块原文
