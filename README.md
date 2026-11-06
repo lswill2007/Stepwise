@@ -5,6 +5,19 @@
 - **做题**：导入题目文件，AI 把每道题拆开，整个题集变成一本可以直接用 Apple Pencil 手写的笔记本。写完点“批改”，AI 像老师用红笔改作业一样，在出错的那一行下面画线、写短评；卡住了可以一档一档要提示，或者圈出某一步来问；做完还能总结技巧、出一道变式题。
 - **笔记**：导入课件、讲义或教材，AI 按你的要求整理成一份可以直接编辑的笔记，用来预习和复习。可以直接在笔记上写字、画荧光笔，用笔圈住一段提问，回答写在页边；没有例题的重要知识点后面可以加练习题，在笔记里直接手写作答、批改。做题卡住时，App 会先引导你回笔记里看相关的知识点。
 
+![批改：在出错的那一行下面画红色波浪线，页边写清楚错在哪](docs/screenshots/01-grading.png)
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/02-notes.png" alt="笔记：用笔圈住一段提问，回答写在页边"><br><sub><b>笔记</b>：资料整理成可编辑的笔记，圈住一段提问，回答写在页边</sub></td>
+<td width="50%"><img src="docs/screenshots/03-library.png" alt="题集、文件夹、错题本和笔记"><br><sub><b>题集</b>：分级文件夹、错题本、笔记和做题进度</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/04-pen-options.png" alt="工具栏和笔的参数面板"><br><sub><b>工具栏</b>：笔型、颜色、笔尖粗细、压力灵敏度、扁平度、稳定性</sub></td>
+<td width="50%"><img src="docs/screenshots/05-study.png" alt="学习日志"><br><sub><b>学习日志</b>：自动统计学习时间，按周看，AI 写周报</sub></td>
+</tr>
+</table>
+
 **第一次用？按下面的教程从头做一遍，大约 15 分钟。**
 
 ## 目录
@@ -406,7 +419,7 @@ Stepwise.swiftpm/
   Package.swift          App 配置
   Sources/App/           全部源代码（说明见 Stepwise.swiftpm/README.md）
   Tools/embed_katex.py   重新打包 KaTeX 的脚本
-docs/                    网站：介绍页、隐私政策
+docs/                    网站：介绍页、隐私政策；screenshots/ 是 README 里的截图
 AppStore/listing.md      App Store 上架资料
 ```
 
