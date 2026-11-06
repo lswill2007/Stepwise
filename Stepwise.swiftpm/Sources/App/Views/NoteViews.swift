@@ -374,11 +374,12 @@ struct NoteDocView: View {
                         // 给底部的工具条留位置
                         Color.clear.frame(height: 150)
                     }
-                    .padding(.horizontal, 40)
+                    // 正文居中；页边有展开的批注时，正文和批注一起居中，正文往左让出位置
+                    .frame(width: columnWidth(doc), alignment: .leading)
+                    .padding(.horizontal, pagePadding)
                     .padding(.top, 20)
-                    // 页面宽时右边留出页边，圈出来问的批注写在那里
-                    .frame(maxWidth: commentMargin == nil ? 900 : 1140)
                     .frame(maxWidth: .infinity)
+                    .animation(.easeInOut(duration: 0.25), value: marginOpen(doc))
                 }
                 .onChange(of: store.noteJump) {
                     guard let target = store.noteJump else { return }
@@ -418,7 +419,10 @@ struct NoteDocView: View {
                 if scenePhase != .active { ink.saveAll() }
             }
             .onDisappear { ink.saveAll() }
-            .onAppear { store.renumberExercises(noteID) }
+            .onAppear {
+                store.upgradePaperIfClean(noteID)
+                store.renumberExercises(noteID)
+            }
         } else {
             ContentUnavailableView("笔记不存在", systemImage: "doc.richtext")
         }
@@ -427,11 +431,33 @@ struct NoteDocView: View {
     /// 练习题手写区和页边批注够不够并排
     private var wide: Bool { min(width, 900) - 80 - 32 >= 760 }
 
+    /// 页面左右留白：竖屏窄一些，正文能大一点
+    private var pagePadding: CGFloat { width >= 1000 ? 40 : 24 }
+
+    /// 每一块右边的 ⋯ 按钮占的宽度
+    private static let menuWidth: CGFloat = 40
+
     /// 笔记文字按固定的纸宽排版，再整体缩放到页面上：文字不会因为页面变宽变窄重新换行，
-    /// 涂鸦、荧光笔和圈出来问的位置才能一直对得上
-    private var paperScale: CGFloat {
-        let column = min(width, commentMargin == nil ? 900 : 1140) - 80 - (commentMargin.map { $0 + 16 } ?? 0) - 40
-        return min(max(column / NotePaper.width, 0.5), 1.25)
+    /// 涂鸦、荧光笔和圈出来问的位置才能一直对得上。
+    /// 页面宽时按“留出页边”算比例：批注展开、收起时只左右挪动，文字大小不变
+    private func paperScale(_ doc: NoteDoc) -> CGFloat {
+        let reserve = commentMargin.map { $0 + 16 } ?? 0
+        let column = min(width, 1180) - pagePadding * 2 - reserve - Self.menuWidth
+        return min(max(column / doc.paper, 0.5), 1.25)
+    }
+
+    /// 正文一栏的宽度：纸 + ⋯ 按钮；页边展开时再加上页边
+    private func columnWidth(_ doc: NoteDoc) -> CGFloat {
+        let body = doc.paper * paperScale(doc) + Self.menuWidth
+        let full = body + (marginOpen(doc) ? (commentMargin ?? 0) + 16 : 0)
+        return max(0, min(full, width - pagePadding * 2))
+    }
+
+    /// 页边有展开的批注（或做题时被引导来看笔记的提示）：正文往左让出页边
+    private func marginOpen(_ doc: NoteDoc) -> Bool {
+        guard commentMargin != nil else { return false }
+        if store.activeNoteGuide?.noteID == noteID { return true }
+        return (doc.comments ?? []).contains { !$0.minimized }
     }
 
     /// 页边批注的宽度；页面不够宽时为 nil，批注写在这一块下面
@@ -468,7 +494,10 @@ struct NoteDocView: View {
                               ink: block.kind == .text && HandwritingModel.isAvailable ? ink.model(for: block.id) : nil,
                               comments: (doc.comments ?? []).filter { $0.blockID == block.id },
                               commentMargin: commentMargin,
-                              paperScale: paperScale,
+                              marginOpen: marginOpen(doc),
+                              paperWidth: doc.paper,
+                              legacyLayout: doc.paperWidth == nil,
+                              paperScale: paperScale(doc),
                               guide: store.activeNoteGuide?.noteID == noteID && store.activeNoteGuide?.blockID == block.id
                                   ? store.activeNoteGuide : nil,
                               onSelect: { handleSelection($0, in: block.id) },
@@ -477,8 +506,8 @@ struct NoteDocView: View {
             }
         case .exercise:
             exerciseView(block, in: doc)
-                // 练习题和有页边的文字块对齐
-                .padding(.trailing, commentMargin.map { $0 + 16 } ?? 0)
+                // 练习题和文字块对齐：页边展开时让出页边
+                .padding(.trailing, marginOpen(doc) ? (commentMargin ?? 0) + 16 : 0)
         }
     }
 
@@ -677,7 +706,12 @@ struct NoteTextBlockView<MenuContent: View>: View {
     let comments: [NoteComment]
     /// 页边宽度；为 nil 时批注写在这一块下面
     let commentMargin: CGFloat?
-    /// 笔记文字（纸宽固定）缩放到页面上的比例
+    /// 页边有展开的批注：正文让出页边；没有时正文居中，收起的批注小图标挂在这一块右边
+    let marginOpen: Bool
+    /// 这篇笔记的纸宽，和缩放到页面上的比例
+    let paperWidth: CGFloat
+    /// 旧笔记（上面已经写画过）：保持原来的换行方式，笔迹才对得上
+    let legacyLayout: Bool
     let paperScale: CGFloat
     /// 做题卡住时被引导来看的就是这一块：临时荧光笔标出重点，页边有“详细记录”
     let guide: NoteGuide?
@@ -695,12 +729,21 @@ struct NoteTextBlockView<MenuContent: View>: View {
 
     var body: some View {
         // 页面宽时批注写在右边页边，和这一块顶端对齐；窄时写在这一块下面
-        if let commentMargin {
+        if let commentMargin, marginOpen {
             // 批注浮在页边，不占版面：长批注往下延伸也不会把下面的笔记推开
             content
                 .padding(.trailing, commentMargin + 16)
                 .overlay(alignment: .topTrailing) {
                     commentColumn.frame(width: commentMargin, alignment: .leading)
+                }
+                .zIndex(comments.isEmpty ? 0 : 1)
+        } else if commentMargin != nil {
+            // 正文居中，批注都收起了：小图标挂在这一块右边外面，点一下展开
+            content
+                .overlay(alignment: .topTrailing) {
+                    commentColumn
+                        .fixedSize()
+                        .alignmentGuide(.trailing) { $0[.leading] - 10 }
                 }
                 .zIndex(comments.isEmpty ? 0 : 1)
         } else {
@@ -754,7 +797,7 @@ struct NoteTextBlockView<MenuContent: View>: View {
                             .buttonStyle(InkTextButtonStyle(color: .secondary))
                     }
                 } else {
-                    RichText(block.text, onSelect: onSelect, host: inkHost,
+                    RichText(block.text, tone: legacyLayout ? .legacy : .normal, onSelect: onSelect, host: inkHost,
                              highlight: guide.map { Tutor.highlightKey($0.quote) })
                         // 圈出来问过的地方：淡淡的虚线框和序号，对应页边的批注
                         .overlay(alignment: .topLeading) { circledMarks }
@@ -769,7 +812,7 @@ struct NoteTextBlockView<MenuContent: View>: View {
                                 CircleAskAnchor(ink: ink, busy: busy) { send($0, ink: ink) }
                             }
                         }
-                        .modifier(NotePaper(scale: paperScale))
+                        .modifier(NotePaper(width: paperWidth, scale: paperScale))
                     // 每个小节下面可以出几道例题
                     if block.kind == .text {
                         HStack {
@@ -1065,11 +1108,11 @@ struct NoteCommentView: View {
 
 /// 笔记文字的“纸”：固定宽度排版，整体缩放到页面上，占位大小跟着缩放
 struct NotePaper: ViewModifier {
-    static let width: CGFloat = 460
+    let width: CGFloat
     let scale: CGFloat
 
     func body(content: Content) -> some View {
-        PaperLayout(width: Self.width, scale: scale) {
+        PaperLayout(width: width, scale: scale) {
             content.scaleEffect(scale, anchor: .topLeading)
         }
     }

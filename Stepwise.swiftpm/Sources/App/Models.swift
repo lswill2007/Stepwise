@@ -148,6 +148,13 @@ struct NoteDoc: Codable, Identifiable, Equatable {
     var comments: [NoteComment]?
     /// 所在的文件夹；做题时会到同一个文件夹里找相关的笔记（旧数据没有，放在最外层）
     var folderID: UUID?
+    /// 排版用的纸宽。旧笔记没有，按 460 排；新笔记用更宽的纸，公式和表格少换行。
+    /// 一篇笔记的纸宽不能改，否则涂鸦、圈出来问的位置会和文字对不上
+    var paperWidth: Double?
+
+    static let legacyPaperWidth: Double = 460
+    static let currentPaperWidth: Double = 540
+    var paper: Double { paperWidth ?? Self.legacyPaperWidth }
 }
 
 /// 笔记页边的一条批注：用笔圈住一段，问一句，AI 的回答像小字写在页边

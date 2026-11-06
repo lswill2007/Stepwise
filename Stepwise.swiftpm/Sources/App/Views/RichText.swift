@@ -4,6 +4,8 @@ import WebKit
 /// 文字颜色：默认跟随深浅色；red 是页边的红笔批注
 enum RichTone: String {
     case normal = "", red
+    /// 旧笔记：保持原来的换行方式（行内公式可以拆开），上面的笔迹才和文字对得上
+    case legacy
 }
 
 /// 显示 Markdown + LaTeX 公式（KaTeX 排版）。
@@ -261,6 +263,12 @@ enum MathTemplate {
     .katex{font-size:1.12em}
     .katex .base{margin:.2em 0}
     .katex-display{margin:.5em 0;overflow-x:auto;overflow-y:hidden;padding:.2em 0}
+    /* 行内公式连同后面的标点不拆行；整个公式比一行还宽时才允许拆（.wrap） */
+    .im{white-space:nowrap}
+    body.legacy .im{white-space:normal}
+    .im.wrap{white-space:normal}
+    /* 表格尽量不换行，放不下时恢复换行 */
+    table.nw th,table.nw td{white-space:nowrap}
     .tex{font-family:ui-monospace,Menlo,monospace;font-size:.92em;opacity:.75}
     mark.hl{background:rgba(255,214,0,.5);color:inherit;border-radius:3px;padding:0 1px}
     #c.hl-all{background:rgba(255,214,0,.16);border-radius:6px}
@@ -387,7 +395,9 @@ enum MathTemplate {
 
       return out.join("")
         .replace(/(?:<br>)?\u0003(\d+)\u0003(?:<br>)?/g, function (m, k) { return math(maths[k][0], true); })
-        .replace(/\u0002(\d+)\u0002/g, function (m, k) { return math(maths[k][0], false); })
+        .replace(/\u0002(\d+)\u0002([，。、；：！？）」』”’,.;:!?)\]]*)/g, function (m, k, p) {
+          return '<span class="im">' + math(maths[k][0], false) + p + "</span>";
+        })
         .replace(/\u0001(\d+)\u0001/g, function (m, k) { return "<pre><code>" + esc(codes[k]) + "</code></pre>"; });
     }
 
@@ -411,7 +421,36 @@ enum MathTemplate {
       box.classList.add("hl-all");
     }
 
-    function draw() { box.innerHTML = md(SRC); applyHL(); post(); }
+    // 排版后检查：行内公式、表格放得下就不换行；独立公式稍微超宽就缩小一点放进一行
+    function fit() {
+      if (document.body.classList.contains("legacy")) return;
+      var w = box.clientWidth;
+      if (!w) return;
+      box.querySelectorAll(".im").forEach(function (el) {
+        el.classList.remove("wrap");
+        if (el.getBoundingClientRect().width > w + 1) el.classList.add("wrap");
+      });
+      box.querySelectorAll("table").forEach(function (t) {
+        t.classList.add("nw");
+        if (t.scrollWidth > t.clientWidth + 1) t.classList.remove("nw");
+      });
+      box.querySelectorAll(".katex-display").forEach(function (d) {
+        d.style.fontSize = "";
+        var inner = d.firstElementChild;
+        if (!inner) return;
+        var need = inner.scrollWidth, have = d.clientWidth;
+        if (need > have + 1) {
+          var r = have / need;
+          if (r >= 0.72) d.style.fontSize = (Math.floor(r * 100) / 100) + "em";
+        }
+      });
+    }
+    var lastWidth = 0;
+    window.addEventListener("resize", function () {
+      if (box.clientWidth !== lastWidth) { lastWidth = box.clientWidth; fit(); post(); }
+    });
+
+    function draw() { box.innerHTML = md(SRC); applyHL(); fit(); lastWidth = box.clientWidth; post(); }
 
     function setContent(s, scale, tone, hl) {
       SRC = s;

@@ -41,6 +41,7 @@ extension AppStore {
         let exerciseSet = QuestionSet(title: "笔记练习：\(title)", questions: [])
         var doc = NoteDoc(title: title, sourceName: sourceName, prompt: prompt, exerciseSetID: exerciseSet.id)
         doc.blocks = []
+        doc.paperWidth = NoteDoc.currentPaperWidth
         var linked = exerciseSet
         linked.noteID = doc.id
         sets.append(linked)
@@ -112,6 +113,14 @@ extension AppStore {
     }
 
     /// 练习题按在笔记里的先后编号（第 1、2、3 题），题集里的顺序也跟着排；做完后出的变式题（“2-新1”）跟着原题改号
+    /// 旧笔记按 460 的窄纸排版。上面还没有涂鸦和圈出来问的，打开时换成新的纸宽和排版（公式、表格少换行）；
+    /// 已经写画过的保持原来的排版，笔迹才能和文字对得上
+    func upgradePaperIfClean(_ docID: UUID) {
+        guard let doc = note(docID), doc.paperWidth == nil else { return }
+        guard (doc.comments ?? []).isEmpty, !doc.blocks.contains(where: { DrawingStore.exists($0.id) }) else { return }
+        mutateNote(docID) { $0.paperWidth = NoteDoc.currentPaperWidth }
+    }
+
     func renumberExercises(_ docID: UUID) {
         guard let doc = note(docID), let si = sets.firstIndex(where: { $0.id == doc.exerciseSetID }) else { return }
         // 先按旧题号把每道题和它的变式题分好组，再改号
