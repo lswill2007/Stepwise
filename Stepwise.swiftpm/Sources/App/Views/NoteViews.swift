@@ -133,6 +133,16 @@ struct NoteImportView: View {
                     }
                 }
 
+                // 生成笔记单独用一个模型（和设置 → 笔记里的是同一个设置）
+                Section {
+                    ModelOverrideRows(title: "整理笔记模型", providerID: $store.noteProviderID, model: $store.noteModel,
+                                      resolved: store.noteProvider, recommend: .longContext)
+                } header: {
+                    Text("用哪个模型生成")
+                } footer: {
+                    Text("资料长、公式多时，建议选上下文长、能看图的模型，推荐的排在模型列表最上面。不选就用当前模型。")
+                }
+
                 Section {
                     Button(action: start) {
                         HStack {
@@ -144,8 +154,7 @@ struct NoteImportView: View {
                     .disabled(currentMaterial == nil)
                 } footer: {
                     if let p = store.noteProvider ?? store.activeProvider {
-                        Text("将使用 \(p.name) · \(p.model.isEmpty ? "未选择模型" : p.model)。生成时会打开笔记，写完一块显示一块。"
-                             + (store.noteProvider == nil ? "资料长时，可以在设置 → 笔记里单独选一个整理长资料能力强的模型。" : ""))
+                        Text("将使用 \(p.name) · \(p.model.isEmpty ? "未选择模型" : p.model)。生成时会打开笔记，写完一块显示一块。")
                     }
                 }
             }

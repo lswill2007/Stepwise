@@ -178,34 +178,9 @@ struct SettingsView: View {
     }
 
     /// 单独给某项用途选模型：先选服务商，再选模型；不选则跟随当前模型
-    @ViewBuilder
     private func modelOverride(_ title: String, providerID: Binding<String?>, model: Binding<String>,
                                resolved: ProviderConfig?, recommend: ModelBrowser.Recommend = .fastVision) -> some View {
-        Picker(title, selection: Binding(
-            get: { providerID.wrappedValue ?? "" },
-            set: { id in
-                providerID.wrappedValue = id.isEmpty ? nil : id
-                // 换服务商时默认选它当前的模型
-                if let p = store.providers.first(where: { $0.id == id }) { model.wrappedValue = p.model }
-            })) {
-            Text("跟随当前模型").tag("")
-            ForEach(store.providers.filter(\.hasKey)) { p in
-                Text(p.name).tag(p.id)
-            }
-        }
-
-        if let id = providerID.wrappedValue, let p = store.providers.first(where: { $0.id == id }) {
-            NavigationLink {
-                ModelBrowser(title: title, models: p.allModels, selection: model, favorites: favoritesBinding(for: p.id),
-                             recommend: recommend)
-            } label: {
-                LabeledContent("模型", value: model.wrappedValue.isEmpty ? "未选择" : model.wrappedValue)
-            }
-            if resolved == nil {
-                Label("请选择一个模型，否则会继续使用当前模型", systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.orange)
-            }
-        }
+        ModelOverrideRows(title: title, providerID: providerID, model: model, resolved: resolved, recommend: recommend)
     }
 
     // MARK: - 备份与迁移
@@ -654,5 +629,62 @@ struct ProviderEditView: View {
                 testResult = "❌ " + error.localizedDescription
             }
         }
+    }
+}
+
+/// 单独给某项用途选模型的两行：先选服务商，再选模型；不选则跟随当前模型。设置页和生成笔记页共用
+struct ModelOverrideRows: View {
+    @EnvironmentObject var store: AppStore
+    let title: String
+    @Binding var providerID: String?
+    @Binding var model: String
+    let resolved: ProviderConfig?
+    var recommend: ModelBrowser.Recommend = .fastVision
+
+    init(title: String, providerID: Binding<String?>, model: Binding<String>,
+         resolved: ProviderConfig?, recommend: ModelBrowser.Recommend = .fastVision) {
+        self.title = title
+        self._providerID = providerID
+        self._model = model
+        self.resolved = resolved
+        self.recommend = recommend
+    }
+
+    var body: some View {
+        Picker(title, selection: Binding(
+            get: { providerID ?? "" },
+            set: { id in
+                providerID = id.isEmpty ? nil : id
+                // 换服务商时默认选它当前的模型
+                if let p = store.providers.first(where: { $0.id == id }) { model = p.model }
+            })) {
+            Text("跟随当前模型").tag("")
+            ForEach(store.providers.filter(\.hasKey)) { p in
+                Text(p.name).tag(p.id)
+            }
+        }
+
+        if let id = providerID, let p = store.providers.first(where: { $0.id == id }) {
+            NavigationLink {
+                ModelBrowser(title: title, models: p.allModels, selection: $model, favorites: favorites(for: p.id),
+                             recommend: recommend)
+            } label: {
+                LabeledContent("模型", value: model.isEmpty ? "未选择" : model)
+            }
+            if resolved == nil {
+                Label("请选择一个模型，否则会继续使用当前模型", systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func favorites(for providerID: String) -> Binding<[String]> {
+        Binding(
+            get: { store.providers.first { $0.id == providerID }?.favoriteModels ?? [] },
+            set: { newValue in
+                guard var p = store.providers.first(where: { $0.id == providerID }) else { return }
+                p.favoriteModels = newValue
+                store.updateProvider(p)
+            })
     }
 }
