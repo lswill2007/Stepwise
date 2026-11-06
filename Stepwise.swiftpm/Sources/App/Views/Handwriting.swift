@@ -747,7 +747,7 @@ struct InkPalette: View {
     }
 }
 
-/// 当前工具的参数：笔（颜色、笔型、粗细、压力灵敏度、笔尖扁平度、稳定性），荧光笔（颜色、粗细、透明度），橡皮（方式、大小）
+/// 当前工具的参数：笔（颜色、笔型、粗细、压力灵敏度、笔尖扁平度、稳定性），荧光笔（颜色、粗细、不透明度），橡皮（方式、大小）
 private struct InkOptionsPanel: View {
     @ObservedObject var tools: InkTools
 
@@ -817,7 +817,7 @@ private struct InkOptionsPanel: View {
             }
             .frame(height: 44)
             slider("粗细", $tools.markerWidth, InkTools.markerWidthRange, "\(Int(tools.markerWidth.rounded()))")
-            slider("透明度", $tools.markerOpacity, InkTools.markerOpacityRange, percent(tools.markerOpacity))
+            slider("不透明度", $tools.markerOpacity, InkTools.markerOpacityRange, percent(tools.markerOpacity))
         }
     }
 
