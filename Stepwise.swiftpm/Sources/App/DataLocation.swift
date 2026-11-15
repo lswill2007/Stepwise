@@ -17,7 +17,7 @@ enum DataLocation {
     static let ownNames: Set<String> = [libraryFile, foldersFile, notesFile, settingsFile, imagesFolder, drawingsFolder]
 
     /// 选定的文件夹存成 bookmark 放在 UserDefaults；重装 App 后会清空，需要重新选
-    private static let bookmarkKey = "dataFolderBookmark"
+    static let bookmarkKey = "dataFolderBookmark"
 
     static let defaultRoot = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
@@ -174,7 +174,7 @@ enum DataLocation {
 
         var text: String {
             if unreadable && sets == 0 && notes == 0 { return "Stepwise 数据（暂时读不出内容，可能还没从 iCloud 下载完）" }
-            return "\(sets) 个题集（\(questions) 道题）、\(notes) 篇笔记" + (hasSettings ? "，以及 API Key 和模型设置" : "")
+            return "\(sets) 个题集（\(questions) 道题）、\(notes) 篇笔记" + (hasSettings ? "，以及 API Key、学习时间和各项设置" : "")
         }
     }
 
@@ -332,7 +332,7 @@ struct LocationError: LocalizedError {
     var errorDescription: String? { message }
 }
 
-/// 存在储存文件夹里的模型设置（settings.json）：服务商（含选的模型、常用模型）、API Key、各用途的模型。
+/// 存在储存文件夹里的设置（settings.json）：服务商（含选的模型、常用模型）、API Key、各用途的模型，以及学习时间和其他设置。
 /// 重装 App 后钥匙串和设置可能都没了，选回同一个文件夹就能恢复。注意 API Key 在这个文件里没有加密。
 struct SettingsFile: Codable {
     var version = 1
@@ -347,4 +347,11 @@ struct SettingsFile: Codable {
     var noteProviderID: String?
     var noteModel: String
     var quickGrading: Bool?
+    /// 其他设置和学习时间：App 自己写进 UserDefaults 的值（二进制 plist），见 AppStore.preferenceSnapshot
+    var preferences: Data?
+}
+
+extension Notification.Name {
+    /// 从储存文件夹恢复了学习时间和设置：学习时间统计要和内存里的合并
+    static let stepwisePreferencesRestored = Notification.Name("stepwisePreferencesRestored")
 }

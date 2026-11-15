@@ -24,6 +24,18 @@ final class StudyTracker: ObservableObject {
     init() {
         daily = UserDefaults.standard.dictionary(forKey: "studyDaily") as? [String: Double] ?? [:]
         weeklyReports = UserDefaults.standard.dictionary(forKey: "studyWeeklyReports") as? [String: String] ?? [:]
+        // 从储存文件夹恢复了学习时间：和内存里还没保存的合并，按天取较大的值
+        NotificationCenter.default.addObserver(forName: .stepwisePreferencesRestored, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.mergeRestored() }
+        }
+    }
+
+    private func mergeRestored() {
+        let restored = UserDefaults.standard.dictionary(forKey: "studyDaily") as? [String: Double] ?? [:]
+        daily.merge(restored) { max($0, $1) }
+        let reports = UserDefaults.standard.dictionary(forKey: "studyWeeklyReports") as? [String: String] ?? [:]
+        if reports != weeklyReports { weeklyReports.merge(reports) { $1 } }
+        save()
     }
 
     static let dayFormatter: DateFormatter = {

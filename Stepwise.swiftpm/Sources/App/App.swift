@@ -18,8 +18,9 @@ struct StepwiseApp: App {
         // 退到后台时立即保存题库，避免被系统关闭时丢失最后的改动
         .onChange(of: scenePhase) {
             if scenePhase != .active {
-                store.saveNow()
+                // 先存学习时间，store.saveNow 会把它一起写进储存文件夹
                 tracker.save()
+                store.saveNow()
             }
         }
     }

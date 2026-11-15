@@ -192,6 +192,10 @@ final class AppStore: ObservableObject {
         let hasSettingsFile = loadSettingsFile()
         applyingSettings = false
         if DataLocation.isCustom && !hasSettingsFile { writeSettingsFile() }
+        // 任何设置变了（时钟、笔、学习时间……）都写一份进储存文件夹
+        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: nil) { [weak self] _ in
+            Task { @MainActor in self?.saveSettingsFile() }
+        }
         selectRecent()
         if let problem = DataLocation.launchProblem { errorMessage = problem }
     }
@@ -266,7 +270,7 @@ final class AppStore: ObservableObject {
 
     /// 立即写盘（App 退到后台、切题时调用，避免最后几秒的改动丢失）
     func saveNow() {
-        if settingsSaveTask != nil { writeSettingsFile() }
+        writeSettingsFile()
         saveTask?.cancel()
         notesSaveTask?.cancel()
         guard !writesBlocked else { return }
@@ -409,7 +413,8 @@ final class AppStore: ObservableObject {
         let file = SettingsFile(providers: providers, apiKeys: keys, activeProviderID: activeProviderID,
                                 gradingProviderID: gradingProviderID, gradingModel: gradingModel,
                                 questionProviderID: questionProviderID, questionModel: questionModel,
-                                noteProviderID: noteProviderID, noteModel: noteModel, quickGrading: quickGrading)
+                                noteProviderID: noteProviderID, noteModel: noteModel, quickGrading: quickGrading,
+                                preferences: Self.preferenceSnapshot())
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let data = try? encoder.encode(file) {
@@ -449,7 +454,59 @@ final class AppStore: ObservableObject {
         noteProviderID = file.noteProviderID
         noteModel = file.noteModel
         if let quick = file.quickGrading { quickGrading = quick }
+        if let data = file.preferences { restorePreferences(data) }
         return true
+    }
+
+    // MARK: - 其他设置和学习时间
+
+    /// 上面单独存过的模型设置、储存位置本身不放进 preferences
+    private static let excludedPreferenceKeys: Set<String> = [
+        DataLocation.bookmarkKey, "providers", "activeProvider", "gradingProvider", "gradingModel",
+        "questionProvider", "questionModel", "noteProvider", "noteModel", "quickGrading"
+    ]
+
+    /// App 自己的设置键都是小写字母开头；系统框架写的（NS…、Apple…、com.apple…）不要
+    private static func isAppPreferenceKey(_ key: String) -> Bool {
+        guard let first = key.unicodeScalars.first, ("a"..."z").contains(first) else { return false }
+        return !key.hasPrefix("com.") && !excludedPreferenceKeys.contains(key)
+    }
+
+    /// 本 App 的 UserDefaults（时钟、笔、快捷操作、学习时间和周报……）打包成二进制 plist
+    private static func preferenceSnapshot() -> Data? {
+        guard let id = Bundle.main.bundleIdentifier,
+              let domain = UserDefaults.standard.persistentDomain(forName: id) else { return nil }
+        let prefs = domain.filter { isAppPreferenceKey($0.key) }
+        return try? PropertyListSerialization.data(fromPropertyList: prefs, format: .binary, options: 0)
+    }
+
+    /// 把文件夹里的设置写回 UserDefaults。学习时间按天取较大的值、周报合并，本机多出来的不丢
+    private func restorePreferences(_ data: Data) {
+        guard let prefs = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return }
+        let d = UserDefaults.standard
+        for (key, value) in prefs where Self.isAppPreferenceKey(key) {
+            switch key {
+            case "studyDaily":
+                var merged = d.dictionary(forKey: key) as? [String: Double] ?? [:]
+                merged.merge(value as? [String: Double] ?? [:]) { max($0, $1) }
+                d.set(merged, forKey: key)
+            case "studyWeeklyReports":
+                var merged = d.dictionary(forKey: key) as? [String: String] ?? [:]
+                merged.merge(value as? [String: String] ?? [:]) { $1 }
+                d.set(merged, forKey: key)
+            default:
+                d.set(value, forKey: key)
+            }
+        }
+        // 已经读进内存的设置跟着更新（时钟用 @AppStorage，会自己更新）
+        aiConsent = d.object(forKey: "aiConsent") as? Bool ?? aiConsent
+        showTiming = d.object(forKey: "showTiming") as? Bool ?? showTiming
+        keyboardAnswer = d.bool(forKey: "keyboardAnswer")
+        presolveAnswers = d.object(forKey: "presolveAnswers") as? Bool ?? presolveAnswers
+        if let saved = d.data(forKey: "followUps"), let list = try? JSONDecoder().decode([FollowUpAction].self, from: saved) {
+            followUps = list
+        }
+        NotificationCenter.default.post(name: .stepwisePreferencesRestored, object: nil)
     }
 
     private func saveProviders() {

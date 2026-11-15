@@ -21,7 +21,7 @@ struct SettingsView: View {
                         Label("学习日志和周报", systemImage: "chart.bar")
                     }
                 } footer: {
-                    Text("一分钟内有操作（写字、翻页、点按）的时间算作学习，停下来不动的时间不算。只记在本机。")
+                    Text("一分钟内有操作（写字、翻页、点按）的时间算作学习，停下来不动的时间不算。记在本机；选了文件储存位置时也存一份在那个文件夹里。")
                 }
 
                 Section {
@@ -761,7 +761,7 @@ struct StorageLocationSection: View {
         } header: {
             Text("文件储存位置")
         } footer: {
-            Text("默认存在 App 内，删除 App 时会一起删掉。可以选一个“文件”App 里的文件夹（iCloud 云盘或“我的 iPad”），题目、笔记、图片和手写笔迹都存在那里；更新或重新安装 App 后，重新选同一个文件夹就能读到原来的数据。选空文件夹会把现在的数据复制过去；选已有 Stepwise 数据的文件夹会改用那份数据。原来位置的数据不会删除。API Key、服务商、选的模型和常用模型也会存在这个文件夹里（settings.json，没有加密，请不要把文件夹分享给别人）；学习时间和其他设置只存在本机。")
+            Text("默认存在 App 内，删除 App 时会一起删掉。可以选一个“文件”App 里的文件夹（iCloud 云盘或“我的 iPad”），题目、笔记、图片和手写笔迹都存在那里；更新或重新安装 App 后，重新选同一个文件夹就能读到原来的数据。选空文件夹会把现在的数据复制过去；选已有 Stepwise 数据的文件夹会改用那份数据。原来位置的数据不会删除。API Key、服务商、选的模型和常用模型、学习时间和周报、其他设置也会存在这个文件夹里（settings.json，API Key 没有加密，请不要把文件夹分享给别人）。")
         }
         .alert(dialog?.title ?? "", isPresented: Binding(get: { dialog != nil }, set: { if !$0 { dialog = nil } }), presenting: dialog) { d in
             if let change = d.change {
@@ -804,7 +804,7 @@ struct StorageLocationSection: View {
             switch contents {
             case .empty:
                 dialog = Dialog(title: "把现在的数据复制到“\(name)”？",
-                                message: "现在的\(currentSummary)，连同图片、手写笔迹、API Key 和模型设置，会复制到这个文件夹，之后都存在那里。原来位置的那份保留不动，可以随时改回来。",
+                                message: "现在的\(currentSummary)，连同图片、手写笔迹、学习时间、API Key 和各项设置，会复制到这个文件夹，之后都存在那里。原来位置的那份保留不动，可以随时改回来。",
                                 change: Change(folder: folder, mode: .copyCurrent, confirm: "复制并使用这个文件夹"))
             case .stepwise(let summary):
                 dialog = Dialog(title: "“\(name)”里已经有 Stepwise 数据",
