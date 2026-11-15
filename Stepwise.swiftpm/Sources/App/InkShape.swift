@@ -42,7 +42,8 @@ enum InkShape {
     /// 每个点的粗细：压力灵敏度和笔尖扁平度
     /// - pressure：0 完全不随压力变化，0.5 系统默认，1 压力影响很大
     /// - flatness：0 圆笔尖，1 很扁：顺着笔尖方向写很细，垂直方向写很粗
-    static func widths(_ points: [Point], pressure: Double, flatness: Double) -> [CGFloat] {
+    /// - variation：笔型本身的粗细变化保留多少，1 不变，越小越接近统一粗细（钢笔用来收窄 PencilKit 自带的粗细变化）
+    static func widths(_ points: [Point], pressure: Double, flatness: Double, variation: CGFloat = 1) -> [CGFloat] {
         guard !points.isEmpty else { return [] }
         let sizes = points.map(\.size)
         let median = sizes.sorted()[sizes.count / 2]
@@ -57,6 +58,9 @@ enum InkShape {
                 let t = CGFloat((pressure - 0.5) / 0.5)
                 let nf = points[i].force / maxForce
                 w *= 1 + t * (0.3 + 1.4 * nf - 1)
+            }
+            if variation < 1 {
+                w = median + (w - median) * variation
             }
             if flatness > 0, points.count > 1 {
                 let a = points[max(i - 1, 0)].location

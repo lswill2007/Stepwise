@@ -116,8 +116,11 @@ final class InkTools: ObservableObject {
 
     /// 写完一笔后要不要按手感参数重新整理
     var shapesPenStrokes: Bool {
-        tool == .pen && !InkShape.isDefault(pressure: penPressure, flatness: penFlatness, stability: penStability)
+        tool == .pen && (penVariation < 1 || !InkShape.isDefault(pressure: penPressure, flatness: penFlatness, stability: penStability))
     }
+
+    /// 笔型自带的粗细变化保留多少：PencilKit 的钢笔粗细变化太大，字写出来忽粗忽细，收窄到不到一半
+    var penVariation: CGFloat { penKind == .fountain ? 0.45 : 1 }
 
     static let penColors = ["#1C1C1E", "#1F4FA8", "#C0392B", "#2E7D32"]
     static let penWidths: [Double] = [2, 3, 5]
@@ -562,7 +565,8 @@ struct NotebookCanvas: UIViewRepresentable {
             guard original.count > 1 else { return nil }
             let points = original.map { InkShape.Point(location: $0.location, force: $0.force, size: $0.size.width) }
             let smoothed = InkShape.smooth(points, stability: tools.penStability)
-            let widths = InkShape.widths(smoothed, pressure: tools.penPressure, flatness: tools.penFlatness)
+            let widths = InkShape.widths(smoothed, pressure: tools.penPressure, flatness: tools.penFlatness,
+                                         variation: tools.penVariation)
             let newPoints = original.indices.map { i -> PKStrokePoint in
                 let p = original[i]
                 let scale = widths[i] / max(p.size.width, 0.01)
