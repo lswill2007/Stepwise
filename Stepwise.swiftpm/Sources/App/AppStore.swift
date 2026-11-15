@@ -182,21 +182,37 @@ final class AppStore: ObservableObject {
     /// 正在从磁盘读数据：这期间的赋值不触发保存
     private var loading = false
 
+    /// 启动时的数据还在后台读：读完之前界面只显示空白页，也不保存任何东西
+    @Published private(set) var isLoaded = false
+
     init() {
-        DataLocation.bootstrap()
-        loadFromDisk()
+        // 题库、笔记和储存文件夹里的设置都在后台读（iCloud 文件可能要等下载），界面不用等
+        loading = true
+        settingsFileBlocked = true
         applyingSettings = true
         loadProviders()
         activeProviderID = UserDefaults.standard.string(forKey: "activeProvider") ?? "anthropic"
-        // 用了储存文件夹：以文件夹里的 API Key 和模型设置为准（重装 App 后也能恢复）
-        let hasSettingsFile = loadSettingsFile()
         applyingSettings = false
-        if DataLocation.isCustom && !hasSettingsFile { writeSettingsFile() }
         // 任何设置变了（时钟、笔、学习时间……）都写一份进储存文件夹
         NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in self?.saveSettingsFile() }
         }
+        Task { await loadAtLaunch() }
+    }
+
+    private func loadAtLaunch() async {
+        let snapshot = await Task.detached(priority: .userInitiated) {
+            DataLocation.bootstrap()
+            return AppStore.readDisk()
+        }.value
+        apply(snapshot)
+        // 用了储存文件夹：以文件夹里的 API Key 和设置为准（重装 App 后也能恢复）
+        applyingSettings = true
+        let hasSettingsFile = applySettings(snapshot.settings)
+        applyingSettings = false
+        if DataLocation.isCustom && !hasSettingsFile { writeSettingsFile() }
         selectRecent()
+        isLoaded = true
         if let problem = DataLocation.launchProblem { errorMessage = problem }
     }
 
@@ -208,55 +224,80 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// 从当前储存位置读题库、笔记和文件夹（启动时、换了储存位置之后）
-    private func loadFromDisk() {
-        loading = true
-        defer { loading = false }
+    /// 从磁盘读出来、还没交给界面的数据
+    private struct DiskSnapshot {
+        var sets: [QuestionSet] = []
+        var notes: [NoteDoc] = []
+        var folders: [Folder] = []
+        /// 存在但读不出来的文件
         var unreadable: [String] = []
+        var settings: SettingsRead = .missing
+    }
+
+    private enum SettingsRead {
+        case missing, unreadable
+        case file(SettingsFile)
+    }
+
+    /// 在后台读当前储存位置的题库、笔记、文件夹和 settings.json（启动时、换了储存位置之后）
+    nonisolated private static func readDisk() -> DiskSnapshot {
+        var snapshot = DiskSnapshot()
         func load(_ url: URL) -> Data? {
             guard DataLocation.exists(url) else { return nil }
             do {
                 return try DataLocation.read(url)
             } catch {
-                unreadable.append(url.lastPathComponent)
+                snapshot.unreadable.append(url.lastPathComponent)
                 return nil
             }
         }
-        var loadedSets: [QuestionSet] = []
-        if let data = load(Self.libraryURL) {
+        if let data = load(libraryURL) {
             if let decoded = try? JSONDecoder().decode([QuestionSet].self, from: data) {
-                loadedSets = decoded.map(Self.cleaned)
+                snapshot.sets = decoded.map(cleaned)
             } else {
                 // 读不出来时先把原文件备份，绝不能让之后的保存把题库覆盖掉
                 let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-                let backup = Self.libraryURL.deletingLastPathComponent().appendingPathComponent("library-backup-\(stamp).json")
+                let backup = libraryURL.deletingLastPathComponent().appendingPathComponent("library-backup-\(stamp).json")
                 try? DataLocation.write(data, to: backup)
             }
         }
-        var loadedNotes: [NoteDoc] = []
-        if let data = load(Self.notesURL),
-           let decoded = try? JSONDecoder().decode([NoteDoc].self, from: data) {
-            loadedNotes = decoded
+        if let data = load(notesURL), let decoded = try? JSONDecoder().decode([NoteDoc].self, from: data) {
+            snapshot.notes = decoded
         }
-        var loadedFolders: [Folder] = []
-        if let data = load(Self.foldersURL),
-           let decoded = try? JSONDecoder().decode([Folder].self, from: data) {
-            loadedFolders = decoded
+        if let data = load(foldersURL), let decoded = try? JSONDecoder().decode([Folder].self, from: data) {
+            snapshot.folders = decoded
         }
-        writesBlocked = !unreadable.isEmpty
+        if DataLocation.isCustom {
+            let url = DataLocation.url(DataLocation.settingsFile)
+            if DataLocation.exists(url) {
+                if let data = try? DataLocation.read(url), let file = try? JSONDecoder().decode(SettingsFile.self, from: data) {
+                    snapshot.settings = .file(file)
+                } else {
+                    snapshot.settings = .unreadable
+                }
+            }
+        }
+        return snapshot
+    }
+
+    /// 把读好的数据交给界面
+    private func apply(_ snapshot: DiskSnapshot) {
+        loading = true
+        defer { loading = false }
+        writesBlocked = !snapshot.unreadable.isEmpty
         if writesBlocked {
-            errorMessage = "读不到储存位置里的 \(unreadable.joined(separator: "、"))（可能还没从 iCloud 下载完）。为了不覆盖原来的数据，现在的改动不会保存。请确认网络和 iCloud 正常后重新打开 App。"
+            errorMessage = "读不到储存位置里的 \(snapshot.unreadable.joined(separator: "、"))（可能还没从 iCloud 下载完）。为了不覆盖原来的数据，现在的改动不会保存。请确认网络和 iCloud 正常后重新打开 App。"
         }
-        sets = loadedSets
-        notes = loadedNotes
-        folders = loadedFolders
+        sets = snapshot.sets
+        notes = snapshot.notes
+        folders = snapshot.folders
         repairFolders()
     }
 
     // MARK: - 持久化
 
     /// 修正旧版本导入的数据：统一题号、还原转义字符、去掉题干里重复的题号行（可重复执行）
-    private static func cleaned(_ set: QuestionSet) -> QuestionSet {
+    nonisolated private static func cleaned(_ set: QuestionSet) -> QuestionSet {
         var set = set
         for i in set.questions.indices where !set.questions[i].isGenerated {
             var q = set.questions[i]
@@ -270,6 +311,8 @@ final class AppStore: ObservableObject {
 
     /// 立即写盘（App 退到后台、切题时调用，避免最后几秒的改动丢失）
     func saveNow() {
+        // 数据还没读完（启动时、换储存位置时）：这时保存会把空的或旧的数据写进去
+        guard isLoaded, !loading else { return }
         writeSettingsFile()
         saveTask?.cancel()
         notesSaveTask?.cancel()
@@ -346,16 +389,24 @@ final class AppStore: ObservableObject {
                 try DataLocation.copyData(from: source, to: target)
             }.value
         }
-        if let folder {
-            try DataLocation.adopt(folder)
-        } else {
-            DataLocation.resetToDefault()
+        // 从换位置到新数据读完，什么都不写，免得把旧数据写进新位置
+        loading = true
+        do {
+            if let folder {
+                try DataLocation.adopt(folder)
+            } else {
+                DataLocation.resetToDefault()
+            }
+        } catch {
+            loading = false
+            throw error
         }
         ImageStore.clearCache()
-        loadFromDisk()
-        // API Key 和模型设置：改用已有数据时套用文件夹里的；复制过去（或文件夹里还没有）时写一份进去
+        let snapshot = await Task.detached(priority: .userInitiated) { AppStore.readDisk() }.value
+        apply(snapshot)
+        // API Key 和设置：改用已有数据时套用文件夹里的；复制过去（或文件夹里还没有）时写一份进去
         if folder != nil {
-            if mode == .copyCurrent || !loadSettingsFile() { writeSettingsFile() }
+            if mode == .copyCurrent || !applySettings(snapshot.settings) { writeSettingsFile() }
         } else {
             settingsFileBlocked = false
         }
@@ -394,7 +445,7 @@ final class AppStore: ObservableObject {
 
     /// 选了储存文件夹时，把服务商（含选的模型、常用模型）、API Key、各用途的模型写进文件夹里的 settings.json
     func saveSettingsFile() {
-        guard DataLocation.isCustom, !applyingSettings, !settingsFileBlocked else { return }
+        guard DataLocation.isCustom, !loading, !applyingSettings, !settingsFileBlocked else { return }
         settingsSaveTask?.cancel()
         settingsSaveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -407,7 +458,7 @@ final class AppStore: ObservableObject {
     func writeSettingsFile() {
         settingsSaveTask?.cancel()
         settingsSaveTask = nil
-        guard DataLocation.isCustom, !settingsFileBlocked else { return }
+        guard DataLocation.isCustom, !loading, !settingsFileBlocked else { return }
         var keys: [String: String] = [:]
         for p in providers where p.hasKey { keys[p.id] = p.apiKey }
         let file = SettingsFile(providers: providers, apiKeys: keys, activeProviderID: activeProviderID,
@@ -422,17 +473,19 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// 读储存文件夹里的 settings.json 并套用；没有这个文件时返回 false
+    /// 套用储存文件夹里的 settings.json（已经在后台读好）；没有这个文件时返回 false
     @discardableResult
-    private func loadSettingsFile() -> Bool {
+    private func applySettings(_ read: SettingsRead) -> Bool {
         settingsFileBlocked = false
         guard DataLocation.isCustom else { return false }
-        let url = DataLocation.url(DataLocation.settingsFile)
-        guard DataLocation.exists(url) else { return false }
-        guard let data = try? DataLocation.read(url),
-              let file = try? JSONDecoder().decode(SettingsFile.self, from: data) else {
+        let file: SettingsFile
+        switch read {
+        case .missing: return false
+        case .unreadable:
+            // 读不出来就不写，免得把里面的 API Key 覆盖掉
             settingsFileBlocked = true
             return true
+        case .file(let f): file = f
         }
         let wasApplying = applyingSettings
         applyingSettings = true

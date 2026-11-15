@@ -62,7 +62,6 @@ final class StudyTracker: ObservableObject {
     private func tick() {
         let now = Date()
         let dt = now.timeIntervalSince(lastTick)
-        if Int(now.timeIntervalSince1970) % 10 == 0 { NSLog("DBG tick %f idle %f", dt, now.timeIntervalSince(lastActivity)) }
         lastTick = now
         // 退到后台再回来时中间那段不算；一分钟内没有操作也不算
         guard dt > 0, dt < 5, now.timeIntervalSince(lastActivity) <= Self.idleLimit else { return }

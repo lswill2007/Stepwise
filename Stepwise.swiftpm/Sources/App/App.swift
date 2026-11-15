@@ -2,6 +2,10 @@ import SwiftUI
 
 @main
 struct StepwiseApp: App {
+    init() {
+        // 公式排版用的 WebKit 和 KaTeX 最慢，一启动就在后台准备
+        MathAssets.prewarm()
+    }
     @StateObject private var store = AppStore()
     @StateObject private var tracker = StudyTracker()
     @Environment(\.scenePhase) private var scenePhase
@@ -34,6 +38,14 @@ struct RootView: View {
     @State private var showSettings = false
 
     var body: some View {
+        if store.isLoaded {
+            main
+        } else {
+            LaunchPlaceholder()
+        }
+    }
+
+    private var main: some View {
         NavigationSplitView(columnVisibility: $store.columnVisibility) {
             SidebarView(showImport: $showImport, showNoteImport: $showNoteImport, showSettings: $showSettings)
         } content: {
@@ -94,6 +106,24 @@ struct RootView: View {
                 // 还没有任何 Key 时，直接引导去设置
                 showSettings = true
             }
+        }
+    }
+}
+
+/// 启动时数据还在后台读：先显示空白页，读得慢（例如 iCloud 正在下载）时才转圈
+private struct LaunchPlaceholder: View {
+    @State private var showSpinner = false
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.background).ignoresSafeArea()
+            if showSpinner {
+                ProgressView("正在打开…")
+            }
+        }
+        .task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            showSpinner = true
         }
     }
 }

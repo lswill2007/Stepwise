@@ -88,11 +88,7 @@ final class MathWebCoordinator: NSObject, WKNavigationDelegate {
         web.setValue(false, forKey: "drawsBackground")
         #endif
         webView = web
-        if let page = MathAssets.pageURL {
-            web.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
-        } else {
-            web.loadHTMLString(MathTemplate.html, baseURL: URL(string: "https://stepwise.app/"))
-        }
+        MathAssets.load(web)
         return web
     }
 
@@ -211,6 +207,33 @@ enum MathAssets {
         guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
         return try? install(into: support.appendingPathComponent("katex-\(KatexAssets.version)", isDirectory: true))
     }()
+
+    /// 预热用的隐藏网页，题目显示出来之后就放掉
+    @MainActor private static var warmView: WKWebView?
+
+    /// 启动时调用：后台把 KaTeX 写到本地（第一次启动要解压字体，不能卡住界面），
+    /// 再开一个隐藏网页先把 WebKit 进程和 KaTeX 加载起来，题目里的公式就不用从头等
+    @MainActor static func prewarm() {
+        guard warmView == nil else { return }
+        Task.detached(priority: .userInitiated) {
+            _ = pageURL
+            await MainActor.run {
+                let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 100))
+                load(web)
+                warmView = web
+                DispatchQueue.main.asyncAfter(deadline: .now() + 20) { warmView = nil }
+            }
+        }
+    }
+
+    /// 加载公式页面：本地 KaTeX 写入失败时用模板（从 CDN 加载 KaTeX）
+    @MainActor static func load(_ web: WKWebView) {
+        if let page = pageURL {
+            web.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
+        } else {
+            web.loadHTMLString(MathTemplate.html, baseURL: URL(string: "https://stepwise.app/"))
+        }
+    }
 
     static func install(into dir: URL) throws -> URL {
         let fm = FileManager.default
