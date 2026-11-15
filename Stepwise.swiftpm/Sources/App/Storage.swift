@@ -4,7 +4,7 @@ import ImageIO
 import CoreGraphics
 import UniformTypeIdentifiers
 
-/// API Key 只存在系统钥匙串里，不写进普通文件。
+/// API Key 存在系统钥匙串里；选了文件储存位置时，另外在那个文件夹的 settings.json 里存一份（见 SettingsFile）。
 enum Keychain {
     private static let service = "com.lswill2007.stepwise.apikeys"
 

@@ -11,8 +11,10 @@ enum DataLocation {
     static let notesFile = "notes.json"
     static let imagesFolder = "images"
     static let drawingsFolder = "drawings"
+    /// API Key、服务商和选的模型（只在用户选的文件夹里有，见 SettingsFile）
+    static let settingsFile = "settings.json"
     static let jsonFiles = [foldersFile, notesFile, libraryFile]
-    static let ownNames: Set<String> = [libraryFile, foldersFile, notesFile, imagesFolder, drawingsFolder]
+    static let ownNames: Set<String> = [libraryFile, foldersFile, notesFile, settingsFile, imagesFolder, drawingsFolder]
 
     /// 选定的文件夹存成 bookmark 放在 UserDefaults；重装 App 后会清空，需要重新选
     private static let bookmarkKey = "dataFolderBookmark"
@@ -162,15 +164,17 @@ enum DataLocation {
         var folders = 0
         /// 包括笔记的练习题集
         var allSets = 0
+        /// 有 settings.json（API Key 和模型设置）
+        var hasSettings = false
         /// 有文件在 iCloud 里还没下载、或者读不出来
         var unreadable = false
 
         /// 只有空的题库文件（例如换位置之前存下的空列表），当成空文件夹
-        var isEmpty: Bool { allSets == 0 && notes == 0 && folders == 0 && !unreadable }
+        var isEmpty: Bool { allSets == 0 && notes == 0 && folders == 0 && !hasSettings && !unreadable }
 
         var text: String {
             if unreadable && sets == 0 && notes == 0 { return "Stepwise 数据（暂时读不出内容，可能还没从 iCloud 下载完）" }
-            return "\(sets) 个题集（\(questions) 道题）、\(notes) 篇笔记"
+            return "\(sets) 个题集（\(questions) 道题）、\(notes) 篇笔记" + (hasSettings ? "，以及 API Key 和模型设置" : "")
         }
     }
 
@@ -185,7 +189,7 @@ enum DataLocation {
             return String(name.dropFirst().dropLast(".icloud".count))
         }
         let visible = names.map(realName).filter { !$0.hasPrefix(".") }
-        if visible.contains(where: jsonFiles.contains) {
+        if visible.contains(where: { jsonFiles.contains($0) || $0 == settingsFile }) {
             let s = summary(of: folder)
             if !s.isEmpty { return .stepwise(s) }
         }
@@ -209,6 +213,7 @@ enum DataLocation {
                 s.unreadable = true
             }
         }
+        s.hasSettings = exists(folder.appendingPathComponent(settingsFile))
         let folders = folder.appendingPathComponent(foldersFile)
         if exists(folders) {
             if let data = try? read(folders), let list = try? JSONDecoder().decode([Folder].self, from: data) {
@@ -325,4 +330,21 @@ enum DataLocation {
 struct LocationError: LocalizedError {
     let message: String
     var errorDescription: String? { message }
+}
+
+/// 存在储存文件夹里的模型设置（settings.json）：服务商（含选的模型、常用模型）、API Key、各用途的模型。
+/// 重装 App 后钥匙串和设置可能都没了，选回同一个文件夹就能恢复。注意 API Key 在这个文件里没有加密。
+struct SettingsFile: Codable {
+    var version = 1
+    var providers: [ProviderConfig]
+    /// 服务商 id → API Key
+    var apiKeys: [String: String]
+    var activeProviderID: String
+    var gradingProviderID: String?
+    var gradingModel: String
+    var questionProviderID: String?
+    var questionModel: String
+    var noteProviderID: String?
+    var noteModel: String
+    var quickGrading: Bool?
 }

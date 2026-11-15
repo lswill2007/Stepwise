@@ -72,8 +72,10 @@ final class AppStore: ObservableObject {
     }
 
     // MARK: 服务商
-    @Published var providers: [ProviderConfig] = [] { didSet { saveProviders() } }
-    @Published var activeProviderID: String = "anthropic" { didSet { UserDefaults.standard.set(activeProviderID, forKey: "activeProvider") } }
+    @Published var providers: [ProviderConfig] = [] { didSet { saveProviders(); saveSettingsFile() } }
+    @Published var activeProviderID: String = "anthropic" {
+        didSet { UserDefaults.standard.set(activeProviderID, forKey: "activeProvider"); saveSettingsFile() }
+    }
 
     // MARK: 运行状态
     @Published var pending: [UUID: PendingReply] = [:]
@@ -89,14 +91,14 @@ final class AppStore: ObservableObject {
     // MARK: 批改速度
     /// 检查答案和提示时让模型少思考
     @Published var quickGrading: Bool = UserDefaults.standard.object(forKey: "quickGrading") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(quickGrading, forKey: "quickGrading") }
+        didSet { UserDefaults.standard.set(quickGrading, forKey: "quickGrading"); saveSettingsFile() }
     }
     /// 单独的批改与提示模型；为 nil 时跟随当前模型
     @Published var gradingProviderID: String? = UserDefaults.standard.string(forKey: "gradingProvider") {
-        didSet { UserDefaults.standard.set(gradingProviderID, forKey: "gradingProvider") }
+        didSet { UserDefaults.standard.set(gradingProviderID, forKey: "gradingProvider"); saveSettingsFile() }
     }
     @Published var gradingModel: String = UserDefaults.standard.string(forKey: "gradingModel") ?? "" {
-        didSet { UserDefaults.standard.set(gradingModel, forKey: "gradingModel") }
+        didSet { UserDefaults.standard.set(gradingModel, forKey: "gradingModel"); saveSettingsFile() }
     }
     /// 在 AI 回复旁显示用时
     @Published var showTiming: Bool = UserDefaults.standard.object(forKey: "showTiming") as? Bool ?? true {
@@ -120,18 +122,18 @@ final class AppStore: ObservableObject {
     }
     /// 单独的出新题模型（一般选推理能力强的）；为 nil 时跟随当前模型
     @Published var questionProviderID: String? = UserDefaults.standard.string(forKey: "questionProvider") {
-        didSet { UserDefaults.standard.set(questionProviderID, forKey: "questionProvider") }
+        didSet { UserDefaults.standard.set(questionProviderID, forKey: "questionProvider"); saveSettingsFile() }
     }
     @Published var questionModel: String = UserDefaults.standard.string(forKey: "questionModel") ?? "" {
-        didSet { UserDefaults.standard.set(questionModel, forKey: "questionModel") }
+        didSet { UserDefaults.standard.set(questionModel, forKey: "questionModel"); saveSettingsFile() }
     }
 
     /// 单独的整理笔记模型（导入资料生成笔记时用，一般选上下文长、能力强的）；为 nil 时跟随当前模型
     @Published var noteProviderID: String? = UserDefaults.standard.string(forKey: "noteProvider") {
-        didSet { UserDefaults.standard.set(noteProviderID, forKey: "noteProvider") }
+        didSet { UserDefaults.standard.set(noteProviderID, forKey: "noteProvider"); saveSettingsFile() }
     }
     @Published var noteModel: String = UserDefaults.standard.string(forKey: "noteModel") ?? "" {
-        didSet { UserDefaults.standard.set(noteModel, forKey: "noteModel") }
+        didSet { UserDefaults.standard.set(noteModel, forKey: "noteModel"); saveSettingsFile() }
     }
 
     /// 导入后在后台预先求解没有参考答案的题
@@ -162,6 +164,12 @@ final class AppStore: ObservableObject {
     }
 
     private var saveTask: Task<Void, Never>?
+    /// 模型设置文件（settings.json）停一会儿再写，填 API Key 时不用每个字都写一次
+    private var settingsSaveTask: Task<Void, Never>?
+    /// 正在套用设置文件：这期间的赋值不写回文件
+    private var applyingSettings = false
+    /// 储存位置里的 settings.json 存在但读不出来：不写，免得把里面的 API Key 覆盖掉
+    private var settingsFileBlocked = false
     private var replyTasks: [UUID: Task<Void, Never>] = [:]
 
     /// 数据文件都在数据根目录下（默认 App 内的 Documents，也可以在设置里换成用户选的文件夹）
@@ -177,8 +185,13 @@ final class AppStore: ObservableObject {
     init() {
         DataLocation.bootstrap()
         loadFromDisk()
+        applyingSettings = true
         loadProviders()
         activeProviderID = UserDefaults.standard.string(forKey: "activeProvider") ?? "anthropic"
+        // 用了储存文件夹：以文件夹里的 API Key 和模型设置为准（重装 App 后也能恢复）
+        let hasSettingsFile = loadSettingsFile()
+        applyingSettings = false
+        if DataLocation.isCustom && !hasSettingsFile { writeSettingsFile() }
         selectRecent()
         if let problem = DataLocation.launchProblem { errorMessage = problem }
     }
@@ -253,6 +266,7 @@ final class AppStore: ObservableObject {
 
     /// 立即写盘（App 退到后台、切题时调用，避免最后几秒的改动丢失）
     func saveNow() {
+        if settingsSaveTask != nil { writeSettingsFile() }
         saveTask?.cancel()
         notesSaveTask?.cancel()
         guard !writesBlocked else { return }
@@ -335,6 +349,12 @@ final class AppStore: ObservableObject {
         }
         ImageStore.clearCache()
         loadFromDisk()
+        // API Key 和模型设置：改用已有数据时套用文件夹里的；复制过去（或文件夹里还没有）时写一份进去
+        if folder != nil {
+            if mode == .copyCurrent || !loadSettingsFile() { writeSettingsFile() }
+        } else {
+            settingsFileBlocked = false
+        }
         // 换了一份数据：原来选中的题集、笔记可能已经不在了
         selectedNoteID = nil
         selectedSetID = nil
@@ -351,7 +371,11 @@ final class AppStore: ObservableObject {
            let decoded = try? JSONDecoder().decode([ProviderConfig].self, from: data) {
             saved = decoded
         }
-        // 用最新的预设补齐（升级后新增的服务商、新增的预设模型）
+        providers = Self.mergedWithPresets(saved)
+    }
+
+    /// 用最新的预设补齐（升级后新增的服务商、新增的预设模型）
+    private static func mergedWithPresets(_ saved: [ProviderConfig]) -> [ProviderConfig] {
         var merged: [ProviderConfig] = ProviderCatalog.presets.map { preset in
             guard var old = saved.first(where: { $0.id == preset.id }) else { return preset }
             old.presetModels = preset.presetModels
@@ -359,7 +383,73 @@ final class AppStore: ObservableObject {
             return old
         }
         merged += saved.filter { $0.isCustom }
-        providers = merged
+        return merged
+    }
+
+    // MARK: - 模型设置文件
+
+    /// 选了储存文件夹时，把服务商（含选的模型、常用模型）、API Key、各用途的模型写进文件夹里的 settings.json
+    func saveSettingsFile() {
+        guard DataLocation.isCustom, !applyingSettings, !settingsFileBlocked else { return }
+        settingsSaveTask?.cancel()
+        settingsSaveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.writeSettingsFile()
+        }
+    }
+
+    /// 立即写 settings.json（换储存位置、退到后台时）
+    func writeSettingsFile() {
+        settingsSaveTask?.cancel()
+        settingsSaveTask = nil
+        guard DataLocation.isCustom, !settingsFileBlocked else { return }
+        var keys: [String: String] = [:]
+        for p in providers where p.hasKey { keys[p.id] = p.apiKey }
+        let file = SettingsFile(providers: providers, apiKeys: keys, activeProviderID: activeProviderID,
+                                gradingProviderID: gradingProviderID, gradingModel: gradingModel,
+                                questionProviderID: questionProviderID, questionModel: questionModel,
+                                noteProviderID: noteProviderID, noteModel: noteModel, quickGrading: quickGrading)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(file) {
+            try? DataLocation.write(data, to: DataLocation.url(DataLocation.settingsFile))
+        }
+    }
+
+    /// 读储存文件夹里的 settings.json 并套用；没有这个文件时返回 false
+    @discardableResult
+    private func loadSettingsFile() -> Bool {
+        settingsFileBlocked = false
+        guard DataLocation.isCustom else { return false }
+        let url = DataLocation.url(DataLocation.settingsFile)
+        guard DataLocation.exists(url) else { return false }
+        guard let data = try? DataLocation.read(url),
+              let file = try? JSONDecoder().decode(SettingsFile.self, from: data) else {
+            settingsFileBlocked = true
+            return true
+        }
+        let wasApplying = applyingSettings
+        applyingSettings = true
+        defer { applyingSettings = wasApplying }
+        // 本机有、文件里没有的自定义服务商也留着
+        let localCustom = providers.filter { p in p.isCustom && !file.providers.contains { $0.id == p.id } }
+        providers = Self.mergedWithPresets(file.providers + localCustom)
+        // 文件里有 Key 的以文件为准；文件里没有的保留本机钥匙串里的
+        for (id, key) in file.apiKeys where !key.isEmpty && Keychain.get(id) != key {
+            Keychain.set(key, for: id)
+        }
+        // 触发界面刷新（Key 存在钥匙串里，providers 本身没变时界面不知道）
+        objectWillChange.send()
+        activeProviderID = file.activeProviderID
+        gradingProviderID = file.gradingProviderID
+        gradingModel = file.gradingModel
+        questionProviderID = file.questionProviderID
+        questionModel = file.questionModel
+        noteProviderID = file.noteProviderID
+        noteModel = file.noteModel
+        if let quick = file.quickGrading { quickGrading = quick }
+        return true
     }
 
     private func saveProviders() {
