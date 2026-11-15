@@ -31,15 +31,26 @@ struct RichText: View {
         self.onSelect = onSelect
         self.host = host
         self.highlight = highlight
-        // 渲染完成前的估计高度，减少跳动
+        // 渲染完成前的高度：排过版的用上次量到的，没排过的估一个，减少跳动
         let lines = text.components(separatedBy: "\n").reduce(0) { $0 + max(1, $1.count / 45 + 1) }
-        _height = State(initialValue: CGFloat(min(lines, 40)) * 26 * CGFloat(scale))
+        _height = State(initialValue: Self.measured[Self.key(text, scale, tone)]
+                        ?? CGFloat(min(lines, 40)) * 26 * CGFloat(scale))
     }
 
     var body: some View {
         MathWebView(text: text, scale: scale, tone: tone, highlight: highlight, onSelect: onSelect, host: host, height: $height)
             .frame(height: max(height, 18))
             .frame(maxWidth: .infinity, alignment: .leading)
+            // 记住量到的高度：页面滚动回收后重建时直接用，不会先按估计高度排再变，把页面顶得跳一下
+            .onChange(of: height) {
+                if Self.measured.count > 400 { Self.measured.removeAll() }
+                Self.measured[Self.key(text, scale, tone)] = height
+            }
+    }
+
+    @MainActor private static var measured: [String: CGFloat] = [:]
+    private static func key(_ text: String, _ scale: Double, _ tone: RichTone) -> String {
+        "\(scale)|\(tone.rawValue)|\(text)"
     }
 }
 

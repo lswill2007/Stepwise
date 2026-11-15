@@ -30,8 +30,19 @@ struct NotebookView: View {
         let qID: UUID
     }
 
+    /// 各题在屏幕上的位置。滚动时每一帧都在变，不放进会刷新页面的状态里
+    final class ScrollTracker {
+        var frames: [UUID: CGRect] = [:]
+        /// 最近一次报给左边目录的题（或主动翻到的题）
+        var reported: UUID?
+        /// 主动翻页的动画期间不报
+        var quietUntil = Date.distantPast
+        /// 导航栏的高度
+        var topInset: CGFloat = 0
+    }
+
     @StateObject private var ink = NotebookInk()
-    @State private var position: UUID?
+    @State private var tracker = ScrollTracker()
     @State private var width: CGFloat = 800
     @State private var showSettings = false
     /// 错题本里显示的题：做对移出错题本后先留在页面上，免得正看着结果题目就消失了
@@ -47,23 +58,43 @@ struct NotebookView: View {
 
     var body: some View {
         let items = entries
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(items, id: \.qID) { entry in
-                    QuestionBlock(setID: entry.setID, qID: entry.qID, model: ink.model(for: entry.qID),
-                                  wide: width >= 760, mistakeMode: setID == nil,
-                                  nextID: next(after: entry, in: items))
-                        .id(entry.qID)
+        // 不用 scrollPosition(id:)：它会在页面内容变高变矮（手写区自动加长、公式排好版、批改结果到了）时
+        // 把“当前那道题”重新对齐到顶上，题目很长时它认的常常是下面一道，页面就突然跳到下面的答案。
+        // 这里只在左边目录点题、点“下一题”时主动翻页；翻到哪道题由各题的位置算出来
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(items, id: \.qID) { entry in
+                        QuestionBlock(setID: entry.setID, qID: entry.qID, model: ink.model(for: entry.qID),
+                                      wide: width >= 760, mistakeMode: setID == nil,
+                                      nextID: next(after: entry, in: items))
+                            .id(entry.qID)
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.scrollSpace)) } action: {
+                                tracker.frames[entry.qID] = $0
+                                reportScrolledQuestion()
+                            }
+                            .onDisappear { tracker.frames[entry.qID] = nil }
+                    }
+                    // 给底部的工具条留位置
+                    Color.clear.frame(height: 110)
                 }
-                // 给底部的工具条留位置
-                Color.clear.frame(height: 110)
+                .padding(.horizontal, 28)
+                .frame(maxWidth: 1100)
+                .frame(maxWidth: .infinity)
             }
-            .scrollTargetLayout()
-            .padding(.horizontal, 28)
-            .frame(maxWidth: 1100)
-            .frame(maxWidth: .infinity)
+            .coordinateSpace(.named(Self.scrollSpace))
+            // 页面从导航栏下面开始，翻到哪道题按导航栏下面那一条线算
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { tracker.topInset = $0 }
+            .onAppear {
+                // 等页面排好版再翻到选中的题
+                DispatchQueue.main.async { scroll(proxy, to: store.selectedQuestionID, animated: false) }
+            }
+            // 左边目录点了哪道题，就翻到哪道题（翻页时自己报上去的不算）
+            .onChange(of: store.selectedQuestionID) {
+                guard let id = store.selectedQuestionID, id != tracker.reported else { return }
+                scroll(proxy, to: id, animated: true)
+            }
         }
-        .scrollPosition(id: $position, anchor: .top)
         .scrollDismissesKeyboard(.interactively)
         .background(Ink.paper)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
@@ -98,18 +129,6 @@ struct NotebookView: View {
             if setID == nil {
                 mistakeEntries = store.starredEntries.map { Entry(setID: $0.setID, qID: $0.question.id) }
             }
-            // 等页面排好版再滚到选中的题
-            DispatchQueue.main.async { position = store.selectedQuestionID }
-        }
-        // 左边目录点了哪道题，就翻到哪道题
-        .onChange(of: store.selectedQuestionID) {
-            if store.selectedQuestionID != position {
-                withAnimation(.easeInOut(duration: 0.3)) { position = store.selectedQuestionID }
-            }
-        }
-        // 翻到哪道题，左边目录就跟着选中哪道题
-        .onChange(of: position) {
-            if let position, position != store.selectedQuestionID { store.selectedQuestionID = position }
         }
         // 新加入错题本的题接在后面
         .onChange(of: store.starredEntries.map(\.question.id)) {
@@ -122,6 +141,33 @@ struct NotebookView: View {
             if scenePhase != .active { ink.saveAll() }
         }
         .onDisappear { ink.saveAll() }
+    }
+
+    private static let scrollSpace = "notebookScroll"
+
+    /// 主动翻到某道题。翻页动画经过的题不报给左边目录，免得目录跟着闪
+    private func scroll(_ proxy: ScrollViewProxy, to id: UUID?, animated: Bool) {
+        guard let id else { return }
+        tracker.reported = id
+        tracker.quietUntil = Date().addingTimeInterval(animated ? 0.6 : 0.2)
+        if animated {
+            withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(id, anchor: .top) }
+        } else {
+            proxy.scrollTo(id, anchor: .top)
+        }
+    }
+
+    /// 翻到哪道题，左边目录就跟着选中哪道题：页面顶上那一条线落在哪道题里就是哪道
+    private func reportScrolledQuestion() {
+        guard Date() >= tracker.quietUntil else { return }
+        // 翻到某道题时题目顶端正好在导航栏下沿，线再往下一点，免得算成上一道
+        let line = tracker.topInset + 80
+        let frames = tracker.frames
+        let current = frames.first { $0.value.minY <= line && $0.value.maxY > line }?.key
+            ?? frames.filter { $0.value.minY > line }.min { $0.value.minY < $1.value.minY }?.key
+        guard let current, current != tracker.reported else { return }
+        tracker.reported = current
+        if store.selectedQuestionID != current { store.selectedQuestionID = current }
     }
 
     /// 做对后“下一题”跳到哪里：题集里是下一道没做完的题，错题本里是下一道错题
