@@ -89,6 +89,7 @@ struct SettingsView: View {
                     }
                 }
 
+                StorageLocationSection()
                 backupSection
 
                 Section {
@@ -686,5 +687,171 @@ struct ModelOverrideRows: View {
                 p.favoriteModels = newValue
                 store.updateProvider(p)
             })
+    }
+}
+
+// MARK: - 文件储存位置
+
+/// 选一个“文件”App 里的文件夹，题目、笔记、图片和手写笔迹都存在那里；更新或重装 App 后重新选同一个文件夹就能读到
+struct StorageLocationSection: View {
+    @EnvironmentObject var store: AppStore
+    @State private var current = DataLocation.customFolder
+    @State private var showPicker = false
+    @State private var working = false
+    @State private var dialog: Dialog?
+
+    /// 确认框或提示：change 不为 nil 时有“确认”按钮
+    struct Dialog: Identifiable {
+        let id = UUID()
+        var title: String
+        var message: String
+        var change: Change?
+    }
+
+    struct Change {
+        /// nil 表示改回 App 内默认位置
+        var folder: URL?
+        var mode: AppStore.LocationChange
+        var confirm: String
+    }
+
+    var body: some View {
+        Section {
+            LabeledContent("当前位置") {
+                Text(DataLocation.describe(current))
+                    .multilineTextAlignment(.trailing)
+            }
+            if let problem = DataLocation.launchProblem, current == nil {
+                Label(problem, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            }
+            if store.writesBlocked {
+                Label("储存位置里的数据还没读出来，现在的改动不会保存。", systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            }
+            Button {
+                showPicker = true
+            } label: {
+                Label(current == nil ? "选择文件夹…" : "换一个文件夹…", systemImage: "folder")
+            }
+            .disabled(working)
+            .fileImporter(isPresented: $showPicker, allowedContentTypes: [.folder]) { result in
+                picked(result)
+            }
+            if current != nil {
+                Button {
+                    prepareReset()
+                } label: {
+                    Label("改回 App 内默认位置", systemImage: "arrow.uturn.backward")
+                }
+                .disabled(working)
+            }
+            if working {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("正在处理…").foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("文件储存位置")
+        } footer: {
+            Text("默认存在 App 内，删除 App 时会一起删掉。可以选一个“文件”App 里的文件夹（iCloud 云盘或“我的 iPad”），题目、笔记、图片和手写笔迹都存在那里；更新或重新安装 App 后，重新选同一个文件夹就能读到原来的数据。选空文件夹会把现在的数据复制过去；选已有 Stepwise 数据的文件夹会改用那份数据。原来位置的数据不会删除。API Key、设置和学习时间仍然只存在本机。")
+        }
+        .alert(dialog?.title ?? "", isPresented: Binding(get: { dialog != nil }, set: { if !$0 { dialog = nil } }), presenting: dialog) { d in
+            if let change = d.change {
+                Button(change.confirm) { apply(change) }
+                Button("取消", role: .cancel) {}
+            } else {
+                Button("好") {}
+            }
+        } message: { d in
+            Text(d.message)
+        }
+    }
+
+    /// 现在这份数据有多少，例如“3 个题集、2 篇笔记”
+    private var currentSummary: String {
+        "\(store.questionSets.count) 个题集、\(store.notes.count) 篇笔记"
+    }
+
+    private func picked(_ result: Result<URL, Error>) {
+        let folder: URL
+        switch result {
+        case .success(let url): folder = url
+        case .failure(let error):
+            dialog = Dialog(title: "没能打开文件夹", message: error.localizedDescription)
+            return
+        }
+        if DataLocation.isSame(folder, DataLocation.root) {
+            dialog = Dialog(title: "已经在用这个文件夹", message: "数据现在就存在“\(DataLocation.describe(folder))”。")
+            return
+        }
+        if store.hasBackgroundWork {
+            dialog = Dialog(title: "稍等一下", message: "AI 正在回复或生成笔记，等它完成后再换储存位置。")
+            return
+        }
+        let name = DataLocation.describe(folder)
+        working = true
+        Task {
+            let contents = await Task.detached(priority: .userInitiated) { DataLocation.inspect(folder) }.value
+            working = false
+            switch contents {
+            case .empty:
+                dialog = Dialog(title: "把现在的数据复制到“\(name)”？",
+                                message: "现在的\(currentSummary)，连同图片和手写笔迹，会复制到这个文件夹，之后都存在那里。原来位置的那份保留不动，可以随时改回来。",
+                                change: Change(folder: folder, mode: .copyCurrent, confirm: "复制并使用这个文件夹"))
+            case .stepwise(let summary):
+                dialog = Dialog(title: "“\(name)”里已经有 Stepwise 数据",
+                                message: "里面有\(summary.text)。改用这个文件夹后，App 显示的是那份数据，不会用现在的数据覆盖它。现在的\(currentSummary)留在原来的位置，不会删除，改回原来的位置就能看到。",
+                                change: Change(folder: folder, mode: .useExisting, confirm: "使用文件夹里的数据"))
+            case .otherFiles(let names):
+                let list = names.prefix(3).joined(separator: "、") + (names.count > 3 ? " 等" : "")
+                dialog = Dialog(title: "这个文件夹里有其他文件",
+                                message: "“\(name)”里有\(list)。为了不弄乱你的文件，Stepwise 只存在空文件夹里：请在选择时新建一个文件夹（例如“Stepwise 数据”），再选它。")
+            }
+        }
+    }
+
+    private func prepareReset() {
+        if store.hasBackgroundWork {
+            dialog = Dialog(title: "稍等一下", message: "AI 正在回复或生成笔记，等它完成后再换储存位置。")
+            return
+        }
+        let folderName = DataLocation.describe(current)
+        working = true
+        Task {
+            let contents = await Task.detached(priority: .userInitiated) { DataLocation.inspect(DataLocation.defaultRoot) }.value
+            working = false
+            if case .stepwise(let summary) = contents {
+                dialog = Dialog(title: "App 内已经有一份数据",
+                                message: "App 内有\(summary.text)，可能是选文件夹之前的旧数据。改回后显示的是那份数据，不会被覆盖。“\(folderName)”里现在的\(currentSummary)保留不动，之后再选这个文件夹就能看到。",
+                                change: Change(folder: nil, mode: .useExisting, confirm: "改回并使用 App 内的数据"))
+            } else {
+                // App 内没有题库：把文件夹里的数据复制回来（App 内其他文件不会动）
+                dialog = Dialog(title: "把数据复制回 App 内？",
+                                message: "现在的\(currentSummary)，连同图片和手写笔迹，会复制回 App 内，之后存在那里（删除 App 时会一起删掉）。“\(folderName)”里的那份保留不动。",
+                                change: Change(folder: nil, mode: .copyCurrent, confirm: "复制并改回"))
+            }
+        }
+    }
+
+    private func apply(_ change: Change) {
+        working = true
+        Task {
+            do {
+                try await store.changeDataLocation(to: change.folder, mode: change.mode)
+                current = DataLocation.customFolder
+                let place = DataLocation.describe(current)
+                dialog = Dialog(title: "储存位置已更改",
+                                message: change.mode == .copyCurrent
+                                    ? "数据已复制，之后都存在“\(place)”。"
+                                    : "现在显示的是“\(place)”里的数据：\(currentSummary)。")
+            } catch {
+                dialog = Dialog(title: "没能更改储存位置", message: error.localizedDescription + "\n数据仍然存在原来的位置。")
+            }
+            working = false
+        }
     }
 }

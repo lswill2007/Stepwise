@@ -164,40 +164,76 @@ final class AppStore: ObservableObject {
     private var saveTask: Task<Void, Never>?
     private var replyTasks: [UUID: Task<Void, Never>] = [:]
 
-    nonisolated private static let libraryURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("library.json")
-    private static let foldersURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("folders.json")
-    nonisolated private static let notesURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("notes.json")
+    /// 数据文件都在数据根目录下（默认 App 内的 Documents，也可以在设置里换成用户选的文件夹）
+    nonisolated private static var libraryURL: URL { DataLocation.url(DataLocation.libraryFile) }
+    nonisolated private static var foldersURL: URL { DataLocation.url(DataLocation.foldersFile) }
+    nonisolated private static var notesURL: URL { DataLocation.url(DataLocation.notesFile) }
+
+    /// 储存位置里有数据文件但读不出来（例如 iCloud 还没下载完）：这时不写盘，免得把原来的数据覆盖成空的
+    @Published private(set) var writesBlocked = false
+    /// 正在从磁盘读数据：这期间的赋值不触发保存
+    private var loading = false
 
     init() {
-        if let data = try? Data(contentsOf: Self.libraryURL) {
-            if let decoded = try? JSONDecoder().decode([QuestionSet].self, from: data) {
-                sets = decoded.map(Self.cleaned)
-            } else {
-                // 读不出来时先把原文件备份，绝不能让之后的保存把题库覆盖掉
-                let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-                let backup = Self.libraryURL.deletingLastPathComponent().appendingPathComponent("library-backup-\(stamp).json")
-                try? data.write(to: backup)
-            }
-        }
-        if let data = try? Data(contentsOf: Self.notesURL),
-           let decoded = try? JSONDecoder().decode([NoteDoc].self, from: data) {
-            notes = decoded
-        }
-        if let data = try? Data(contentsOf: Self.foldersURL),
-           let decoded = try? JSONDecoder().decode([Folder].self, from: data) {
-            folders = decoded
-            repairFolders()
-        }
+        DataLocation.bootstrap()
+        loadFromDisk()
         loadProviders()
         activeProviderID = UserDefaults.standard.string(forKey: "activeProvider") ?? "anthropic"
-        // 打开 App 时直接回到最近的题集，停在第一道还没完成的题
+        selectRecent()
+        if let problem = DataLocation.launchProblem { errorMessage = problem }
+    }
+
+    /// 打开 App 时直接回到最近的题集，停在第一道还没完成的题
+    private func selectRecent() {
         if let recent = questionSets.first {
             selectedSetID = recent.id
             selectedQuestionID = recent.questions.first(where: { !$0.status.isDone })?.id ?? recent.questions.first?.id
         }
+    }
+
+    /// 从当前储存位置读题库、笔记和文件夹（启动时、换了储存位置之后）
+    private func loadFromDisk() {
+        loading = true
+        defer { loading = false }
+        var unreadable: [String] = []
+        func load(_ url: URL) -> Data? {
+            guard DataLocation.exists(url) else { return nil }
+            do {
+                return try DataLocation.read(url)
+            } catch {
+                unreadable.append(url.lastPathComponent)
+                return nil
+            }
+        }
+        var loadedSets: [QuestionSet] = []
+        if let data = load(Self.libraryURL) {
+            if let decoded = try? JSONDecoder().decode([QuestionSet].self, from: data) {
+                loadedSets = decoded.map(Self.cleaned)
+            } else {
+                // 读不出来时先把原文件备份，绝不能让之后的保存把题库覆盖掉
+                let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+                let backup = Self.libraryURL.deletingLastPathComponent().appendingPathComponent("library-backup-\(stamp).json")
+                try? DataLocation.write(data, to: backup)
+            }
+        }
+        var loadedNotes: [NoteDoc] = []
+        if let data = load(Self.notesURL),
+           let decoded = try? JSONDecoder().decode([NoteDoc].self, from: data) {
+            loadedNotes = decoded
+        }
+        var loadedFolders: [Folder] = []
+        if let data = load(Self.foldersURL),
+           let decoded = try? JSONDecoder().decode([Folder].self, from: data) {
+            loadedFolders = decoded
+        }
+        writesBlocked = !unreadable.isEmpty
+        if writesBlocked {
+            errorMessage = "读不到储存位置里的 \(unreadable.joined(separator: "、"))（可能还没从 iCloud 下载完）。为了不覆盖原来的数据，现在的改动不会保存。请确认网络和 iCloud 正常后重新打开 App。"
+        }
+        sets = loadedSets
+        notes = loadedNotes
+        folders = loadedFolders
+        repairFolders()
     }
 
     // MARK: - 持久化
@@ -218,40 +254,95 @@ final class AppStore: ObservableObject {
     /// 立即写盘（App 退到后台、切题时调用，避免最后几秒的改动丢失）
     func saveNow() {
         saveTask?.cancel()
-        if let data = try? JSONEncoder().encode(sets) {
-            try? data.write(to: Self.libraryURL, options: .atomic)
-        }
         notesSaveTask?.cancel()
+        guard !writesBlocked else { return }
+        if let data = try? JSONEncoder().encode(sets) {
+            try? DataLocation.write(data, to: Self.libraryURL)
+        }
         if let data = try? JSONEncoder().encode(notes) {
-            try? data.write(to: Self.notesURL, options: .atomic)
+            try? DataLocation.write(data, to: Self.notesURL)
         }
     }
 
     /// 笔记在流式生成时变化很频繁，停一会儿再写盘
     private func scheduleNotesSave() {
+        guard !loading, !writesBlocked else { return }
         notesSaveTask?.cancel()
         let snapshot = notes
+        // 地址在这里先定下来：等待期间换了储存位置，也不会写到新位置去
+        let url = Self.notesURL
         notesSaveTask = Task.detached(priority: .utility) {
             try? await Task.sleep(nanoseconds: 800_000_000)
             guard !Task.isCancelled, let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: Self.notesURL, options: .atomic)
+            try? DataLocation.write(data, to: url)
         }
     }
 
     private func scheduleSave() {
+        guard !loading, !writesBlocked else { return }
         saveTask?.cancel()
         let snapshot = sets
+        let url = Self.libraryURL
         saveTask = Task.detached(priority: .utility) {
             try? await Task.sleep(nanoseconds: 600_000_000)
             guard !Task.isCancelled, let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: Self.libraryURL, options: .atomic)
+            try? DataLocation.write(data, to: url)
         }
     }
 
     private func saveFolders() {
+        guard !loading, !writesBlocked else { return }
         if let data = try? JSONEncoder().encode(folders) {
-            try? data.write(to: Self.foldersURL, options: .atomic)
+            try? DataLocation.write(data, to: Self.foldersURL)
         }
+    }
+
+    // MARK: - 储存位置
+
+    /// AI 正在回复、生成笔记或在后台求解（这时不能换储存位置）
+    var hasBackgroundWork: Bool { !pending.isEmpty || !noteJobs.isEmpty || !presolving.isEmpty }
+
+    enum LocationChange {
+        /// 目标是空的：把当前数据复制过去
+        case copyCurrent
+        /// 目标里已经有 Stepwise 数据：改用那份
+        case useExisting
+    }
+
+    /// 换储存位置；folder 为 nil 表示改回 App 内默认位置。
+    /// 两种方式都只复制或改读，不删除、不覆盖原来位置的数据，改回去就能看到。
+    func changeDataLocation(to folder: URL?, mode: LocationChange) async throws {
+        guard !hasBackgroundWork else {
+            throw LocationError(message: "AI 正在回复或生成笔记，等它完成后再换储存位置。")
+        }
+        let source = DataLocation.root
+        let target = folder ?? DataLocation.defaultRoot
+        guard !DataLocation.isSame(source, target) else { return }
+        // 先把最近的改动写进原来的位置
+        saveNow()
+        if mode == .copyCurrent {
+            guard !writesBlocked else {
+                throw LocationError(message: "当前位置的数据没有完整读出来，不能复制。请先确认原来的数据能正常打开。")
+            }
+            try await Task.detached(priority: .userInitiated) {
+                try DataLocation.copyData(from: source, to: target)
+            }.value
+        }
+        if let folder {
+            try DataLocation.adopt(folder)
+        } else {
+            DataLocation.resetToDefault()
+        }
+        ImageStore.clearCache()
+        loadFromDisk()
+        // 换了一份数据：原来选中的题集、笔记可能已经不在了
+        selectedNoteID = nil
+        selectedSetID = nil
+        selectedQuestionID = nil
+        reviewOutcomes = [:]
+        noteGuides = [:]
+        activeNoteGuide = nil
+        selectRecent()
     }
 
     private func loadProviders() {

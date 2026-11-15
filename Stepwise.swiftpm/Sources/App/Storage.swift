@@ -39,28 +39,29 @@ enum Keychain {
 
 /// 图片单独存成文件，题库 JSON 里只记录文件名。
 enum ImageStore {
-    static let directory: URL = {
-        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("images", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
+    /// 在数据根目录下（见 DataLocation），换了储存位置就跟着换
+    static var directory: URL { DataLocation.imagesDirectory }
 
     private static let cache = NSCache<NSString, CGImage>()
 
+    /// 换了储存位置后清空缓存
+    static func clearCache() { cache.removeAllObjects() }
+
     static func save(_ jpeg: Data) -> String {
         let id = UUID().uuidString + ".jpg"
-        try? jpeg.write(to: directory.appendingPathComponent(id), options: .atomic)
+        try? DataLocation.write(jpeg, to: directory.appendingPathComponent(id))
         return id
     }
 
     static func load(_ id: String) -> Data? {
-        try? Data(contentsOf: directory.appendingPathComponent(id))
+        let url = directory.appendingPathComponent(id)
+        guard DataLocation.exists(url) else { return nil }
+        return try? DataLocation.read(url)
     }
 
     /// 按指定文件名保存（导入备份时用）
     static func save(_ data: Data, id: String) {
-        try? data.write(to: directory.appendingPathComponent(id), options: .atomic)
+        try? DataLocation.write(data, to: directory.appendingPathComponent(id))
     }
 
     static func cgImage(_ id: String) -> CGImage? {
@@ -72,7 +73,7 @@ enum ImageStore {
 
     static func delete(_ ids: [String]) {
         for id in ids {
-            try? FileManager.default.removeItem(at: directory.appendingPathComponent(id))
+            DataLocation.remove(directory.appendingPathComponent(id))
         }
     }
 }
@@ -119,31 +120,28 @@ enum ImageUtil {
 
 /// 每道题写了一半的手写笔迹（PencilKit 数据），保存在本机，切题或退出 App 都不会丢
 enum DrawingStore {
-    static let directory: URL = {
-        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("drawings", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
+    /// 在数据根目录下（见 DataLocation），换了储存位置就跟着换
+    static var directory: URL { DataLocation.drawingsDirectory }
 
     private static func url(_ id: UUID) -> URL {
         directory.appendingPathComponent(id.uuidString + ".drawing")
     }
 
     static func exists(_ id: UUID) -> Bool {
-        FileManager.default.fileExists(atPath: url(id).path)
+        DataLocation.exists(url(id))
     }
 
     static func load(_ id: UUID) -> Data? {
-        try? Data(contentsOf: url(id))
+        guard exists(id) else { return nil }
+        return try? DataLocation.read(url(id))
     }
 
     /// data 为 nil 表示没有笔迹，删除文件
     static func save(_ data: Data?, for id: UUID) {
         if let data {
-            try? data.write(to: url(id), options: .atomic)
+            try? DataLocation.write(data, to: url(id))
         } else {
-            try? FileManager.default.removeItem(at: url(id))
+            DataLocation.remove(url(id))
         }
     }
 
