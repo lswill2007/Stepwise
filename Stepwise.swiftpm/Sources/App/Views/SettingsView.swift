@@ -6,6 +6,12 @@ struct SettingsView: View {
     @State private var path: [String] = []
     @State private var showConsent = false
     @State private var showImporter = false
+    /// 设置页只放一个文件选择器：同一个页面上有两个 .fileImporter 时，较早的 iOS 只认一个，另一个按钮点了没反应
+    @State private var importerKind: ImporterKind = .backup
+    /// 选好的储存文件夹，交给“文件储存位置”那一节处理
+    @State private var folderPick: FolderPick?
+
+    enum ImporterKind { case backup, folder }
     @State private var importMessage: String?
     @AppStorage("clockEnabled") private var clockEnabled = false
     @AppStorage("clockScale") private var clockScale: Double = 1
@@ -89,7 +95,10 @@ struct SettingsView: View {
                     }
                 }
 
-                StorageLocationSection()
+                StorageLocationSection(pick: $folderPick) {
+                    importerKind = .folder
+                    showImporter = true
+                }
                 backupSection
 
                 Section {
@@ -112,7 +121,12 @@ struct SettingsView: View {
             }
             .navigationTitle("设置")
             .sheet(isPresented: $showConsent) { ConsentView() }
-            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { result in
+            .fileImporter(isPresented: $showImporter,
+                          allowedContentTypes: importerKind == .folder ? [.folder] : [.json]) { result in
+                if importerKind == .folder {
+                    folderPick = FolderPick(result: result)
+                    return
+                }
                 do {
                     let backup = try LibraryBackup.read(from: result.get())
                     let r = store.importBackup(backup, select: false)
@@ -194,6 +208,7 @@ struct SettingsView: View {
                 Label("导出题目和做题记录", systemImage: "square.and.arrow.up")
             }
             Button {
+                importerKind = .backup
                 showImporter = true
             } label: {
                 Label("导入题目和做题记录", systemImage: "square.and.arrow.down")
@@ -697,10 +712,20 @@ struct ModelOverrideRows: View {
 // MARK: - 文件储存位置
 
 /// 选一个“文件”App 里的文件夹，题目、笔记、图片和手写笔迹都存在那里；更新或重装 App 后重新选同一个文件夹就能读到
+/// 从文件选择器选到的文件夹（每次选都是新的一项，同一个文件夹再选一次也会处理）
+struct FolderPick: Equatable {
+    let id = UUID()
+    let result: Result<URL, Error>
+    static func == (a: FolderPick, b: FolderPick) -> Bool { a.id == b.id }
+}
+
 struct StorageLocationSection: View {
     @EnvironmentObject var store: AppStore
+    /// 设置页的文件选择器选好文件夹后放在这里
+    @Binding var pick: FolderPick?
+    /// 请设置页打开文件夹选择器
+    let choose: () -> Void
     @State private var current = DataLocation.customFolder
-    @State private var showPicker = false
     @State private var working = false
     @State private var dialog: Dialog?
 
@@ -736,14 +761,11 @@ struct StorageLocationSection: View {
                     .foregroundStyle(.orange)
             }
             Button {
-                showPicker = true
+                choose()
             } label: {
                 Label(current == nil ? "选择文件夹…" : "换一个文件夹…", systemImage: "folder")
             }
             .disabled(working)
-            .fileImporter(isPresented: $showPicker, allowedContentTypes: [.folder]) { result in
-                picked(result)
-            }
             if current != nil {
                 Button {
                     prepareReset()
@@ -762,6 +784,11 @@ struct StorageLocationSection: View {
             Text("文件储存位置")
         } footer: {
             Text("默认存在 App 内，删除 App 时会一起删掉。可以选一个“文件”App 里的文件夹（iCloud 云盘或“我的 iPad”），题目、笔记、图片和手写笔迹都存在那里；更新或重新安装 App 后，重新选同一个文件夹就能读到原来的数据。选空文件夹会把现在的数据复制过去；选已有 Stepwise 数据的文件夹会改用那份数据。原来位置的数据不会删除。API Key、服务商、选的模型和常用模型、学习时间和周报、其他设置也会存在这个文件夹里（settings.json，API Key 没有加密，请不要把文件夹分享给别人）。")
+        }
+        .onChange(of: pick) {
+            guard let p = pick else { return }
+            pick = nil
+            picked(p.result)
         }
         .alert(dialog?.title ?? "", isPresented: Binding(get: { dialog != nil }, set: { if !$0 { dialog = nil } }), presenting: dialog) { d in
             if let change = d.change {
