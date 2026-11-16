@@ -35,6 +35,9 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var note: String?
     /// 提示的档次：1 思路方向，2 关键一步，3 起是下一步写什么
     var hintLevel: Int?
+    /// hintLevel 为这个值：点“卡了”得到的点拨，不算提示的档次
+    static let stuckHintLevel = 0
+    var isStuckHelp: Bool { kind == .hint && hintLevel == Self.stuckHintLevel }
     /// 批改时标出的出错位置，画在手写区对应的那一行
     var marks: [InkMark]?
     /// 学生用橡皮擦掉的批注（marks 里的序号，从 0 开始）

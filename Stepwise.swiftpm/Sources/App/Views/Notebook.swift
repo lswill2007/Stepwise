@@ -197,8 +197,6 @@ struct QuestionBlock: View {
     @State private var showHistory = false
     @State private var confirmReset = false
     @State private var confirmClearInk = false
-    @State private var showHintNote = false
-    @State private var hintNote = ""
     @State private var showAsk = false
     @State private var askText = ""
     /// 页边选中的批注；nil 表示最新一条
@@ -532,10 +530,15 @@ struct QuestionBlock: View {
                 .fixedSize()
                 .disabled(busy)
 
-                // 先写几句卡在哪里，再要提示
-                Button("说说卡在哪") { showHintNote = true }
-                    .disabled(busy)
-                    .popover(isPresented: $showHintNote) { hintNotePopover(q) }
+                // 卡住了：把现在写到哪里直接发过去，AI 自己找出卡在哪一步
+                Button("卡了") {
+                    saveDraft()
+                    model.saveNow()
+                    store.reportStuck(setID, qID, answer: draft, handwriting: model.exportJPEG())
+                }
+                .lineLimit(1)
+                .fixedSize()
+                .disabled(busy)
 
                 if q.status != .revealed {
                     Button("看答案") { store.requestSolution(setID, qID) }
@@ -549,15 +552,6 @@ struct QuestionBlock: View {
             }
         }
         .buttonStyle(InkTextButtonStyle())
-    }
-
-    private func hintNotePopover(_ q: Question) -> some View {
-        notePopover(title: "补充说明", prompt: "说说你卡在哪一步、哪里不明白…", text: $hintNote,
-                    button: "发送并要提示：" + Tutor.hintLevelName(q.hintCount + 1), tint: Ink.pen) {
-            store.requestHint(setID, qID, note: hintNote)
-            hintNote = ""
-            showHintNote = false
-        }
     }
 
     private var askPopover: some View {
@@ -866,7 +860,8 @@ struct MarginNotes: View {
         case .verdictCorrect: return "✓ 检查"
         case .verdictWrong: return "检查"
         case .hint:
-            let n = before.filter { $0.kind == .hint }.count + 1
+            if m.isStuckHelp { return "卡了" }
+            let n = before.filter { $0.kind == .hint && !$0.isStuckHelp }.count + 1
             return "\(n) " + Tutor.hintLevelShortName(m.hintLevel ?? n)
         case .chat: return "问 \(before.filter { $0.kind == .chat }.count + 1)"
         case .solution: return "答案"
@@ -880,7 +875,7 @@ struct MarginNotes: View {
     private func hintLevel(_ m: ChatMessage, in q: Question) -> Int {
         if let level = m.hintLevel { return level }
         guard let i = q.messages.firstIndex(where: { $0.id == m.id }) else { return 1 }
-        return q.messages[...i].filter { $0.kind == .hint }.count
+        return q.messages[...i].filter { $0.kind == .hint && !$0.isStuckHelp }.count
     }
 
     /// 这条回复前面学生说的话（提问、提示时的补充说明）
@@ -964,7 +959,7 @@ struct MarginNotes: View {
             // 便签：方角、淡淡的影子，像贴在页边
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("提示 · " + Tutor.hintLevelName(hintLevel(message, in: q)))
+                    Text(message.isStuckHelp ? "卡住的地方" : "提示 · " + Tutor.hintLevelName(hintLevel(message, in: q)))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -1105,7 +1100,7 @@ struct PendingNote: View {
     private var label: String {
         switch pending.kind {
         case .verdictWrong, .verdictCorrect: return "正在一步一步检查…"
-        case .hint: return "正在写提示…"
+        case .hint: return pending.label ?? "正在写提示…"
         case .solution: return "正在写答案…"
         default: return "正在写…"
         }

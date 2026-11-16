@@ -45,7 +45,7 @@ struct MessageRow: View {
             card(title: PenMark.needsWorkTitle, color: Ink.red)
 
         case .hint:
-            card(title: "提示", color: .secondary)
+            card(title: message.isStuckHelp ? "卡住的地方" : "提示", color: .secondary)
 
         case .solution:
             card(title: "完整答案", color: Ink.blue)

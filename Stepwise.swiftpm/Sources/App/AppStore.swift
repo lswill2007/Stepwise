@@ -8,6 +8,8 @@ struct PendingReply: Equatable {
     var startedAt = Date()
     /// 圈出一步来提问：回答写在页边，不写在题目下面
     var inMargin = false
+    /// 等待时显示的文字；nil 时按种类显示
+    var label: String?
 }
 
 /// 错题复习的结果（只在本次打开 App 期间显示）
@@ -852,6 +854,27 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// 点“卡了”：带上现在的手写和打的字，让 AI 找出卡在哪一步并针对那一步点拨。
+    /// 回复记成一条提示（hintLevel 为 0），不占用“提示”按钮的档次
+    func reportStuck(_ setID: UUID, _ qID: UUID, answer: String, handwriting: Data?) {
+        // 不会做：先看看笔记里有没有相关的知识点
+        findRelatedNote(setID, qID, wrong: false)
+        let answer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let imageIDs = handwriting.map { [ImageStore.save($0)] } ?? []
+        let message = ChatMessage(role: .user, kind: .hintRequest, text: "卡了",
+                                  prompt: Tutor.stuckInstruction(hasImage: !imageIDs.isEmpty, typed: answer),
+                                  imageIDs: imageIDs)
+        run(setID, qID, userMessage: message, replyKind: .hint, purpose: .hint) { [weak self] full in
+            self?.mutate(setID, qID) { q in
+                var hint = ChatMessage(role: .assistant, kind: .hint, text: full)
+                hint.hintLevel = ChatMessage.stuckHintLevel
+                q.messages.append(hint)
+                _ = self?.countReviewRound(&q)
+            }
+        }
+        pending[qID]?.label = "正在看你卡在哪…"
+    }
+
     func requestSolution(_ setID: UUID, _ qID: UUID) {
         let message = ChatMessage(role: .user, kind: .solutionRequest, text: "给出完整答案", prompt: Tutor.solutionInstruction)
         run(setID, qID, userMessage: message, replyKind: .solution, purpose: .solution) { [weak self] full in
@@ -1017,7 +1040,10 @@ final class AppStore: ObservableObject {
         case .hint, .solution, .presolve, .split, .note:
             var blocks = [summary]
             var parts: [LLMContent] = []
-            if purpose == .hint, let last = earlier.last(where: { $0.kind == .submission }) {
+            if purpose == .hint, !current.imageIDs.isEmpty {
+                // 点“卡了”：带的是现在的手写，作答说明已经写在这次的请求里
+                parts = images(current)
+            } else if purpose == .hint, let last = earlier.last(where: { $0.kind == .submission }) {
                 parts = images(last)
                 blocks.append("【我最近一次的作答】\n" + (last.text.isEmpty ? "（见手写图片）" : Tutor.clip(last.text, 1500)))
             }
