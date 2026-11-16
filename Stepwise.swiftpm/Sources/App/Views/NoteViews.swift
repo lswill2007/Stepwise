@@ -107,7 +107,7 @@ struct NoteImportView: View {
                 } header: {
                     Text("例题")
                 } footer: {
-                    Text(exerciseLevel.detail + "练习题下面就是手写区，可以直接批改。")
+                    Text(exerciseLevel.detail + "练习题下面就是手写区，写完可以直接检查。")
                 }
 
                 Section {

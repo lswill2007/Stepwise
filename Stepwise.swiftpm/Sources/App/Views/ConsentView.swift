@@ -21,13 +21,13 @@ struct ConsentView: View {
                             .foregroundStyle(.tint)
                         Text("使用前请了解")
                             .font(.largeTitle.bold())
-                        Text("Stepwise 借助你选择的 AI 服务批改作业、给出提示。开始之前，请先了解你的数据会去哪里。")
+                        Text("Stepwise 借助你选择的 AI 服务检查作答、给出提示。开始之前，请先了解你的数据会去哪里。")
                             .foregroundStyle(.secondary)
                     }
 
                     item(icon: "arrow.up.forward.app",
                          title: "会发送给你选择的 AI 服务商",
-                         text: "导入题目、检查答案、请求提示或继续对话时，题目内容、你的作答（包括手写图片）和对话记录会发送给你在设置里选择的 AI 服务商（例如 OpenAI、Anthropic、Google、DeepSeek 等），用来生成批改和讲解。这些服务商会按照各自的隐私政策处理数据。")
+                         text: "导入题目、检查答案、请求提示或继续对话时，题目内容、你的作答（包括手写图片）和对话记录会发送给你在设置里选择的 AI 服务商（例如 OpenAI、Anthropic、Google、DeepSeek 等），用来生成检查结果和讲解。这些服务商会按照各自的隐私政策处理数据。")
                     item(icon: "iphone",
                          title: "其他数据只保存在本机",
                          text: "题库、作答记录和手写笔迹只保存在这台 iPad 上；API Key 保存在系统钥匙串里，只会发送给对应的服务商。")
@@ -67,7 +67,7 @@ struct ConsentView: View {
                     }
                     .foregroundStyle(.secondary)
 
-                    Text("不同意也可以浏览已有的题目，但无法使用 AI 批改、提示和导入功能。可以随时在设置里重新选择。")
+                    Text("不同意也可以浏览已有的题目，但无法使用 AI 检查、提示和导入功能。可以随时在设置里重新选择。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

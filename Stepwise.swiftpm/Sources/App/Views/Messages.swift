@@ -42,7 +42,7 @@ struct MessageRow: View {
             card(title: "对了", color: Ink.red)
 
         case .verdictWrong:
-            card(title: "还不对", color: Ink.red)
+            card(title: PenMark.needsWorkTitle, color: Ink.red)
 
         case .hint:
             card(title: "提示", color: .secondary)

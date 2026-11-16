@@ -169,26 +169,26 @@ struct SettingsView: View {
         Section {
             Toggle(isOn: $store.quickGrading) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("快速批改")
+                    Text("快速检查")
                     Text("检查答案和给提示时让模型少思考").font(.caption).foregroundStyle(.secondary)
                 }
             }
 
-            modelOverride("批改与提示模型", providerID: $store.gradingProviderID, model: $store.gradingModel,
+            modelOverride("检查与提示模型", providerID: $store.gradingProviderID, model: $store.gradingModel,
                           resolved: store.gradingProvider)
 
             Toggle(isOn: $store.presolveAnswers) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("预先求解答案")
-                    Text("没有参考答案的题，在你做题时由 AI 在后台先解出来，批改时只需对答案，更快也更准。每题多用一次 API，使用出新题模型（没设置时用当前模型）").font(.caption).foregroundStyle(.secondary)
+                    Text("没有参考答案的题，在你做题时由 AI 在后台先解出来，检查时只需对答案，更快也更准。每题多用一次 API，使用出新题模型（没设置时用当前模型）").font(.caption).foregroundStyle(.secondary)
                 }
             }
 
             Toggle("显示用时", isOn: $store.showTiming)
         } header: {
-            Text("批改速度")
+            Text("检查速度")
         } footer: {
-            Text("可以单独选一个反应快的模型专门检查答案和给提示，例如 deepseek-chat、Claude Haiku、Gemini Flash；看完整答案和继续对话仍使用当前模型。模型不支持快速批改时会自动按正常方式请求。")
+            Text("可以单独选一个反应快的模型专门检查答案和给提示，例如 deepseek-chat、Claude Haiku、Gemini Flash；看完整答案和继续对话仍使用当前模型。模型不支持快速检查时会自动按正常方式请求。")
         }
     }
 
@@ -254,7 +254,7 @@ struct SettingsView: View {
         } header: {
             Text("做完一道题之后")
         } footer: {
-            Text("做对或看完答案后，题目下方会显示这些快捷操作，可以增删、改文字、调整顺序。出新题建议选推理能力强的模型（名字里常带 pro、opus、reasoner、thinking）。新题会记住原题的作答记录，批改时会特别留意你在原题上犯过的错。")
+            Text("做对或看完答案后，题目下方会显示这些快捷操作，可以增删、改文字、调整顺序。出新题建议选推理能力强的模型（名字里常带 pro、opus、reasoner、thinking）。新题会记住原题的作答记录，检查时会特别留意你在原题上犯过的错。")
         }
     }
 

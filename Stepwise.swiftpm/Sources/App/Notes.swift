@@ -19,7 +19,7 @@ enum NoteExerciseLevel: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .off: return "只整理笔记，不加练习题。之后可以在任意小节下面点“出例题”。"
-        case .needed: return "资料里没有例题的重要知识点后面，加一道练习题和手写批改区。"
+        case .needed: return "资料里没有例题的重要知识点后面，加一道练习题和手写区。"
         case .more: return "每个重要知识点后面都加 1–2 道练习题，由浅入深，适合复习时多练。"
         }
     }

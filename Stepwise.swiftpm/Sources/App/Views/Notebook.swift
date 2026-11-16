@@ -271,7 +271,7 @@ struct QuestionBlock: View {
             }
             .sheet(isPresented: $editing) { EditQuestionView(setID: setID, qID: qID) }
             .sheet(isPresented: $showHistory) { QuestionHistoryView(setID: setID, qID: qID) }
-            .confirmationDialog("清空这道题的作答、批改记录和手写，重新开始？", isPresented: $confirmReset, titleVisibility: .visible) {
+            .confirmationDialog("清空这道题的作答、检查记录和手写，重新开始？", isPresented: $confirmReset, titleVisibility: .visible) {
                 Button("清空并重做", role: .destructive) {
                     store.resetQuestion(setID, qID)
                     draft = ""
@@ -363,7 +363,7 @@ struct QuestionBlock: View {
             }
         } else if let rounds = q.reviewRounds {
             Label(rounds == 0
-                  ? "错题复习中 · \(AppStore.masteryRounds) 轮之内做对就移出错题本（批改一次或提示一次算一轮）"
+                  ? "错题复习中 · \(AppStore.masteryRounds) 轮之内做对就移出错题本（检查一次或提示一次算一轮）"
                   : "错题复习中 · 已用 \(rounds) 轮" + (rounds < AppStore.masteryRounds ? "，这一轮做对就移出错题本" : "，这次做对也会留在错题本里"),
                   systemImage: "bookmark.fill")
                 .font(.callout)
@@ -385,10 +385,12 @@ struct QuestionBlock: View {
                     .overlay(alignment: .topLeading) { askAnchor }
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.2)))
-                    .animation(.easeOut(duration: 0.2), value: model.height)
+                    // 写字时自动加长不加动画：画布大小在动的时候正在写的一笔会断
 
                 HStack(spacing: 16) {
-                    Button { model.addSpace() } label: { Label("加长", systemImage: "arrow.down.to.line") }
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { model.addSpace() }
+                    } label: { Label("加长", systemImage: "arrow.down.to.line") }
                     Spacer()
                     Button(role: .destructive) { confirmClearInk = true } label: { Label("擦掉全部", systemImage: "trash") }
                         .disabled(model.isEmpty)
@@ -510,14 +512,14 @@ struct QuestionBlock: View {
         let busy = store.isBusy(qID)
         let empty = model.isEmpty && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return HStack(spacing: 20) {
-            // 做对之前：批改、提示、看答案。只有“批改”是实心按钮，其余是文字
+            // 做对之前：检查、提示、看答案。只有“检查”是实心按钮，其余是文字
             if q.status != .passed {
                 Button {
                     saveDraft()
                     model.saveNow()
                     store.check(setID, qID, answer: draft, handwriting: model.exportJPEG())
                 } label: {
-                    Text("批改").lineLimit(1).fixedSize().padding(.horizontal, 10)
+                    Text("检查").lineLimit(1).fixedSize().padding(.horizontal, 10)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(busy || empty)
@@ -770,7 +772,7 @@ struct MarginNotes: View {
                 }
                 if mistakeMode { reviewOutcome }
                 if items.isEmpty && pending == nil && wide && q.status != .passed {
-                    Text("写完点“批改”，结果会标在这里")
+                    Text("写完点“检查”，结果会标在这里")
                         .font(.callout)
                         .foregroundStyle(.tertiary)
                         .padding(.top, 8)
@@ -861,8 +863,8 @@ struct MarginNotes: View {
     private func tabTitle(_ m: ChatMessage, index: Int, in items: [ChatMessage]) -> String {
         let before = items[..<index]
         switch m.kind {
-        case .verdictCorrect: return "✓ 批改"
-        case .verdictWrong: return "✗ 批改"
+        case .verdictCorrect: return "✓ 检查"
+        case .verdictWrong: return "检查"
         case .hint:
             let n = before.filter { $0.kind == .hint }.count + 1
             return "\(n) " + Tutor.hintLevelShortName(m.hintLevel ?? n)
@@ -1039,6 +1041,8 @@ struct MarginNotes: View {
 /// 红笔写的勾和叉：笔画有起笔收笔的粗细变化，不用系统图标
 struct PenMark: View {
     let correct: Bool
+    /// 没做对时的标题：说要改哪里，不说“不对”，免得打击信心
+    static let needsWorkTitle = "找到要改的地方"
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -1050,16 +1054,14 @@ struct PenMark: View {
                     path.addQuadCurve(to: CGPoint(x: w * 0.38, y: h * 0.9), control: CGPoint(x: w * 0.22, y: h * 0.66))
                     path.addQuadCurve(to: CGPoint(x: w * 0.95, y: h * 0.08), control: CGPoint(x: w * 0.55, y: h * 0.45))
                 } else {
-                    path.move(to: CGPoint(x: w * 0.14, y: h * 0.12))
-                    path.addQuadCurve(to: CGPoint(x: w * 0.86, y: h * 0.9), control: CGPoint(x: w * 0.48, y: h * 0.46))
-                    path.move(to: CGPoint(x: w * 0.84, y: h * 0.1))
-                    path.addQuadCurve(to: CGPoint(x: w * 0.16, y: h * 0.88), control: CGPoint(x: w * 0.54, y: h * 0.52))
+                    // 不画叉：像老师用红笔把要改的地方圈出来
+                    path.addEllipse(in: CGRect(x: w * 0.1, y: h * 0.12, width: w * 0.8, height: h * 0.76))
                 }
                 context.stroke(path, with: .color(Ink.red), style: StrokeStyle(lineWidth: 3.2, lineCap: .round, lineJoin: .round))
             }
             .frame(width: 30, height: 26)
             .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 4 }
-            Text(correct ? "对了" : "还不对")
+            Text(correct ? "对了" : PenMark.needsWorkTitle)
                 .font(.headline)
                 .foregroundStyle(Ink.red)
         }
@@ -1102,7 +1104,7 @@ struct PendingNote: View {
 
     private var label: String {
         switch pending.kind {
-        case .verdictWrong, .verdictCorrect: return "正在批改…"
+        case .verdictWrong, .verdictCorrect: return "正在一步一步检查…"
         case .hint: return "正在写提示…"
         case .solution: return "正在写答案…"
         default: return "正在写…"

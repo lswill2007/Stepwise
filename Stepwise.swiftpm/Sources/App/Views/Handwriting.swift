@@ -286,7 +286,7 @@ final class HandwritingModel: ObservableObject {
         if isEmpty != empty { isEmpty = empty }
         // 写到靠近底部时自动加长，像翻到下一行纸
         if !empty, newDrawing.bounds.maxY > height - 100 {
-            height = newDrawing.bounds.maxY + Self.growStep
+            grow(to: newDrawing.bounds.maxY + Self.growStep)
         }
         tools.active = self
         // 只在变化时赋值，平时写字不会让整道题的页面跟着刷新
@@ -331,6 +331,36 @@ final class HandwritingModel: ObservableObject {
     }
 
     func addSpace() { height += Self.growStep }
+
+    /// 写字时推迟的加长：等正在写的这一笔写完再加长
+    private var pendingHeight: CGFloat?
+
+    /// 画布上有一笔正在写。PencilKit 常常在下一笔已经开始时才报告上一笔写完，
+    /// 这时改画布大小会把正在写的这一笔打断
+    private var strokeInProgress: Bool {
+        guard let state = canvas?.drawingGestureRecognizer.state else { return false }
+        return state == .began || state == .changed
+    }
+
+    private func grow(to newHeight: CGFloat) {
+        guard newHeight > height else { return }
+        if strokeInProgress {
+            pendingHeight = max(pendingHeight ?? 0, newHeight)
+        } else {
+            pendingHeight = nil
+            height = newHeight
+        }
+    }
+
+    /// 一笔写完（或被取消）时调用：补上写的时候推迟的加长
+    func strokeEnded() {
+        guard pendingHeight != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.strokeInProgress, let pending = self.pendingHeight else { return }
+            self.pendingHeight = nil
+            if pending > self.height { self.height = pending }
+        }
+    }
 
     /// 笔迹变化后稍等片刻再写盘，连续书写时不会频繁保存
     func scheduleSave() {
@@ -485,6 +515,8 @@ struct NotebookCanvas: UIViewRepresentable {
             // 开始写：工具栏自动缩小。笔记上的涂鸦层把书写手势挂在文字视图上，
             // 不一定会走 canvasViewDidBeginUsingTool，手势也可能只收到“结束”，所以这里也发
             if [.began, .changed, .ended].contains(gesture.state) { model.tools.writingBegan.send() }
+            // 写字时推迟的加长，这一笔写完再补上
+            if [.ended, .cancelled, .failed].contains(gesture.state) { model.strokeEnded() }
             // 很快的一笔可能只收到“结束”，也要算
             guard model.tools.tool == .eraser, [.began, .changed, .ended].contains(gesture.state),
                   let view = gesture.view else { return }
@@ -494,6 +526,10 @@ struct NotebookCanvas: UIViewRepresentable {
         func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
             penDown = true
             model.tools.writingBegan.send()
+        }
+
+        func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+            model.strokeEnded()
         }
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {

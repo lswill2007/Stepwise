@@ -441,11 +441,11 @@ struct StatusIcon: View {
     let status: QuestionStatus
 
     var body: some View {
-        // 像在目录旁边用笔做的记号：没做的空着一个小圈，做对打勾，做错打叉
+        // 像在目录旁边用笔做的记号：没做的空着一个小圈，做对打勾，待订正画一支笔（不打叉，免得打击信心）
         Group {
             switch status {
             case .todo: Image(systemName: "circle").foregroundStyle(.tertiary)
-            case .wrong: Image(systemName: "xmark").foregroundStyle(Ink.red)
+            case .wrong: Image(systemName: "pencil").foregroundStyle(Ink.red)
             case .passed: Image(systemName: "checkmark").foregroundStyle(Ink.green)
             case .revealed: Image(systemName: "eye").foregroundStyle(Ink.blue)
             }

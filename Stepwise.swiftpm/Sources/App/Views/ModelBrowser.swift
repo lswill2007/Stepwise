@@ -71,13 +71,13 @@ struct ModelBrowser: View {
                     if recommend == .longContext {
                         Label("推荐用来整理长资料", systemImage: "doc.text.magnifyingglass")
                     } else {
-                        Label("快速 · 能看图（推荐用来批改）", systemImage: "bolt.fill")
+                        Label("快速 · 能看图（推荐用来检查作答）", systemImage: "bolt.fill")
                     }
                 } footer: {
                     if recommend == .longContext {
                         Text("上下文长、归纳能力强的模型，生成的笔记更完整；能看图的排在前面（公式多的 PDF 会按图片发送）。这类模型比较慢、也更贵，只在生成笔记时用。")
                     } else {
-                        Text("根据模型名称推测（flash、haiku、mini 等）。批改手写作答用这类模型最快。")
+                        Text("根据模型名称推测（flash、haiku、mini 等）。检查手写作答用这类模型最快。")
                     }
                 }
             }
