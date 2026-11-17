@@ -247,7 +247,8 @@ extension AppStore {
             let time = StudyTracker.duration(tracker.seconds(on: day))
             lines.append(Tutor.pick(
                 "\(StudyTracker.key(day))：学习 \(time)，做了 \(st.questions) 道题，作答 \(st.submissions) 次，做对 \(st.correct) 次，提示 \(st.hints) 次",
-                "\(StudyTracker.key(day)): studied \(time), \(st.questions) questions, \(st.submissions) attempts, \(st.correct) correct, \(st.hints) hints"))
+                "\(StudyTracker.key(day)): studied \(time), \(Tutor.count(st.questions, "question", "questions")), "
+                    + "\(Tutor.count(st.submissions, "attempt", "attempts")), \(st.correct) correct, \(Tutor.count(st.hints, "hint", "hints"))"))
         }
         let end = cal.date(byAdding: .day, value: 7, to: start) ?? start
         var hard: [String] = []
@@ -260,13 +261,13 @@ extension AppStore {
                 let title = set.noteID.flatMap { note($0)?.title } ?? set.title
                 let preview = Tutor.clip(Tutor.plainPreview(q.content), 80)
                 hard.append(Tutor.pick("- 「\(title)」第 \(q.label) 题（错 \(wrong) 次，提示 \(hints) 次）：\(preview)",
-                                       "- \"\(title)\" question \(q.label) (\(wrong) wrong, \(hints) hints): \(preview)"))
+                                       "- \"\(title)\" question \(q.label) (\(wrong) wrong, \(Tutor.count(hints, "hint", "hints"))): \(preview)"))
             }
         }
         var s = Tutor.pick("【每天】\n", "[Each day]\n") + lines.joined(separator: "\n")
         s += Tutor.pick("\n\n【这周卡住过的题】\n", "\n\n[Questions they got stuck on this week]\n")
             + (hard.isEmpty ? Tutor.pick("没有", "None") : hard.prefix(12).joined(separator: "\n"))
-        s += Tutor.pick("\n\n【错题本】现在有 \(starredEntries.count) 道", "\n\n[Review list] \(starredEntries.count) questions now")
+        s += Tutor.pick("\n\n【错题本】现在有 \(starredEntries.count) 道", "\n\n[Review list] \(Tutor.count(starredEntries.count, "question", "questions")) now")
         if !notes.isEmpty {
             s += Tutor.pick("\n\n【笔记】", "\n\n[Notes] ") + notes.prefix(8).map(\.title).joined(separator: Tutor.pick("、", ", "))
         }

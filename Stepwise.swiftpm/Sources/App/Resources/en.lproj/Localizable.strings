@@ -1,4 +1,4 @@
-/* English UI. Keys are the original Chinese strings in the code (Sources/App). */
+/* English UI. Keys are the original Chinese strings in the code (Sources/App). Plural forms are in Localizable.stringsdict. */
 "Stepwise" = "Stepwise";
 "出错了" = "Something went wrong";
 "在左侧选择一个题集，或点击 + 导入题目文件" = "Choose a question set on the left, or tap + to import a question file";
@@ -6,7 +6,7 @@
 "正在打开…" = "Opening…";
 "选择一个题集开始" = "Choose a question set to begin";
 "选择或导入题集" = "Choose or import a question set";
-"共 %lld 部分，其中第 %@ 部分没有识别成功，可能漏了题目。可以检查一下题目列表，必要时重新导入。" = "Of %lld parts, part(s) %@ could not be read, so some questions may be missing. Check the question list and import again if needed.";
+"共 %lld 部分，其中第 %@ 部分没有识别成功，可能漏了题目。可以检查一下题目列表，必要时重新导入。" = "Of %lld parts, these could not be read: %@. Some questions may be missing; check the question list and import again if needed.";
 "出了一道新题：" = "Here's a new question:";
 "当前位置的数据没有完整读出来，不能复制。请先确认原来的数据能正常打开。" = "The data at the current location wasn't fully read, so it can't be copied. First make sure the original data opens normally.";
 "新文件夹" = "New Folder";
@@ -211,7 +211,7 @@
 "正在记录…" = "Saving…";
 "AI 没有按格式出题，请再试一次。" = "The AI didn't write the question in the expected format. Please try again.";
 "上一个任务还没完成，稍等一下再记到笔记里。" = "The previous task isn't finished yet. Wait a moment, then add it to the notes.";
-"共 %lld 部分，其中第 %@ 部分没有生成成功，笔记可能不完整。" = "Of %lld parts, part(s) %@ couldn't be generated, so the notes may be incomplete.";
+"共 %lld 部分，其中第 %@ 部分没有生成成功，笔记可能不完整。" = "Of %lld parts, these couldn't be generated: %@. The notes may be incomplete.";
 "前面没有可以补充的笔记。" = "There are no notes before this to add to.";
 "正在出 %lld 道题…" = "Writing %lld questions…";
 "正在出题…" = "Writing a question…";
@@ -593,3 +593,4 @@
 "本月" = "This Month";
 "豆包" = "Doubao";
 "其他" = "Other";
+"%@ token" = "%@ tokens";

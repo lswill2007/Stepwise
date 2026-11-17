@@ -956,7 +956,9 @@ struct UsageView: View {
     static func summary(_ totals: [String: UsageTotals]) -> String {
         let tokens = totals.values.reduce(0) { $0 + $1.totalTokens }
         let cost = UsageLog.cost(of: totals)
-        var s = "\(UsageLog.formatTokens(tokens)) token"
+        // 英文按数量用 token / tokens；一万以上写成 12.3K，总是复数
+        var s = tokens < 10_000 ? String(localized: "\(tokens) token")
+                                : String(localized: "\(UsageLog.formatTokens(tokens)) token")
         if tokens > 0 { s += " · " + UsageLog.format(cost.amounts) + (cost.missing ? "+" : "") }
         return s
     }

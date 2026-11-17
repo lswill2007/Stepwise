@@ -1,0 +1,587 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>%@ · %lld 次 · 输入 %@ · 输出 %@</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%@ · %#@a@ · input %@ · output %@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld request</string>
+			<key>other</key>
+			<string>%lld requests</string>
+		</dict>
+	</dict>
+	<key>%lld token</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld token</string>
+			<key>other</key>
+			<string>%lld tokens</string>
+		</dict>
+	</dict>
+	<key>%lld 个题集</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld question set</string>
+			<key>other</key>
+			<string>%lld question sets</string>
+		</dict>
+	</dict>
+	<key>%lld 个题集、%lld 篇笔记</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@, %#@b@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld question set</string>
+			<key>other</key>
+			<string>%lld question sets</string>
+		</dict>
+		<key>b</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld note</string>
+			<key>other</key>
+			<string>%lld notes</string>
+		</dict>
+	</dict>
+	<key>%lld 个题集（%lld 道题）、%lld 篇笔记</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@ (%#@b@), %#@c@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld question set</string>
+			<key>other</key>
+			<string>%lld question sets</string>
+		</dict>
+		<key>b</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld question</string>
+			<key>other</key>
+			<string>%lld questions</string>
+		</dict>
+		<key>c</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld note</string>
+			<key>other</key>
+			<string>%lld notes</string>
+		</dict>
+	</dict>
+	<key>%lld 周前</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@ ago</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld week</string>
+			<key>other</key>
+			<string>%lld weeks</string>
+		</dict>
+	</dict>
+	<key>%lld 块</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld block</string>
+			<key>other</key>
+			<string>%lld blocks</string>
+		</dict>
+	</dict>
+	<key>%lld 块 · %lld 道练习</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@ · %#@b@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld block</string>
+			<key>other</key>
+			<string>%lld blocks</string>
+		</dict>
+		<key>b</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld exercise</string>
+			<key>other</key>
+			<string>%lld exercises</string>
+		</dict>
+	</dict>
+	<key>%lld 张图片</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld image</string>
+			<key>other</key>
+			<string>%lld images</string>
+		</dict>
+	</dict>
+	<key>%lld 篇笔记</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld note</string>
+			<key>other</key>
+			<string>%lld notes</string>
+		</dict>
+	</dict>
+	<key>%lld 轮就做对了，已移出错题本。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>Correct in %#@a@ — removed from the Review List.</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld round</string>
+			<key>other</key>
+			<string>%lld rounds</string>
+		</dict>
+	</dict>
+	<key>%lld 道题 · 已完成 %lld</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@ · %lld done</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld question</string>
+			<key>other</key>
+			<string>%lld questions</string>
+		</dict>
+	</dict>
+	<key>%lld 页文字，约 %lld 字</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@ of text, about %#@b@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld page</string>
+			<key>other</key>
+			<string>%lld pages</string>
+		</dict>
+		<key>b</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld character</string>
+			<key>other</key>
+			<string>%lld characters</string>
+		</dict>
+	</dict>
+	<key>PDF 有 %lld 页，按图片识别最多支持 %lld 页，请拆分后再导入。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>The PDF has %#@a@. Reading it as images supports at most %#@b@ — please split it and import again.</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld page</string>
+			<key>other</key>
+			<string>%lld pages</string>
+		</dict>
+		<key>b</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld page</string>
+			<key>other</key>
+			<string>%lld pages</string>
+		</dict>
+	</dict>
+	<key>做了 %lld 道题 · 作答 %lld 次 · 做对 %lld 次 · 提示 %lld 次</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@ · %#@b@ · %lld correct · %#@c@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld question</string>
+			<key>other</key>
+			<string>%lld questions</string>
+		</dict>
+		<key>b</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld attempt</string>
+			<key>other</key>
+			<string>%lld attempts</string>
+		</dict>
+		<key>c</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld hint</string>
+			<key>other</key>
+			<string>%lld hints</string>
+		</dict>
+	</dict>
+	<key>做题时点题目右上角的“错题”，把需要重点复习的题加进来。
+在错题本里 %lld 轮之内做对，就会自动移出。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>While working on a question, tap “Add to Review List” at its top right to save questions you want to practice again.
+Answer one correctly within %#@a@ in the Review List and it's removed automatically.</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld round</string>
+			<key>other</key>
+			<string>%lld rounds</string>
+		</dict>
+	</dict>
+	<key>其中 %lld 个题集本机已经有了，作为副本导入（名称后面带“导入”）。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@ (with “imported” after the name).</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld of these sets already exists on this device and was imported as a copy</string>
+			<key>other</key>
+			<string>%lld of these sets already exist on this device and were imported as copies</string>
+		</dict>
+	</dict>
+	<key>出 %lld 道</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld question</string>
+			<key>other</key>
+			<string>%lld questions</string>
+		</dict>
+	</dict>
+	<key>可以重新练一遍：%lld 轮之内做对，就从错题本移出</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>Practice it again: answer correctly within %#@a@ to remove it from the Review List</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld round</string>
+			<key>other</key>
+			<string>%lld rounds</string>
+		</dict>
+	</dict>
+	<key>复习中 · 已用 %lld 轮</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>Reviewing · %#@a@ used</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld round</string>
+			<key>other</key>
+			<string>%lld rounds</string>
+		</dict>
+	</dict>
+	<key>已导入 %lld 个题集，共 %lld 道题</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>Imported %#@a@ with %#@b@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld question set</string>
+			<key>other</key>
+			<string>%lld question sets</string>
+		</dict>
+		<key>b</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld question</string>
+			<key>other</key>
+			<string>%lld questions</string>
+		</dict>
+	</dict>
+	<key>已擦掉 %lld 处</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>Erased %#@a@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld mark</string>
+			<key>other</key>
+			<string>%lld marks</string>
+		</dict>
+	</dict>
+	<key>已获取 %lld 个模型</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>Fetched %#@a@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld model</string>
+			<key>other</key>
+			<string>%lld models</string>
+		</dict>
+	</dict>
+	<key>已获取 %lld 个模型，其中 %lld 个可以用来做题</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>Fetched %#@a@, %lld of which can be used for questions</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld model</string>
+			<key>other</key>
+			<string>%lld models</string>
+		</dict>
+	</dict>
+	<key>正在出 %lld 道题…</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>Writing %#@a@…</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld question</string>
+			<key>other</key>
+			<string>%lld questions</string>
+		</dict>
+	</dict>
+	<key>请针对这一小节的内容出 %lld 道练习题。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>Please write %#@a@ on the content of this section.</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld practice question</string>
+			<key>other</key>
+			<string>%lld practice questions</string>
+		</dict>
+	</dict>
+	<key>这次用了 %lld 轮，先留在错题本里，下次再练一遍。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>This took %#@a@, so it stays in the Review List — practice it again next time.</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld round</string>
+			<key>other</key>
+			<string>%lld rounds</string>
+		</dict>
+	</dict>
+	<key>错题复习中 · %lld 轮之内做对就移出错题本（检查一次或提示一次算一轮）</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>Reviewing · answer correctly within %#@a@ to remove it from the Review List (each check or hint is one round)</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld round</string>
+			<key>other</key>
+			<string>%lld rounds</string>
+		</dict>
+	</dict>
+	<key>错题复习中 · 已用 %lld 轮</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>Reviewing · %#@a@ used</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld round</string>
+			<key>other</key>
+			<string>%lld rounds</string>
+		</dict>
+	</dict>
+	<key>，以及 %lld 篇笔记，都放在左侧列表的最上面。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>, plus %#@a@, all at the top of the list on the left.</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld note</string>
+			<key>other</key>
+			<string>%lld notes</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

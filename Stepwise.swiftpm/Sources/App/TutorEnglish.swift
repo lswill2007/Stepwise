@@ -8,6 +8,9 @@ import Foundation
 extension Tutor {
     static var formatRule: String { pick(formatRuleZH, formatRuleEN) }
 
+    /// 英文提示词里的数量：1 question / 2 questions
+    static func count(_ n: Int, _ one: String, _ many: String) -> String { "\(n) \(n == 1 ? one : many)" }
+
     static let formatRuleEN = """
     Formatting rules:
     - Write in English.
@@ -72,8 +75,9 @@ extension Tutor {
     static func missingOptionsFollowUp(labels: [String]) -> String {
         guard AILanguage.isEnglish else { return missingOptionsFollowUpZH(labels: labels) }
         let list = labels.map { "question \($0)" }.joined(separator: ", ")
+        let looks = labels.count == 1 ? "looks like a multiple-choice question, but the stem you output has" : "look like multiple-choice questions, but the stems you output have"
         return """
-        A check found that \(list) look like multiple-choice questions, but the stems you output have no choices. Compare with the original and output only these questions again, including all of their choices (A, B, C, D, ..., one per line, inside <content>). Use the same format as before (<question label="…"><content>…</content><answer>…</answer></question>). Do not output any other questions, and do not output <title>. If a question really has no choices in the original, output it unchanged.
+        A check found that \(list) \(looks) no choices. Compare with the original and output only these questions again, including all of their choices (A, B, C, D, ..., one per line, inside <content>). Use the same format as before (<question label="…"><content>…</content><answer>…</answer></question>). Do not output any other questions, and do not output <title>. If a question really has no choices in the original, output it unchanged.
         """
     }
 
@@ -245,7 +249,7 @@ extension Tutor {
         }
         guard !lines.isEmpty else { return nil }
         let kept = lines.suffix(8)
-        var s = "[Earlier work] \(attempts) attempts and \(hints) hints in total"
+        var s = "[Earlier work] \(count(attempts, "attempt", "attempts")) and \(count(hints, "hint", "hints")) in total"
         if kept.count < lines.count { s += " (only the latest \(kept.count) are listed)" }
         return s + "\n" + kept.joined(separator: "\n")
     }
