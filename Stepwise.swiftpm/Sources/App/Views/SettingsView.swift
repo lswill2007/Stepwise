@@ -45,7 +45,7 @@ struct SettingsView: View {
                         }
                     }
                 } footer: {
-                    Text("时钟浮在页面上，颜色和系统深浅色相反，看得清楚；可以拖到任何位置，双指缩放。")
+                    Text("时钟浮在页面上，液态玻璃效果，颜色跟随系统深浅色；可以拖到任何位置，双指缩放。")
                 }
 
                 Section {
@@ -61,6 +61,16 @@ struct SettingsView: View {
                     Text("当前使用")
                 } footer: {
                     Text("点下面任意服务商，填写 API Key 并选择模型，再点“设为当前使用”。做题时也可以在右上角随时切换模型。")
+                }
+
+                Section {
+                    NavigationLink {
+                        UsageView()
+                    } label: {
+                        UsageSummaryRow()
+                    }
+                } header: {
+                    Text("用量和费用")
                 }
 
                 gradingSection
@@ -884,5 +894,233 @@ struct StorageLocationSection: View {
             }
             working = false
         }
+    }
+}
+
+// MARK: - 用量和费用
+
+/// 设置首页的一行：今天和本月用了多少 token、花了多少钱
+private struct UsageSummaryRow: View {
+    @ObservedObject private var log = UsageLog.shared
+
+    var body: some View {
+        let today = log.totals(since: Calendar.current.startOfDay(for: Date()))
+        let month = log.totals(since: Calendar.current.dateInterval(of: .month, for: Date())?.start)
+        VStack(alignment: .leading, spacing: 4) {
+            Label("token 用量和费用", systemImage: "chart.pie")
+            Text("今天 \(UsageView.summary(today))　本月 \(UsageView.summary(month))")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// 用量明细：按时间段合计，每个模型一行；点模型可以填价格
+struct UsageView: View {
+    @ObservedObject private var log = UsageLog.shared
+    @State private var period: Period = .month
+    @State private var confirmClear = false
+    @State private var editing: PriceTarget?
+
+    enum Period: String, CaseIterable, Identifiable {
+        case today = "今天", week = "近 7 天", month = "本月", all = "全部"
+        var id: String { rawValue }
+        var start: Date? {
+            let cal = Calendar.current
+            switch self {
+            case .today: return cal.startOfDay(for: Date())
+            case .week: return cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: Date()))
+            case .month: return cal.dateInterval(of: .month, for: Date())?.start
+            case .all: return nil
+            }
+        }
+    }
+
+    struct PriceTarget: Identifiable {
+        let provider: String
+        let model: String
+        var id: String { provider + "|" + model }
+    }
+
+    /// “12.3K token · $0.042”
+    static func summary(_ totals: [String: UsageTotals]) -> String {
+        let tokens = totals.values.reduce(0) { $0 + $1.totalTokens }
+        let cost = UsageLog.cost(of: totals)
+        var s = "\(UsageLog.formatTokens(tokens)) token"
+        if tokens > 0 { s += " · " + UsageLog.format(cost.amounts) + (cost.missing ? "+" : "") }
+        return s
+    }
+
+    private func providerName(_ id: String) -> String {
+        ProviderCatalog.presets.first { $0.id == id }?.name ?? (id.hasPrefix("custom-") ? "自定义服务商" : id)
+    }
+
+    var body: some View {
+        let totals = log.totals(since: period.start)
+        let cost = UsageLog.cost(of: totals)
+        let rows = totals.sorted { $0.value.totalTokens > $1.value.totalTokens }
+        Form {
+            Section {
+                Picker("时间", selection: $period) {
+                    ForEach(Period.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                let all = totals.values.reduce(into: UsageTotals()) { $0.add($1) }
+                LabeledContent("请求次数", value: "\(all.requests)")
+                LabeledContent("输入 token", value: UsageLog.formatTokens(all.input + all.cacheRead + all.cacheWrite))
+                LabeledContent("输出 token", value: UsageLog.formatTokens(all.output))
+                LabeledContent("费用") {
+                    Text(UsageLog.format(cost.amounts)).monospacedDigit()
+                }
+                if cost.missing {
+                    Label("有的模型还没填价格，费用里没算它们", systemImage: "exclamationmark.circle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+
+            Section {
+                if rows.isEmpty {
+                    Text("这段时间还没有用量").foregroundStyle(.secondary)
+                }
+                ForEach(rows, id: \.key) { key, t in
+                    let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+                    let provider = parts.first ?? ""
+                    let model = parts.count > 1 ? parts[1] : ""
+                    let rowCost = UsageLog.cost(of: [key: t])
+                    let price = PriceBook.price(provider: provider, model: model)
+                    Button {
+                        editing = PriceTarget(provider: provider, model: model)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(model).font(.body.weight(.medium)).lineLimit(1)
+                                Spacer()
+                                Text(rowCost.missing && rowCost.amounts.values.allSatisfy { $0 == 0 }
+                                     ? "未填价格" : UsageLog.format(rowCost.amounts) + (rowCost.missing ? "+" : ""))
+                                    .monospacedDigit()
+                                    .foregroundStyle(rowCost.missing ? Color.orange : Color.primary)
+                            }
+                            Text("\(providerName(provider)) · \(t.requests) 次 · 输入 \(UsageLog.formatTokens(t.input + t.cacheRead + t.cacheWrite)) · 输出 \(UsageLog.formatTokens(t.output))")
+                                .font(.caption).foregroundStyle(.secondary)
+                            if let price {
+                                Text("\(price.symbol)\(Self.number(price.input)) / \(price.symbol)\(Self.number(price.output)) 每百万 token（输入 / 输出）")
+                                    .font(.caption2).foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            } header: {
+                Text("按模型")
+            } footer: {
+                Text("token 数是服务商在每次回复后报回来的。直连 Anthropic 时按官方价格计算（2026 年 11 月）；OpenRouter 用它报回来的实际扣费；其他服务商的价格各不相同，点模型填上每百万 token 的价格就会算出费用（之前没算的也会补上）。")
+            }
+
+            Section {
+                Button("清空用量记录", role: .destructive) { confirmClear = true }
+            }
+        }
+        .navigationTitle("用量和费用")
+        .confirmationDialog("清空所有用量记录？", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("清空", role: .destructive) { log.clear() }
+        } message: {
+            Text("只删用量记录，填过的价格会保留。清空后不能恢复。")
+        }
+        .sheet(item: $editing) { target in
+            PriceEditor(provider: target.provider, model: target.model)
+        }
+    }
+
+    static func number(_ v: Double) -> String {
+        v == v.rounded() ? String(format: "%.0f", v) : String(format: "%g", v)
+    }
+}
+
+/// 填一个模型的价格（每百万 token）
+private struct PriceEditor: View {
+    let provider: String
+    let model: String
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var log = UsageLog.shared
+    @State private var input = ""
+    @State private var output = ""
+    @State private var cacheRead = ""
+    @State private var currency = "USD"
+
+    private var builtIn: ModelPrice? { PriceBook.builtIn(provider: provider, model: model) }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("币种", selection: $currency) {
+                        Text("美元 $").tag("USD")
+                        Text("人民币 ¥").tag("CNY")
+                    }
+                    field("输入", $input)
+                    field("输出", $output)
+                    field("缓存命中（可不填）", $cacheRead)
+                } header: {
+                    Text(model)
+                } footer: {
+                    Text("单位：每百万 token。按服务商后台或官网标的价格填写。不填缓存价时按输入价的十分之一算。")
+                }
+                if builtIn != nil {
+                    Section {
+                        Button("恢复成官方价格") {
+                            PriceBook.setCustom(nil, provider: provider, model: model)
+                            log.objectWillChange.send()
+                            dismiss()
+                        }
+                    }
+                } else if PriceBook.custom(provider: provider, model: model) != nil {
+                    Section {
+                        Button("删除这个价格", role: .destructive) {
+                            PriceBook.setCustom(nil, provider: provider, model: model)
+                            log.objectWillChange.send()
+                            dismiss()
+                        }
+                    }
+                }
+            }
+            .navigationTitle("模型价格")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") { save() }.disabled(Double(input) == nil || Double(output) == nil)
+                }
+            }
+            .onAppear(perform: fill)
+        }
+    }
+
+    private func field(_ title: String, _ text: Binding<String>) -> some View {
+        LabeledContent(title) {
+            TextField("0", text: text)
+                .multilineTextAlignment(.trailing)
+                #if os(iOS)
+                .keyboardType(.decimalPad)
+                #endif
+                .frame(maxWidth: 140)
+        }
+    }
+
+    private func fill() {
+        guard let p = PriceBook.price(provider: provider, model: model) else { return }
+        input = UsageView.number(p.input)
+        output = UsageView.number(p.output)
+        cacheRead = p.cacheRead.map(UsageView.number) ?? ""
+        currency = p.currency
+    }
+
+    private func save() {
+        guard let i = Double(input), let o = Double(output) else { return }
+        PriceBook.setCustom(ModelPrice(input: i, output: o, cacheRead: Double(cacheRead), currency: currency),
+                            provider: provider, model: model)
+        // 让列表重新算费用
+        log.objectWillChange.send()
+        dismiss()
     }
 }

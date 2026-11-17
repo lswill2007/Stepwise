@@ -549,6 +549,15 @@ final class AppStore: ObservableObject {
                 var merged = d.dictionary(forKey: key) as? [String: String] ?? [:]
                 merged.merge(value as? [String: String] ?? [:]) { $1 }
                 d.set(merged, forKey: key)
+            case "tokenUsage":
+                // 用量按天、按模型取请求次数多的那份，本机多出来的不丢
+                typealias Days = [String: [String: UsageTotals]]
+                let local = d.data(forKey: key).flatMap { try? JSONDecoder().decode(Days.self, from: $0) } ?? [:]
+                let saved = (value as? Data).flatMap { try? JSONDecoder().decode(Days.self, from: $0) } ?? [:]
+                let merged = local.merging(saved) { mine, theirs in
+                    mine.merging(theirs) { $0.requests >= $1.requests ? $0 : $1 }
+                }
+                if let data = try? JSONEncoder().encode(merged) { d.set(data, forKey: key) }
             default:
                 d.set(value, forKey: key)
             }
@@ -561,6 +570,7 @@ final class AppStore: ObservableObject {
         if let saved = d.data(forKey: "followUps"), let list = try? JSONDecoder().decode([FollowUpAction].self, from: saved) {
             followUps = list
         }
+        UsageLog.shared.load()
         NotificationCenter.default.post(name: .stepwisePreferencesRestored, object: nil)
     }
 

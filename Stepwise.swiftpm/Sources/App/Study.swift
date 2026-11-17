@@ -156,13 +156,12 @@ private final class TouchSpy: UIGestureRecognizer, UIGestureRecognizerDelegate {
 
 // MARK: - 时钟
 
-/// 浮在页面上的时钟：颜色和系统深浅色反过来（浅色模式黑底白字，深色模式白底黑字），对比度高；
+/// 浮在页面上的时钟：液态玻璃，文字颜色跟随系统深浅色（iPadOS 26 以前用毛玻璃）；
 /// 可以拖到任何位置，双指缩放大小
 struct FloatingClock: View {
     @AppStorage("clockX") private var x: Double = 0.85
     @AppStorage("clockY") private var y: Double = 0.06
     @AppStorage("clockScale") private var scale: Double = 1
-    @Environment(\.colorScheme) private var colorScheme
     @GestureState private var drag: CGSize = .zero
     @GestureState private var pinch: CGFloat = 1
 
@@ -170,15 +169,7 @@ struct FloatingClock: View {
         GeometryReader { geo in
             let s = min(max(scale * pinch, 0.6), 3)
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text(context.date, format: .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
-                    .font(.system(size: 28 * s, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .padding(.horizontal, 14 * s)
-                    .padding(.vertical, 6 * s)
-                    // 和系统色调反过来：高对比度
-                    .foregroundStyle(colorScheme == .dark ? Color.black : Color.white)
-                    .background(colorScheme == .dark ? Color.white : Color.black, in: Capsule())
-                    .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
+                ClockFace(date: context.date, scale: s)
             }
             .position(x: geo.size.width * x + drag.width, y: geo.size.height * y + drag.height)
             .gesture(
@@ -193,6 +184,28 @@ struct FloatingClock: View {
                         .onEnded { scale = min(max(scale * $0, 0.6), 3) })
             )
             .accessibilityLabel("时钟，可以拖动和缩放")
+        }
+    }
+}
+
+/// 时钟的样子：液态玻璃胶囊，文字跟随系统颜色
+private struct ClockFace: View {
+    let date: Date
+    let scale: CGFloat
+
+    var body: some View {
+        let label = Text(date, format: .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+            .font(.system(size: 28 * scale, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 14 * scale)
+            .padding(.vertical, 6 * scale)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            label.glassEffect(.regular, in: Capsule())
+        } else {
+            label
+                .background(.regularMaterial, in: Capsule())
+                .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
         }
     }
 }

@@ -52,22 +52,31 @@ struct LLMClient {
                     let fastKey = "\(config.id)|\(model)"
                     // 这个模型之前拒绝过快速模式参数，就不再带
                     var useFast = options.fast && !FastModeMemory.isUnsupported(fastKey) && !fastParameters().isEmpty
-                    var request = try makeChatRequest(system: system, messages: normalized, fast: useFast)
+                    // OpenAI 兼容接口要请求了才在最后报用量；之前拒绝过这个参数的服务商就不再带
+                    var useUsage = config.apiProtocol == .openAI && !UsageOptionMemory.isUnsupported(config.id)
+                    var request = try makeChatRequest(system: system, messages: normalized, fast: useFast, usage: useUsage)
                     var (bytes, response) = try await Self.session.bytes(for: request)
                     var status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                    if useFast && (status == 400 || status == 422) {
-                        // 模型不支持这些参数：记下来，去掉参数立即重试一次
-                        FastModeMemory.markUnsupported(fastKey)
-                        useFast = false
-                        request = try makeChatRequest(system: system, messages: normalized, fast: false)
+                    // 参数不被接受：先去掉报用量的参数重试，还不行再去掉快速模式参数；重试成功才记下是哪个参数不被接受
+                    var dropped: String?
+                    while (status == 400 || status == 422) && (useUsage || useFast) {
+                        if useUsage { useUsage = false; dropped = "usage" } else { useFast = false; dropped = "fast" }
+                        request = try makeChatRequest(system: system, messages: normalized, fast: useFast, usage: useUsage)
                         (bytes, response) = try await Self.session.bytes(for: request)
                         status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    }
+                    if status == 200 {
+                        if dropped == "usage" { UsageOptionMemory.markUnsupported(config.id) }
+                        if dropped == "fast" { FastModeMemory.markUnsupported(fastKey) }
                     }
                     if status != 200 {
                         var body = ""
                         for try await line in bytes.lines { body += line + "\n" }
                         throw LLMError(message: Self.describeError(status: status, body: body))
                     }
+                    var usage = LLMUsage()
+                    // 不管正常结束、出错还是被停止，已经报回来的用量都记下
+                    defer { UsageLog.record(provider: config.id, model: model, usage: usage) }
                     for try await line in bytes.lines {
                         try Task.checkCancellation()
                         guard line.hasPrefix("data:") else { continue }
@@ -75,6 +84,7 @@ struct LLMClient {
                         if payload == "[DONE]" { break }
                         guard let data = payload.data(using: .utf8),
                               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                        readUsage(json, into: &usage)
                         if let text = try parseChunk(json), !text.isEmpty {
                             continuation.yield(text)
                         }
@@ -215,7 +225,7 @@ struct LLMClient {
         }
     }
 
-    private func makeChatRequest(system: String, messages: [LLMMessage], fast: Bool = false) throws -> URLRequest {
+    private func makeChatRequest(system: String, messages: [LLMMessage], fast: Bool = false, usage: Bool = false) throws -> URLRequest {
         guard !apiKey.isEmpty else { throw LLMError(message: "还没有填写 \(config.name) 的 API Key，请到设置里填写。") }
         guard !model.isEmpty else { throw LLMError(message: "还没有选择 \(config.name) 的模型，请到设置里选择。") }
 
@@ -244,6 +254,11 @@ struct LLMClient {
                 msgs.append(["role": m.role == .user ? "user" : "assistant", "content": content])
             }
             body = ["model": model, "messages": msgs, "stream": true]
+            if usage {
+                // 最后一块里带上用了多少 token；OpenRouter 还会报实际花了多少钱
+                body["stream_options"] = ["include_usage": true]
+                if config.id == "openrouter" { body["usage"] = ["include": true] }
+            }
 
         case .anthropic:
             request = URLRequest(url: try url(anthropicRoot + "/v1/messages"))
@@ -301,6 +316,39 @@ struct LLMClient {
     }
 
     // MARK: - 流式解析
+
+    /// 从流式回复里读出用量。各家报的位置不同；同一项后来报的数覆盖先前的
+    private func readUsage(_ json: [String: Any], into usage: inout LLMUsage) {
+        func int(_ any: Any?) -> Int? { (any as? NSNumber)?.intValue }
+        switch config.apiProtocol {
+        case .openAI:
+            guard let u = json["usage"] as? [String: Any] else { return }
+            let cached = int((u["prompt_tokens_details"] as? [String: Any])?["cached_tokens"]) ?? 0
+            if let p = int(u["prompt_tokens"]) { usage.input = max(0, p - cached); usage.cacheRead = cached }
+            if let c = int(u["completion_tokens"]) { usage.output = c }
+            if let cost = (u["cost"] as? NSNumber)?.doubleValue { usage.reportedCostUSD = cost }
+        case .anthropic:
+            var u: [String: Any]?
+            if json["type"] as? String == "message_start", let message = json["message"] as? [String: Any] {
+                u = message["usage"] as? [String: Any]
+                if let m = message["model"] as? String, !m.isEmpty { usage.model = m }
+            } else if json["type"] as? String == "message_delta" {
+                u = json["usage"] as? [String: Any]
+            }
+            guard let u else { return }
+            if let v = int(u["input_tokens"]) { usage.input = v }
+            if let v = int(u["output_tokens"]) { usage.output = v }
+            if let v = int(u["cache_read_input_tokens"]) { usage.cacheRead = v }
+            if let v = int(u["cache_creation_input_tokens"]) { usage.cacheWrite = v }
+        case .gemini:
+            guard let u = json["usageMetadata"] as? [String: Any] else { return }
+            let cached = int(u["cachedContentTokenCount"]) ?? 0
+            if let p = int(u["promptTokenCount"]) { usage.input = max(0, p - cached); usage.cacheRead = cached }
+            // 思考用的 token 按输出计费
+            let out = (int(u["candidatesTokenCount"]) ?? 0) + (int(u["thoughtsTokenCount"]) ?? 0)
+            if out > 0 { usage.output = out }
+        }
+    }
 
     private func parseChunk(_ json: [String: Any]) throws -> String? {
         if let error = json["error"] {
@@ -395,5 +443,24 @@ enum FastModeMemory {
         let list = Array(unsupported)
         lock.unlock()
         UserDefaults.standard.set(list, forKey: "fastModeUnsupported")
+    }
+}
+
+/// 不接受 stream_options（报用量）参数的服务商，记住以后不再带
+enum UsageOptionMemory {
+    private static let lock = NSLock()
+    private static var unsupported: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "usageOptionUnsupported") ?? [])
+
+    static func isUnsupported(_ key: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return unsupported.contains(key)
+    }
+
+    static func markUnsupported(_ key: String) {
+        lock.lock()
+        unsupported.insert(key)
+        let list = Array(unsupported)
+        lock.unlock()
+        UserDefaults.standard.set(list, forKey: "usageOptionUnsupported")
     }
 }
