@@ -53,8 +53,6 @@ final class AppStore: ObservableObject {
     /// 正在回复的便签（白板 id → 便签 id）；每块白板同时只问一处
     @Published var boardJobs: [UUID: UUID] = [:]
     var boardTasks: [UUID: Task<Void, Never>] = [:]
-    /// 左边便签列表点了哪一张，白板就滚到哪里
-    @Published var boardJump: UUID?
     private var boardsSaveTask: Task<Void, Never>?
     /// 正在生成或回答的笔记（每篇笔记同时只有一个）
     @Published var noteJobs: [UUID: NoteJob] = [:]

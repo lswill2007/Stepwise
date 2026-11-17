@@ -48,69 +48,6 @@ struct PaperPattern: View {
     }
 }
 
-// MARK: - 中间一栏：便签列表
-
-/// 中间一栏：这块白板上 AI 回复的便签，点一张翻到那里；纸的样式
-struct BoardOutlineView: View {
-    @EnvironmentObject var store: AppStore
-    let boardID: UUID
-
-    var body: some View {
-        if let board = store.board(boardID) {
-            List {
-                Section {
-                    if board.notes.isEmpty {
-                        Text("写下题目和解答，用“框选”或“圈出来问”圈住一段，点“检查”。AI 的回复以便签贴在旁边。")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                    ForEach(Array(board.notes.enumerated()), id: \.element.id) { i, note in
-                        Button {
-                            if board.notesHidden { store.mutateBoard(boardID) { $0.notesHidden = false } }
-                            if note.minimized { store.mutateBoardNote(boardID, note.id) { $0.minimized = false } }
-                            store.boardJump = note.id
-                        } label: {
-                            HStack(alignment: .top, spacing: 10) {
-                                BoardVerdictIcon(note: note, streaming: store.boardJobs[boardID] == note.id)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("\(i + 1). \(BoardVerdictIcon.title(note))")
-                                        .font(.subheadline.weight(.semibold)).lineLimit(1)
-                                    if !note.text.isEmpty {
-                                        Text(Tutor.plainPreview(note.text))
-                                            .font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                                    }
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .swipeActions {
-                            Button("删除", role: .destructive) { store.deleteBoardNote(boardID, note.id) }
-                        }
-                    }
-                } header: {
-                    HStack {
-                        Text("便签")
-                        Spacer()
-                        if !board.notes.isEmpty {
-                            Button(board.notesHidden ? L("显示便签") : L("隐藏便签")) {
-                                store.mutateBoard(boardID) { $0.notesHidden.toggle() }
-                            }
-                            .font(.caption)
-                            .textCase(nil)
-                        }
-                    }
-                }
-                Section("纸") {
-                    Picker("纸", selection: Binding(get: { board.paper }, set: { store.setBoardPaper(boardID, $0) })) {
-                        ForEach(PaperStyle.allCases) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                }
-            }
-            .navigationTitle(board.title)
-        }
-    }
-}
-
 /// 便签的结论图标：对了、再看看、提示、提问
 struct BoardVerdictIcon: View {
     let note: BoardNote
@@ -189,8 +126,6 @@ final class BoardState: ObservableObject {
     weak var model: HandwritingModel?
     /// 便签最低写到哪里（画布坐标）：画布至少要这么高，才滚得到
     var notesBottom: CGFloat = 0
-    /// 打开时要翻到的便签（画布还没排好版时先记着）
-    var pendingJump: CGRect?
 
     func syncViewport() {
         guard let canvas else { return }
@@ -240,20 +175,6 @@ final class BoardState: ObservableObject {
         if canvas.maximumZoomScale != 3 { canvas.maximumZoomScale = 3 }
         updateContentSize()
         syncViewport()
-        if let jump = pendingJump {
-            pendingJump = nil
-            scroll(to: jump)
-        }
-    }
-
-    /// 翻到画布上的一块地方（左上角留一点边）
-    func scroll(to rect: CGRect) {
-        guard let canvas, canvas.bounds.width > 1 else { pendingJump = rect; return }
-        let z = canvas.zoomScale
-        let maxX = max(0, canvas.contentSize.width - canvas.bounds.width)
-        let maxY = max(0, canvas.contentSize.height - canvas.bounds.height)
-        let target = CGPoint(x: min(max(0, rect.minX * z - 60), maxX), y: min(max(0, rect.minY * z - 100), maxY))
-        canvas.setContentOffset(target, animated: true)
     }
 
     /// 让画布上这一块露出来（便签按屏幕大小算，宽度不随缩放变）；已经看得见就不动
@@ -676,13 +597,6 @@ struct WhiteboardView: View {
                 // 新的便签：翻到看得见它的地方
                 if new.count > old.count, let note = new.last {
                     state.reveal(CGRect(x: note.x, y: note.y, width: Whiteboard.stickyWidth, height: 160))
-                }
-            }
-            .onChange(of: store.boardJump) {
-                guard let id = store.boardJump else { return }
-                store.boardJump = nil
-                if let note = board.notes.first(where: { $0.id == id }) {
-                    state.scroll(to: note.region.rect.union(CGRect(x: note.x, y: note.y, width: 1, height: 1)))
                 }
             }
             .onChange(of: scenePhase) {

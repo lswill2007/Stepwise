@@ -45,13 +45,30 @@ struct RootView: View {
         }
     }
 
-    private var main: some View {
+    private var sidebar: some View {
+        SidebarView(showImport: $showImport, showNoteImport: $showNoteImport, showSettings: $showSettings)
+    }
+
+    @ViewBuilder
+    private var columns: some View {
+        if let boardID = store.selectedBoardID, store.board(boardID) != nil {
+            // 白板只要左栏和画布两栏，书写的地方大一些；纸的样式在右上角选
+            NavigationSplitView(columnVisibility: $store.columnVisibility) {
+                sidebar
+            } detail: {
+                WhiteboardView(boardID: boardID)
+                    .id(boardID)
+            }
+        } else {
+            threeColumns
+        }
+    }
+
+    private var threeColumns: some View {
         NavigationSplitView(columnVisibility: $store.columnVisibility) {
-            SidebarView(showImport: $showImport, showNoteImport: $showNoteImport, showSettings: $showSettings)
+            sidebar
         } content: {
-            if let boardID = store.selectedBoardID, store.board(boardID) != nil {
-                BoardOutlineView(boardID: boardID)
-            } else if let noteID = store.selectedNoteID, store.note(noteID) != nil {
+            if let noteID = store.selectedNoteID, store.note(noteID) != nil {
                 NoteOutlineView(noteID: noteID)
             } else if store.isMistakeBook {
                 MistakeBookView()
@@ -63,10 +80,7 @@ struct RootView: View {
             }
         } detail: {
             // 整个题集（或错题本）是一本笔记本，中间的题目列表当目录用
-            if let boardID = store.selectedBoardID, store.board(boardID) != nil {
-                WhiteboardView(boardID: boardID)
-                    .id(boardID)
-            } else if let noteID = store.selectedNoteID, store.note(noteID) != nil {
+            if let noteID = store.selectedNoteID, store.note(noteID) != nil {
                 NoteDocView(noteID: noteID)
                     .id(noteID)
             } else if store.isMistakeBook {
@@ -79,6 +93,10 @@ struct RootView: View {
                 ContentUnavailableView("选择一个题集开始", systemImage: "pencil.and.list.clipboard")
             }
         }
+    }
+
+    private var main: some View {
+        columns
         // 时钟浮在所有页面上面
         .overlay {
             if clockEnabled { FloatingClock() }

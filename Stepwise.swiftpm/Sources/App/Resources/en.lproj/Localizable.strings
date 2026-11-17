@@ -605,7 +605,6 @@
 "便签 %lld" = "Sticky Note %lld";
 "再看看" = "Take another look";
 "写下题目和解答，用“框选”圈住一段，点“检查”" = "Write a question and your working, circle it with “Lasso”, then tap “Check”";
-"写下题目和解答，用“框选”或“圈出来问”圈住一段，点“检查”。AI 的回复以便签贴在旁边。" = "Write a question and your working, circle part of it with “Lasso” or “Circle to Ask”, then tap “Check”. The AI replies on a sticky note next to it.";
 "删除便签" = "Delete Sticky Note";
 "删除白板" = "Delete Whiteboard";
 "删除白板“%@”？" = "Delete whiteboard “%@”?";
