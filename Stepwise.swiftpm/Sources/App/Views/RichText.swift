@@ -367,10 +367,17 @@ enum MathTemplate {
       return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
+    // 模型常把表格列格式里的竖线写成 \|（Markdown 表格里转义竖线的习惯），KaTeX 不认，整段会报错变红：改回 |
+    function fixTex(tex) {
+      return tex.replace(/\\begin\{(array|tabular)\}\{([^}]*)\}/g, function (m, env, spec) {
+        return "\\begin{" + env + "}{" + spec.replace(/\\\|/g, "|") + "}";
+      });
+    }
+
     function math(tex, display) {
       if (READY && window.katex) {
         try {
-          return katex.renderToString(tex, { displayMode: display, throwOnError: false, strict: "ignore", output: "html" });
+          return katex.renderToString(fixTex(tex), { displayMode: display, throwOnError: false, strict: "ignore", output: "html" });
         } catch (e) {}
       }
       return '<span class="tex">' + esc(display ? "$$" + tex + "$$" : "$" + tex + "$") + "</span>";
