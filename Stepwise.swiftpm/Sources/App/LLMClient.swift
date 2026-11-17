@@ -277,7 +277,9 @@ struct LLMClient {
             body = [
                 "model": model,
                 "max_tokens": model.hasPrefix("claude-3") ? 8192 : 32000,
-                "system": system,
+                // 系统提示词（题目、参考答案、辅导要求）同一道题每次都一样：标成可缓存，
+                // 接下来的检查、提示读缓存，更快也更便宜（太短的提示词服务商会自动不缓存）
+                "system": [["type": "text", "text": system, "cache_control": ["type": "ephemeral"]]],
                 "messages": msgs,
                 "stream": true
             ]

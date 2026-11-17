@@ -1103,19 +1103,44 @@ final class AppStore: ObservableObject {
         let chunks = Importer.chunks(for: material)
         guard !chunks.isEmpty else { throw LLMError(message: L("没有可以拆分的内容。")) }
 
-        // 一部分一部分拆，边收边更新进度
+        // 几部分同时拆（最多 3 部分），比一部分一部分等快得多；拆完按原来的顺序合并
         let tracker = SplitTracker(chunks: chunks, report: progress)
         tracker.report(force: true)
         typealias Parsed = (title: String?, items: [Tutor.SplitItem])
         var results = [Result<Parsed, Error>?](repeating: nil, count: chunks.count)
-        for i in chunks.indices {
+        let makeTask = { (i: Int) -> @Sendable () async throws -> (Int, Result<Parsed, Error>) in
+            { [self] in
+                do {
+                    return (i, .success(try await self.splitChunk(i, chunks[i], count: chunks.count, client: client,
+                                                                  requirement: requirement, tracker: tracker)))
+                } catch {
+                    if error is CancellationError || Task.isCancelled { throw CancellationError() }
+                    return (i, .failure(error))
+                }
+            }
+        }
+        try await withThrowingTaskGroup(of: (Int, Result<Parsed, Error>).self) { group in
+            var next = 0
+            while next < min(3, chunks.count) {
+                group.addTask(operation: makeTask(next))
+                next += 1
+            }
+            while let (i, result) = try await group.next() {
+                results[i] = result
+                if next < chunks.count {
+                    group.addTask(operation: makeTask(next))
+                    next += 1
+                }
+            }
+        }
+        // 同时请求时偶尔会被限流：失败的部分单独再试一次，还是失败就算这部分拆不出来
+        for i in results.indices {
+            guard case .failure = results[i] else { continue }
             try Task.checkCancellation()
-            do {
-                results[i] = .success(try await splitChunk(i, chunks[i], count: chunks.count, client: client,
-                                                           requirement: requirement, tracker: tracker))
-            } catch {
-                if error is CancellationError || Task.isCancelled { throw CancellationError() }
-                results[i] = .failure(error)
+            if let retried = try? await splitChunk(i, chunks[i], count: chunks.count, client: client,
+                                                   requirement: requirement, tracker: tracker) {
+                results[i] = .success(retried)
+            } else {
                 tracker.finish(i)
             }
         }
