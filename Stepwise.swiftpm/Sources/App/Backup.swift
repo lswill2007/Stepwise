@@ -45,6 +45,10 @@ struct LibraryBackup: Codable {
         for block in notes.flatMap(\.blocks) {
             drawings[block.id.uuidString] = DrawingStore.load(block.id)
         }
+        // 笔记整页空白处的涂鸦，按笔记存
+        for doc in notes {
+            drawings[doc.id.uuidString] = DrawingStore.load(doc.id)
+        }
         self.drawings = drawings
     }
 
@@ -180,13 +184,21 @@ extension AppStore {
                 doc.id = UUID()
                 doc.title += "（导入）"
             }
-            // 笔记上的涂鸦：副本的块换新 id，涂鸦跟着换
+            // 笔记上的涂鸦：副本的块换新 id，涂鸦跟着换；整页涂鸦的位置记号也跟着换
             for i in doc.blocks.indices {
                 let oldID = doc.blocks[i].id
-                if copy { doc.blocks[i].id = UUID() }
+                if copy {
+                    doc.blocks[i].id = UUID()
+                    if let top = doc.pageInkAnchors?.removeValue(forKey: oldID.uuidString) {
+                        doc.pageInkAnchors?[doc.blocks[i].id.uuidString] = top
+                    }
+                }
                 if let data = backup.drawings[oldID.uuidString], !DrawingStore.exists(doc.blocks[i].id) {
                     DrawingStore.save(data, for: doc.blocks[i].id)
                 }
+            }
+            if let data = backup.drawings[oldNoteID.uuidString], !DrawingStore.exists(doc.id) {
+                DrawingStore.save(data, for: doc.id)
             }
             doc.exerciseSetID = setIDMap[doc.exerciseSetID] ?? doc.exerciseSetID
             for i in doc.blocks.indices {

@@ -352,6 +352,10 @@ struct NoteDocView: View {
     @StateObject private var ink = NotebookInk()
     /// 先当作很窄：第一次排版不会把页面撑宽，量到实际宽度后再按实际排
     @State private var width: CGFloat = 0
+    /// 页面看得见的高度：内容不满一屏时，下面的空白也能写
+    @State private var viewHeight: CGFloat = 0
+    /// 整页涂鸦层的位置（页边、块和块之间也能写）
+    @State private var pageInk = PageInkLayout()
     @State private var editing: UUID?
     @State private var selection: Selection?
     @State private var showAskField = false
@@ -369,6 +373,11 @@ struct NoteDocView: View {
                         ForEach(doc.blocks) { block in
                             blockView(block, in: doc)
                                 .id(block.id)
+                                // 记下每一块的位置：空白处的笔迹跟着它上面那一块挪
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.pageSpace)) } action: { [scale = paperScale(doc)] frame in
+                                    pageInk.blockFrames[block.id] = (frame, scale)
+                                    pageInk.scheduleSettle { settlePageInk() }
+                                }
                             // 出练习题时，在提问的那一块下面显示进度
                             if let job, job.afterBlock == block.id, block.kind != .answer {
                                 progressRow(job)
@@ -388,7 +397,21 @@ struct NoteDocView: View {
                     .padding(.horizontal, pagePadding)
                     .padding(.top, 20)
                     .frame(maxWidth: .infinity)
+                    .frame(minHeight: viewHeight, alignment: .top)
+                    .coordinateSpace(name: Self.pageSpace)
+                    // 整页涂鸦的书写手势挂在最底下这一层：笔落在空白处写到整页上
+                    .background {
+                        if HandwritingModel.isAvailable { PageInkHost(layout: pageInk) }
+                    }
                     .animation(.easeInOut(duration: 0.25), value: marginOpen(doc))
+                }
+                // 整页涂鸦的笔迹盖在看得见的这一块上，跟着页面滚动
+                .overlay {
+                    if HandwritingModel.isAvailable {
+                        PageInkCanvas(model: ink.pageModel(for: noteID), tools: ink.tools, layout: pageInk,
+                                      textLeft: (width - columnWidth(doc)) / 2, scale: paperScale(doc), paper: doc.paper)
+                            .allowsHitTesting(false)
+                    }
                 }
                 .onChange(of: store.noteJump) {
                     guard let target = store.noteJump else { return }
@@ -406,7 +429,10 @@ struct NoteDocView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .background(Ink.paper)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { width = $0.width; viewHeight = $0.height }
+            // 页面变宽变窄（缩放比例跟着变）、删掉一块：空白处的笔迹也要重新对上
+            .onChange(of: width) { pageInk.scheduleSettle { settlePageInk() } }
+            .onChange(of: doc.blocks.map(\.id)) { pageInk.scheduleSettle { settlePageInk() } }
             .overlay(alignment: .bottom) { bottomBar(doc, busy: job != nil) }
             .navigationTitle(doc.title)
             #if os(iOS)
@@ -438,9 +464,30 @@ struct NoteDocView: View {
             .onAppear {
                 store.upgradePaperIfClean(noteID)
                 store.renumberExercises(noteID)
+                // 空白处写了、擦了：按现在的排版记下笔迹的位置
+                let model = ink.pageModel(for: noteID)
+                model.onDrawingChanged = { [weak model] in
+                    guard let model, let doc = store.note(noteID),
+                          let anchors = pageInk.userChanged(model, blocks: doc.blocks.map(\.id)),
+                          anchors != doc.pageInkAnchors else { return }
+                    store.setPageInkAnchors(noteID, anchors)
+                }
             }
         } else {
             ContentUnavailableView("笔记不存在", systemImage: "doc.richtext")
+        }
+    }
+
+    /// 页面内容的坐标（整页涂鸦用）
+    private static let pageSpace = "notePage"
+
+    /// 排版停下来以后，空白处的笔迹跟着它上面那一块挪
+    private func settlePageInk() {
+        guard HandwritingModel.isAvailable, width > 0, let doc = store.note(noteID) else { return }
+        pageInk.blockFrames = pageInk.blockFrames.filter { id in doc.blocks.contains { $0.id == id.key } }
+        if let anchors = pageInk.settle(ink.pageModel(for: noteID), blocks: doc.blocks.map(\.id), saved: doc.pageInkAnchors),
+           anchors != doc.pageInkAnchors {
+            store.setPageInkAnchors(noteID, anchors)
         }
     }
 

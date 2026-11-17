@@ -12,6 +12,13 @@ final class NotebookInk: ObservableObject {
         return model
     }
 
+    /// 笔记整页的涂鸦（页边、块和块之间的空白处），按笔记存
+    func pageModel(for noteID: UUID) -> HandwritingModel {
+        let model = model(for: noteID)
+        model.pencilOnly = true
+        return model
+    }
+
     func saveAll() { models.values.forEach { $0.saveNow() } }
 
     /// 已经建好的笔迹模型（没打开过的不新建）

@@ -55,6 +55,20 @@ final class PadCanvasView: PKCanvasView {
             }
         }
     }
+    /// 用代码换掉笔迹（不算用户写的）。缩放变化时 PencilKit 常常不重画，清空再放回去逼它重画
+    func replaceDrawing(_ newDrawing: PKDrawing) {
+        isRefreshing = true
+        drawing = newDrawing
+        isRefreshing = false
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.drawing == newDrawing else { return }
+            self.isRefreshing = true
+            self.drawing = PKDrawing()
+            self.drawing = newDrawing
+            self.isRefreshing = false
+        }
+    }
+
     override var inputView: UIView? { noKeyboard }
     override var inputAccessoryView: UIView? { nil }
 
@@ -235,6 +249,12 @@ final class HandwritingModel: ObservableObject {
     @Published var askRegionVisible = false
 
     let tools: InkTools
+    /// 只认 Apple Pencil（打开了“手指书写”也一样）：笔记的空白处留给手指滑动页面
+    var pencilOnly = false
+    /// 用户写了、擦了（不是只换显示位置）
+    var onDrawingChanged: (() -> Void)?
+    /// 只换了显示位置（整页涂鸦跟着排版挪）时，存盘的还是原来记下的笔迹
+    private var storedDrawing: PKDrawing?
     private(set) var drawing = PKDrawing()
     /// 当前显示在屏幕上的画布
     weak var canvas: PadCanvasView?
@@ -277,7 +297,7 @@ final class HandwritingModel: ObservableObject {
         guard let canvas, key != appliedTools else { return }
         appliedTools = key
         canvas.tool = tools.pkTool()
-        canvas.drawingPolicy = tools.allowFinger ? .anyInput : .pencilOnly
+        canvas.drawingPolicy = tools.allowFinger && !pencilOnly ? .anyInput : .pencilOnly
     }
 
     func drawingChanged(_ newDrawing: PKDrawing) {
@@ -291,6 +311,8 @@ final class HandwritingModel: ObservableObject {
         tools.active = self
         // 只在变化时赋值，平时写字不会让整道题的页面跟着刷新
         if askRegionVisible { askRegionVisible = false }
+        storedDrawing = nil
+        onDrawingChanged?()
         scheduleSave()
     }
 
@@ -374,7 +396,8 @@ final class HandwritingModel: ObservableObject {
         pendingSave?.cancel()
         pendingSave = nil
         guard let questionID else { return }
-        DrawingStore.save(drawing.strokes.isEmpty ? nil : drawing.dataRepresentation(), for: questionID)
+        let toSave = storedDrawing ?? drawing
+        DrawingStore.save(toSave.strokes.isEmpty ? nil : toSave.dataRepresentation(), for: questionID)
     }
 
     /// 笔记这一块中间插进了内容：y 以下的笔迹往下挪 dy，屏幕上和存下的一起改
@@ -389,8 +412,25 @@ final class HandwritingModel: ObservableObject {
         saveNow()
     }
 
+    /// 只换显示的位置，不算用户改的，存盘的还是原来的笔迹
+    func display(_ shown: PKDrawing) {
+        guard shown != drawing else { return }
+        if storedDrawing == nil { storedDrawing = drawing }
+        drawing = shown
+        if let canvas {
+            if canvas.pendingDrawing != nil {
+                // 还没放上画布：换掉等着放的，并且让画布再排一次版，否则可能一直放不上去
+                canvas.pendingDrawing = shown
+                canvas.setNeedsLayout()
+            } else {
+                canvas.replaceDrawing(shown)
+            }
+        }
+    }
+
     func clear() {
         drawing = PKDrawing()
+        storedDrawing = nil
         canvas?.pendingDrawing = nil
         canvas?.drawing = PKDrawing()
         isEmpty = true
@@ -649,6 +689,257 @@ struct NotebookCanvas: UIViewRepresentable {
             model.tools.toggleEraser()
         }
     }
+}
+
+/// 笔记整页的涂鸦层：页边、块和块之间、页尾这些空白处也能写。
+/// 画布固定盖在屏幕上看得见的那一块，页面滚动、缩放时改画布的滚动位置和缩放（PencilKit 只画看得见的部分，长笔记也不占内存）；
+/// 书写手势挂在页面内容最底下一层（PageInkHost）上：笔落在空白处才写到这里，落在文字上的照旧写在那一块上。
+/// 笔迹用纸的坐标存：x 从正文左边算、按正文的缩放比例缩放，页面变宽变窄、全屏时和正文一起挪
+final class PageInkLayout {
+    weak var canvas: PadCanvasView?
+    weak var host: UIView?
+    /// 正文左边在页面内容里的位置、正文缩放比例、纸宽
+    var textLeft: CGFloat = 0
+    var scale: CGFloat = 1
+    var paper: CGFloat = 800
+    /// 正文左边留出的纸面（纸的坐标）：正文左边的页边也能写
+    static let leftMargin: CGFloat = 2000
+    private var observation: NSKeyValueObservation?
+    private weak var observedScroll: UIScrollView?
+
+    /// 每一块在页面内容里的位置（上下边），和量的时候正文的缩放比例。
+    /// 页面变宽变窄时缩放比例先变、块的位置后量到，两个要是同一次排版的才对得上
+    var blockFrames: [UUID: (frame: CGRect, scale: CGFloat)] = [:]
+    private var pendingSettle: DispatchWorkItem?
+
+    /// 块的位置变了：等排版停下来再挪笔迹，排版过程中的中间状态不算
+    func scheduleSettle(_ action: @escaping () -> Void) {
+        pendingSettle?.cancel()
+        let work = DispatchWorkItem(block: action)
+        pendingSettle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    /// 记下的笔迹，和记下时每一块的上下边（纸的坐标）。排版变了只改显示的位置，记下的不动：
+    /// 排版中途的样子（文字还没排好、高度一下变小）不会把笔迹挤坏
+    private var reference: PKDrawing?
+    private var referenceAnchors: [String: [Double]]?
+
+    /// 现在每一块的上下边（纸的坐标）；还没排好版（高度是 0、有的块还是上一次排版量的）时为 nil
+    func measure(_ blocks: [UUID]) -> [String: [Double]]? {
+        guard let scale = blocks.first.flatMap({ blockFrames[$0]?.scale }), scale > 0 else { return nil }
+        var current: [String: [Double]] = [:]
+        for id in blocks {
+            guard let measured = blockFrames[id], measured.frame.height > 4,
+                  abs(measured.scale - scale) < 0.0001 else { return nil }
+            let frame = measured.frame
+            current[id.uuidString] = [Double(frame.minY / scale), Double(frame.maxY / scale)].map { ($0 * 10).rounded() / 10 }
+        }
+        return current
+    }
+
+    /// 排版停下来以后：空白处的笔迹按记下时的位置放到现在的排版上。
+    /// 一块旁边的笔迹按它在这一块里的比例放到这一块现在的位置；块和块之间的笔迹按比例放到现在两块之间
+    /// （中间插进了新的块，就跟着上面一块的下边走）。saved 是存下的位置；要存新的位置时返回
+    func settle(_ model: HandwritingModel, blocks: [UUID], saved: [String: [Double]]?) -> [String: [Double]]? {
+        guard let current = measure(blocks) else { return nil }
+        if reference == nil {
+            reference = model.drawing
+            referenceAnchors = saved
+        }
+        // 第一次记下排版（以前没写过）
+        guard let reference, let referenceAnchors else {
+            referenceAnchors = current
+            return current
+        }
+        guard !reference.strokes.isEmpty else { return nil }
+        let map = Self.mapping(blocks: blocks.map(\.uuidString), saved: referenceAnchors, current: current)
+        var shown = reference
+        shown.strokes = reference.strokes.map { stroke in
+            let y = Double(stroke.renderBounds.midY)
+            let dy = CGFloat(map(y) - y)
+            guard abs(dy) > 0.01 else { return stroke }
+            var moved = stroke
+            moved.transform = stroke.transform.concatenating(CGAffineTransform(translationX: 0, y: dy))
+            return moved
+        }
+        model.display(shown)
+        return nil
+    }
+
+    /// 用户写了、擦了：现在显示的就是要记下的，按现在的排版记；返回要存的位置
+    func userChanged(_ model: HandwritingModel, blocks: [UUID]) -> [String: [Double]]? {
+        reference = model.drawing
+        if let current = measure(blocks) { referenceAnchors = current }
+        return referenceAnchors
+    }
+
+    /// 旧排版里的 y 对应到新排版里的哪里
+    static func mapping(blocks: [String], saved: [String: [Double]], current: [String: [Double]]) -> (Double) -> Double {
+        let index = Dictionary(blocks.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        // 两次都有的块，按原来的上下顺序
+        let old = blocks.filter { (saved[$0]?.count ?? 0) == 2 && (current[$0]?.count ?? 0) == 2 }
+            .sorted { saved[$0]![0] < saved[$1]![0] }
+        func lerp(_ y: Double, _ a: Double, _ b: Double, _ a2: Double, _ b2: Double) -> Double {
+            b - a > 0.5 ? a2 + (y - a) / (b - a) * (b2 - a2) : a2 + (y - a)
+        }
+        return { y in
+            guard let first = old.first else { return y }
+            let o0 = saved[first]!, n0 = current[first]!
+            // 第一块上面（标题旁边）
+            if y < o0[0] { return index[first] == 0 ? lerp(y, 0, o0[0], 0, n0[0]) : y }
+            for (i, id) in old.enumerated() {
+                let o = saved[id]!, n = current[id]!
+                if y <= o[1] { return lerp(y, o[0], o[1], n[0], n[1]) }
+                guard i + 1 < old.count else { return y + n[1] - o[1] }
+                let next = old[i + 1]
+                let on = saved[next]!, nn = current[next]!
+                if y < on[0] {
+                    // 两块现在还挨着：按比例放到两块之间；中间插进了别的块（或挪开了）：跟着上面一块的下边
+                    return index[next] == index[id]! + 1 ? lerp(y, o[1], on[0], n[1], nn[0]) : y + n[1] - o[1]
+                }
+            }
+            return y
+        }
+    }
+
+    /// 书写手势挂到页面内容最底下一层，画布本身不挡触摸
+    func attach() {
+        guard let canvas, let host else { return }
+        if canvas.drawingGestureRecognizer.view !== host {
+            host.addGestureRecognizer(canvas.drawingGestureRecognizer)
+        }
+        // 页面滚动时跟着挪
+        var view = host.superview
+        while let v = view, !(v is UIScrollView) { view = v.superview }
+        if let scroll = view as? UIScrollView, scroll !== observedScroll {
+            observedScroll = scroll
+            observation = scroll.observe(\.contentOffset) { [weak self] _, _ in self?.sync() }
+        }
+    }
+
+    /// 让画布显示页面内容的这一块：(textLeft + x * scale, y * scale) 是纸上 (x, y) 在页面内容里的位置
+    func sync() {
+        guard let canvas, let host, let container = canvas.superview,
+              host.window != nil, canvas.window != nil, scale > 0 else { return }
+        if abs(canvas.zoomScale - scale) > 0.0001 {
+            canvas.minimumZoomScale = min(canvas.minimumZoomScale, scale)
+            canvas.maximumZoomScale = max(canvas.maximumZoomScale, scale)
+            canvas.zoomScale = scale
+            // 缩放变了 PencilKit 不一定重画：放回一次笔迹逼它重画
+            if canvas.pendingDrawing == nil, !canvas.drawing.strokes.isEmpty {
+                canvas.replaceDrawing(canvas.drawing)
+            }
+        }
+        // 页面内容的原点在画布上的位置
+        let origin = container.convert(CGPoint.zero, from: host)
+        let dx = origin.x - canvas.frame.minX
+        let dy = origin.y - canvas.frame.minY
+        let size = CGSize(width: (Self.leftMargin * 2 + paper) * scale, height: max(host.bounds.height, canvas.bounds.height))
+        if canvas.contentSize != size { canvas.contentSize = size }
+        let offset = CGPoint(x: Self.leftMargin * scale - textLeft - dx, y: -dy)
+        if canvas.contentOffset != offset { canvas.contentOffset = offset }
+    }
+}
+
+/// 页面内容最底下的一层，整页涂鸦的书写手势挂在这里：只收到落在空白处的触摸
+final class PageInkHostView: UIView {
+    var layout: PageInkLayout?
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        layout?.attach()
+        layout?.sync()
+    }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layout?.sync()
+    }
+}
+
+struct PageInkHost: UIViewRepresentable {
+    let layout: PageInkLayout
+
+    func makeUIView(context: Context) -> PageInkHostView {
+        let view = PageInkHostView()
+        view.backgroundColor = .clear
+        view.layout = layout
+        layout.host = view
+        layout.attach()
+        return view
+    }
+
+    func updateUIView(_ uiView: PageInkHostView, context: Context) {
+        uiView.layout = layout
+        layout.host = uiView
+        layout.attach()
+        layout.sync()
+    }
+}
+
+/// 整页涂鸦的画布外面包一层：画布大小跟着它，排版变了重新对位置
+final class PageInkContainer: UIView {
+    var layout: PageInkLayout?
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layout?.sync()
+    }
+}
+
+/// 整页涂鸦的画布：盖在笔记页看得见的那一块上，不接收触摸
+struct PageInkCanvas: UIViewRepresentable {
+    @ObservedObject var model: HandwritingModel
+    @ObservedObject var tools: InkTools
+    let layout: PageInkLayout
+    let textLeft: CGFloat
+    let scale: CGFloat
+    let paper: CGFloat
+
+    func makeUIView(context: Context) -> PageInkContainer {
+        let container = PageInkContainer()
+        container.backgroundColor = .clear
+        container.isUserInteractionEnabled = false
+        container.clipsToBounds = true
+        let canvas = PadCanvasView()
+        canvas.frame = container.bounds
+        canvas.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        canvas.backgroundColor = .clear
+        canvas.isOpaque = false
+        canvas.overrideUserInterfaceStyle = .light
+        canvas.isScrollEnabled = false
+        canvas.pinchGestureRecognizer?.isEnabled = false
+        canvas.showsVerticalScrollIndicator = false
+        canvas.showsHorizontalScrollIndicator = false
+        canvas.contentInsetAdjustmentBehavior = .never
+        canvas.minimumZoomScale = 0.25
+        canvas.maximumZoomScale = 4
+        canvas.isUserInteractionEnabled = false
+        canvas.delegate = context.coordinator
+        canvas.drawingGestureRecognizer.addTarget(context.coordinator,
+                                                  action: #selector(NotebookCanvas.Coordinator.drawingGesture(_:)))
+        container.addSubview(canvas)
+        container.layout = layout
+        layout.canvas = canvas
+        update(canvas)
+        model.attach(canvas)
+        layout.attach()
+        return container
+    }
+
+    func updateUIView(_ uiView: PageInkContainer, context: Context) {
+        guard let canvas = layout.canvas else { return }
+        update(canvas)
+        if model.canvas !== canvas { model.attach(canvas) } else { model.applyTools() }
+        layout.attach()
+        layout.sync()
+    }
+
+    private func update(_ canvas: PadCanvasView) {
+        layout.textLeft = textLeft
+        layout.scale = scale
+        layout.paper = paper
+    }
+
+    func makeCoordinator() -> NotebookCanvas.Coordinator { NotebookCanvas.Coordinator(model: model) }
 }
 
 /// 浮在页面底部的工具栏（仿 Notability）：大按钮，可以收起成一个小胶囊；
@@ -973,6 +1264,8 @@ final class HandwritingModel: ObservableObject {
     @Published var height: CGFloat = 260
     let tools: InkTools
     static let isAvailable = false
+    var pencilOnly = false
+    var onDrawingChanged: (() -> Void)?
     init(questionID: UUID?, tools: InkTools) { self.tools = tools }
     func clear() {}
     func saveNow() {}
@@ -1001,6 +1294,28 @@ struct NotebookCanvas: View {
 struct InkPalette: View {
     @ObservedObject var tools: InkTools
     var body: some View { EmptyView() }
+}
+
+final class PageInkLayout {
+    var blockFrames: [UUID: (frame: CGRect, scale: CGFloat)] = [:]
+    func scheduleSettle(_ action: @escaping () -> Void) {}
+    func settle(_ model: HandwritingModel, blocks: [UUID], saved: [String: [Double]]?) -> [String: [Double]]? { nil }
+    func userChanged(_ model: HandwritingModel, blocks: [UUID]) -> [String: [Double]]? { nil }
+}
+
+struct PageInkHost: View {
+    let layout: PageInkLayout
+    var body: some View { Color.clear }
+}
+
+struct PageInkCanvas: View {
+    @ObservedObject var model: HandwritingModel
+    @ObservedObject var tools: InkTools
+    let layout: PageInkLayout
+    let textLeft: CGFloat
+    let scale: CGFloat
+    let paper: CGFloat
+    var body: some View { Color.clear }
 }
 
 #endif

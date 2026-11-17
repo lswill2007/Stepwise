@@ -154,6 +154,9 @@ struct NoteDoc: Codable, Identifiable, Equatable {
     /// 排版用的纸宽。旧笔记没有，按 460 排；新笔记用更宽的纸，公式和表格少换行。
     /// 一篇笔记的纸宽不能改，否则涂鸦、圈出来问的位置会和文字对不上
     var paperWidth: Double?
+    /// 整页涂鸦（空白处的笔迹）对应的排版：每一块的上下边（纸的坐标，按块 id）。
+    /// 块变高、插入、挪动时，空白处的笔迹跟着块挪（旧数据没有）
+    var pageInkAnchors: [String: [Double]]?
 
     static let legacyPaperWidth: Double = 460
     static let currentPaperWidth: Double = 540

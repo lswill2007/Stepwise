@@ -68,6 +68,10 @@ extension AppStore {
         return doc.id
     }
 
+    func setPageInkAnchors(_ id: UUID, _ anchors: [String: [Double]]) {
+        mutateNote(id) { $0.pageInkAnchors = anchors }
+    }
+
     func renameNote(_ id: UUID, to title: String) {
         mutateNote(id) { $0.title = title }
     }
@@ -76,7 +80,8 @@ extension AppStore {
         stopNoteJob(id)
         if let doc = note(id) {
             deleteSet(doc.exerciseSetID)
-            DrawingStore.delete(doc.blocks.map(\.id))
+            // 每一块上的涂鸦，和整页空白处的涂鸦
+            DrawingStore.delete(doc.blocks.map(\.id) + [id])
         }
         notes.removeAll { $0.id == id }
         if selectedNoteID == id { selectedNoteID = nil }
