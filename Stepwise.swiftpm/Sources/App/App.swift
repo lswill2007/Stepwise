@@ -49,6 +49,12 @@ struct RootView: View {
         SidebarView(showImport: $showImport, showNoteImport: $showNoteImport, showSettings: $showSettings)
     }
 
+    /// 打开了题集、错题本或笔记（中间一栏有东西可显示）
+    private var hasList: Bool {
+        if let noteID = store.selectedNoteID, store.note(noteID) != nil { return true }
+        return store.isMistakeBook || store.set(store.selectedSetID) != nil
+    }
+
     @ViewBuilder
     private var columns: some View {
         if let boardID = store.selectedBoardID, store.board(boardID) != nil {
@@ -59,39 +65,89 @@ struct RootView: View {
                 WhiteboardView(boardID: boardID)
                     .id(boardID)
             }
+        } else if store.listHidden && hasList {
+            // 中间的白色栏拽到左边收起来了：只留左栏和页面
+            NavigationSplitView(columnVisibility: $store.columnVisibility) {
+                sidebar
+            } detail: {
+                detail
+                    .overlay(alignment: .leading) { showListEdge }
+                    .toolbar {
+                        ToolbarItem(placement: .navigation) {
+                            Button {
+                                setListHidden(false)
+                            } label: {
+                                Label("显示列表", systemImage: "list.bullet.indent")
+                            }
+                        }
+                    }
+            }
         } else {
-            threeColumns
+            NavigationSplitView(columnVisibility: $store.columnVisibility) {
+                sidebar
+            } content: {
+                list
+                    // 向左拽：收起这一栏，页面变宽
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 24).onEnded { value in
+                            let t = value.translation
+                            if hasList, t.width < -70, abs(t.width) > abs(t.height) * 1.5 { setListHidden(true) }
+                        }
+                    )
+            } detail: {
+                detail
+            }
         }
     }
 
-    private var threeColumns: some View {
-        NavigationSplitView(columnVisibility: $store.columnVisibility) {
-            sidebar
-        } content: {
-            if let noteID = store.selectedNoteID, store.note(noteID) != nil {
-                NoteOutlineView(noteID: noteID)
-            } else if store.isMistakeBook {
-                MistakeBookView()
-            } else if let setID = store.selectedSetID, store.set(setID) != nil {
-                QuestionListView(setID: setID)
-            } else {
-                ContentUnavailableView("选择或导入题集", systemImage: "tray",
-                                       description: Text("在左侧选择一个题集，或点击 + 导入题目文件"))
-            }
-        } detail: {
-            // 整个题集（或错题本）是一本笔记本，中间的题目列表当目录用
-            if let noteID = store.selectedNoteID, store.note(noteID) != nil {
-                NoteDocView(noteID: noteID)
-                    .id(noteID)
-            } else if store.isMistakeBook {
-                NotebookView(setID: nil)
-                    .id(AppStore.mistakeBookID)
-            } else if let setID = store.selectedSetID, store.set(setID) != nil {
-                NotebookView(setID: setID)
-                    .id(setID)
-            } else {
-                ContentUnavailableView("选择一个题集开始", systemImage: "pencil.and.list.clipboard")
-            }
+    private func setListHidden(_ hidden: Bool) {
+        withAnimation(.easeInOut(duration: 0.25)) { store.listHidden = hidden }
+    }
+
+    /// 收起中间一栏后，页面最左边一窄条：向右拽把它拉回来（全屏时不管）
+    @ViewBuilder
+    private var showListEdge: some View {
+        if store.columnVisibility != .detailOnly {
+            Color.clear
+                .frame(width: 16)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 12).onEnded { value in
+                        if value.translation.width > 50 { setListHidden(false) }
+                    }
+                )
+        }
+    }
+
+    /// 中间一栏：题目列表、错题本或笔记目录
+    @ViewBuilder
+    private var list: some View {
+        if let noteID = store.selectedNoteID, store.note(noteID) != nil {
+            NoteOutlineView(noteID: noteID)
+        } else if store.isMistakeBook {
+            MistakeBookView()
+        } else if let setID = store.selectedSetID, store.set(setID) != nil {
+            QuestionListView(setID: setID)
+        } else {
+            ContentUnavailableView("选择或导入题集", systemImage: "tray",
+                                   description: Text("在左侧选择一个题集，或点击 + 导入题目文件"))
+        }
+    }
+
+    /// 右边的页面：整个题集（或错题本）是一本笔记本，中间的题目列表当目录用
+    @ViewBuilder
+    private var detail: some View {
+        if let noteID = store.selectedNoteID, store.note(noteID) != nil {
+            NoteDocView(noteID: noteID)
+                .id(noteID)
+        } else if store.isMistakeBook {
+            NotebookView(setID: nil)
+                .id(AppStore.mistakeBookID)
+        } else if let setID = store.selectedSetID, store.set(setID) != nil {
+            NotebookView(setID: setID)
+                .id(setID)
+        } else {
+            ContentUnavailableView("选择一个题集开始", systemImage: "pencil.and.list.clipboard")
         }
     }
 

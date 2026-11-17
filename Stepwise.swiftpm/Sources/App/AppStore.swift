@@ -76,6 +76,10 @@ final class AppStore: ObservableObject {
     @Published var columnVisibility: NavigationSplitViewVisibility = .all
 
     var isFullScreen: Bool { columnVisibility == .detailOnly }
+    /// 中间的白色栏（题目列表、笔记目录）拽到左边收起来了，记住上次的选择
+    @Published var listHidden: Bool = UserDefaults.standard.bool(forKey: "listHidden") {
+        didSet { UserDefaults.standard.set(listHidden, forKey: "listHidden") }
+    }
 
     func setFullScreen(_ on: Bool) {
         withAnimation(.easeInOut(duration: 0.25)) {
