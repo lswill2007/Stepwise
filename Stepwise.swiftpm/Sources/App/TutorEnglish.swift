@@ -198,7 +198,7 @@ extension Tutor {
     }
 
     static var solutionInstruction: String {
-        pick(solutionInstructionZH, "Please give the full answer to this question with a detailed worked solution (write derivations as aligned formulas), and finish by summarizing the key points of the solution.")
+        pick(solutionInstructionZH, "I've decided to see the full answer: please solve every part of this question completely, with the final answers and a detailed worked solution (write derivations as aligned formulas). Don't give only hints and don't ask me to try first. Finish by summarizing the key points of the solution.")
     }
 
     // MARK: 预先求解

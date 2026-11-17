@@ -247,7 +247,7 @@ enum Tutor {
         return s + "\n请简洁回答，控制在几句话以内。"
     }
 
-    static let solutionInstructionZH = "请给出这道题的完整答案和详细的解题过程（推导写成对齐的公式），最后总结一下解题的关键点。"
+    static let solutionInstructionZH = "我已经决定看完整答案了：请把这道题的每一小问都完整解出来，写出最终答案和详细的解题过程（推导写成对齐的公式），不要只给提示，也不要让我自己先试；最后总结一下解题的关键点。"
 
     // MARK: - 预先求解
 
