@@ -30,7 +30,7 @@ struct NoteImportView: View {
     @State private var showSettings = false
     @State private var showConsent = false
 
-    private static let examples = ["预习笔记：概念、公式和直观理解", "复习提纲：重点和易错点", "按章节整理", "只整理定义、定理和公式"]
+    private static let examples = [L("预习笔记：概念、公式和直观理解"), L("复习提纲：重点和易错点"), L("按章节整理"), L("只整理定义、定理和公式")]
 
     var body: some View {
         NavigationStack {
@@ -107,7 +107,7 @@ struct NoteImportView: View {
                 } header: {
                     Text("例题")
                 } footer: {
-                    Text(exerciseLevel.detail + "练习题下面就是手写区，写完可以直接检查。")
+                    Text(exerciseLevel.detail + L("练习题下面就是手写区，写完可以直接检查。"))
                 }
 
                 Section {
@@ -135,7 +135,7 @@ struct NoteImportView: View {
 
                 // 生成笔记单独用一个模型（和设置 → 笔记里的是同一个设置）
                 Section {
-                    ModelOverrideRows(title: "整理笔记模型", providerID: $store.noteProviderID, model: $store.noteModel,
+                    ModelOverrideRows(title: L("整理笔记模型"), providerID: $store.noteProviderID, model: $store.noteModel,
                                       resolved: store.noteProvider, recommend: .longContext)
                 } header: {
                     Text("用哪个模型生成")
@@ -186,7 +186,7 @@ struct NoteImportView: View {
     private var currentMaterial: ImportedMaterial? {
         if let material, !material.isEmpty { return material }
         let text = pastedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : ImportedMaterial(name: "粘贴的资料", textPages: [text])
+        return text.isEmpty ? nil : ImportedMaterial(name: L("粘贴的资料"), textPages: [text])
     }
 
     private func handleFile(_ result: Result<[URL], Error>) {
@@ -225,9 +225,9 @@ struct NoteImportView: View {
             }
             photoItems = []
             if images.isEmpty {
-                store.errorMessage = "没有读取到图片"
+                store.errorMessage = L("没有读取到图片")
             } else {
-                material = ImportedMaterial(name: "相册图片", images: images)
+                material = ImportedMaterial(name: L("相册图片"), images: images)
             }
         }
     }
@@ -327,10 +327,10 @@ struct NoteOutlineView: View {
                 exerciseNumber += 1
                 let content = block.questionID.flatMap { store.question(doc.exerciseSetID, $0)?.content } ?? ""
                 items.append(Item(id: block.id.uuidString, blockID: block.id,
-                                  title: "练习 \(exerciseNumber)：" + Tutor.plainPreview(content), level: 3, icon: "pencil.and.list.clipboard"))
+                                  title: String(localized: "练习 \(exerciseNumber)：") + Tutor.plainPreview(content), level: 3, icon: "pencil.and.list.clipboard"))
             case .answer:
                 items.append(Item(id: block.id.uuidString, blockID: block.id,
-                                  title: block.question ?? "提问", level: 4, icon: "questionmark.bubble"))
+                                  title: block.question ?? L("提问"), level: 4, icon: "questionmark.bubble"))
             }
         }
         return items
@@ -445,7 +445,7 @@ struct NoteDocView: View {
                     Button {
                         store.setFullScreen(!store.isFullScreen)
                     } label: {
-                        Label(store.isFullScreen ? "显示目录" : "全屏",
+                        Label(store.isFullScreen ? L("显示目录") : L("全屏"),
                               systemImage: store.isFullScreen ? "sidebar.left" : "arrow.up.left.and.arrow.down.right")
                     }
                     ModelMenu { showSettings = true }
@@ -534,8 +534,8 @@ struct NoteDocView: View {
         VStack(alignment: .leading, spacing: 6) {
             TextField("笔记标题", text: Binding(get: { doc.title }, set: { store.renameNote(noteID, to: $0) }), axis: .vertical)
                 .font(.largeTitle.bold())
-            let source = [doc.sourceName.isEmpty ? nil : "来自 \(doc.sourceName)",
-                          doc.prompt.isEmpty ? nil : "要求：\(doc.prompt)"].compactMap { $0 }
+            let source = [doc.sourceName.isEmpty ? nil : String(localized: "来自 \(doc.sourceName)"),
+                          doc.prompt.isEmpty ? nil : String(localized: "要求：\(doc.prompt)")].compactMap { $0 }
             if !source.isEmpty {
                 Text(source.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -647,7 +647,7 @@ struct NoteDocView: View {
         Button {
             addTextBlock(after: nil)
         } label: {
-            Label(doc.blocks.isEmpty ? "写第一块笔记" : "加一块笔记", systemImage: "plus")
+            Label(doc.blocks.isEmpty ? L("写第一块笔记") : L("加一块笔记"), systemImage: "plus")
         }
         .buttonStyle(InkTextButtonStyle())
     }
@@ -705,8 +705,8 @@ struct NoteDocView: View {
 
     /// 小节下面的“出例题”：针对整个小节出几道练习题，插在这一小节后面
     private func exercises(count: Int, after block: NoteBlock) {
-        store.askNote(noteID, blockID: block.id, selection: Tutor.clip(block.text, 600), title: "出例题",
-                      prompt: "请针对这一小节的内容出 \(count) 道练习题。", exerciseCount: count)
+        store.askNote(noteID, blockID: block.id, selection: Tutor.clip(block.text, 600), title: L("出例题"),
+                      prompt: String(localized: "请针对这一小节的内容出 \(count) 道练习题。"), exerciseCount: count)
     }
 
     @ViewBuilder
@@ -1021,7 +1021,7 @@ struct NoteTextBlockView<MenuContent: View>: View {
 
     private var answerHeader: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(block.question ?? "提问").font(.caption.weight(.semibold)).foregroundStyle(Ink.blue)
+            Text(block.question ?? L("提问")).font(.caption.weight(.semibold)).foregroundStyle(Ink.blue)
             if let quote = block.quote, !quote.isEmpty {
                 Text("“\(Tutor.clip(quote.replacingOccurrences(of: "\n", with: " "), 60))”")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -1156,7 +1156,7 @@ private struct CircleAskCard: View {
     @State private var text = ""
     @FocusState private var focused: Bool
 
-    static let quick = ["这是什么意思？", "为什么是这样？", "举个例子", "和前面有什么联系？"]
+    static let quick = [L("这是什么意思？"), L("为什么是这样？"), L("举个例子"), L("和前面有什么联系？")]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

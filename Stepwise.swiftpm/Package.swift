@@ -43,6 +43,9 @@ let products: [Product] = []
 
 let package = Package(
     name: "Stepwise",
+    // 界面文字的原文是中文（代码里的字符串就是 key），英文翻译在 Resources/en.lproj；
+    // 其他语言的系统默认显示英文
+    defaultLocalization: "en",
     platforms: [
         .iOS("17.0"),
         .macOS("14.0")

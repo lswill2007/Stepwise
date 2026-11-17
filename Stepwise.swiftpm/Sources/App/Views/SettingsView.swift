@@ -15,6 +15,7 @@ struct SettingsView: View {
     @State private var importMessage: String?
     @AppStorage("clockEnabled") private var clockEnabled = false
     @AppStorage("clockScale") private var clockScale: Double = 1
+    @AppStorage(AILanguage.storageKey) private var aiLanguage: String = AILanguage.auto.rawValue
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -51,7 +52,7 @@ struct SettingsView: View {
                 Section {
                     if let p = store.activeProvider {
                         LabeledContent("服务商", value: p.name)
-                        LabeledContent("模型", value: p.model.isEmpty ? "未选择" : p.model)
+                        LabeledContent(L("模型"), value: p.model.isEmpty ? L("未选择") : p.model)
                         if !p.hasKey {
                             Label("还没有填写这个服务商的 API Key", systemImage: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
@@ -73,13 +74,23 @@ struct SettingsView: View {
                     Text("用量和费用")
                 }
 
+                Section {
+                    Picker(selection: $aiLanguage) {
+                        ForEach(AILanguage.allCases) { Text($0.title).tag($0.rawValue) }
+                    } label: {
+                        Label("AI 回答语言", systemImage: "character.bubble")
+                    }
+                } footer: {
+                    Text("检查、提示、讲解、笔记和周报用的语言。默认跟随界面语言；用英文学 AP、IB 等课程时可以单独选 English。")
+                }
+
                 gradingSection
                 followUpSection
                 noteSection
                 answerSection
 
                 Section("模型服务商") {
-                    ForEach(store.providers) { p in
+                    ForEach(ProviderCatalog.displayOrder(store.providers)) { p in
                         NavigationLink(value: p.id) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -113,7 +124,7 @@ struct SettingsView: View {
 
                 Section {
                     LabeledContent("发送题目给 AI 服务商") {
-                        Text(store.aiConsent == true ? "已同意" : "未同意")
+                        Text(store.aiConsent == true ? L("已同意") : L("未同意"))
                             .foregroundStyle(store.aiConsent == true ? Color.green : Color.orange)
                     }
                     Button("查看数据发送说明", systemImage: "hand.raised") { showConsent = true }
@@ -140,9 +151,9 @@ struct SettingsView: View {
                 do {
                     let backup = try LibraryBackup.read(from: result.get())
                     let r = store.importBackup(backup, select: false)
-                    var message = "已导入 \(r.sets) 个题集，共 \(r.questions) 道题"
-                    message += r.notes > 0 ? "，以及 \(r.notes) 篇笔记，都放在左侧列表的最上面。" : "，放在左侧题集列表的最上面。"
-                    if r.copies > 0 { message += "其中 \(r.copies) 个题集本机已经有了，作为副本导入（名称后面带“导入”）。" }
+                    var message = String(localized: "已导入 \(r.sets) 个题集，共 \(r.questions) 道题")
+                    message += r.notes > 0 ? String(localized: "，以及 \(r.notes) 篇笔记，都放在左侧列表的最上面。") : L("，放在左侧题集列表的最上面。")
+                    if r.copies > 0 { message += String(localized: "其中 \(r.copies) 个题集本机已经有了，作为副本导入（名称后面带“导入”）。") }
                     importMessage = message
                 } catch {
                     importMessage = error.localizedDescription
@@ -184,7 +195,7 @@ struct SettingsView: View {
                 }
             }
 
-            modelOverride("检查与提示模型", providerID: $store.gradingProviderID, model: $store.gradingModel,
+            modelOverride(L("检查与提示模型"), providerID: $store.gradingProviderID, model: $store.gradingModel,
                           resolved: store.gradingProvider)
 
             Toggle(isOn: $store.presolveAnswers) {
@@ -257,9 +268,9 @@ struct SettingsView: View {
             NavigationLink {
                 FollowUpSettingsView()
             } label: {
-                LabeledContent("快捷操作", value: "\(store.followUps.count) 个")
+                LabeledContent(L("快捷操作"), value: String(localized: "\(store.followUps.count) 个"))
             }
-            modelOverride("出新题模型", providerID: $store.questionProviderID, model: $store.questionModel,
+            modelOverride(L("出新题模型"), providerID: $store.questionProviderID, model: $store.questionModel,
                           resolved: store.questionProvider)
         } header: {
             Text("做完一道题之后")
@@ -272,7 +283,7 @@ struct SettingsView: View {
 
     private var noteSection: some View {
         Section {
-            modelOverride("整理笔记模型", providerID: $store.noteProviderID, model: $store.noteModel,
+            modelOverride(L("整理笔记模型"), providerID: $store.noteProviderID, model: $store.noteModel,
                           resolved: store.noteProvider, recommend: .longContext)
         } header: {
             Text("笔记")
@@ -321,7 +332,7 @@ struct ExportView: View {
                     Text("选择要导出的题集")
                     Spacer()
                     if !store.questionSets.isEmpty {
-                        Button(allSelected ? "全不选" : "全选") {
+                        Button(allSelected ? L("全不选") : L("全选")) {
                             selected = allSelected ? [] : Set(store.questionSets.map(\.id))
                         }
                         .font(.callout)
@@ -352,11 +363,11 @@ struct ExportView: View {
             }
 
             Section {
-                let parts = [chosen.isEmpty ? nil : "\(chosen.count) 个题集",
-                             chosenNotes.isEmpty ? nil : "\(chosenNotes.count) 篇笔记"].compactMap { $0 }
+                let parts = [chosen.isEmpty ? nil : String(localized: "\(chosen.count) 个题集"),
+                             chosenNotes.isEmpty ? nil : String(localized: "\(chosenNotes.count) 篇笔记")].compactMap { $0 }
                 ShareLink(item: BackupFile(sets: chosen + noteSets, folders: store.folders, notes: chosenNotes),
                           preview: SharePreview("Stepwise 备份（\(parts.joined(separator: "、"))）")) {
-                    Label(parts.isEmpty ? "请先选择题集或笔记" : "导出 " + parts.joined(separator: "、"),
+                    Label(parts.isEmpty ? L("请先选择题集或笔记") : L("导出 ") + parts.joined(separator: L("、")),
                           systemImage: "square.and.arrow.up")
                 }
                 .disabled(parts.isEmpty)
@@ -394,7 +405,7 @@ struct FollowUpSettingsView: View {
                     } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(action.title.isEmpty ? "（未命名）" : action.title)
+                                Text(action.title.isEmpty ? L("（未命名）") : action.title)
                                 Text(action.prompt).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             }
                             Spacer()
@@ -425,7 +436,7 @@ struct FollowUpSettingsView: View {
         // 系统的 EditButton 显示英文，自己做一个
         .environment(\.editMode, $editMode)
         .toolbar {
-            Button(editMode.isEditing ? "完成" : "编辑") {
+            Button(editMode.isEditing ? L("完成") : L("编辑")) {
                 withAnimation { editMode = editMode.isEditing ? .inactive : .active }
             }
         }
@@ -537,12 +548,12 @@ struct ProviderEditView: View {
                              onFetch: apiKey.isEmpty ? nil : { await fetchModelsAsync() })
             } label: {
                 LabeledContent("模型") {
-                    Text(c.wrappedValue.model.isEmpty ? "选择模型" : c.wrappedValue.model)
+                    Text(c.wrappedValue.model.isEmpty ? L("选择模型") : c.wrappedValue.model)
                         .lineLimit(1).truncationMode(.middle)
                 }
             }
             if let favorites = c.wrappedValue.favoriteModels, !favorites.isEmpty {
-                Text("常用：" + favorites.joined(separator: "、"))
+                Text(L("常用：") + favorites.joined(separator: L("、")))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             Button {
@@ -557,7 +568,7 @@ struct ProviderEditView: View {
             if !c.wrappedValue.fetchedModels.isEmpty {
                 let all = c.wrappedValue.fetchedModels
                 let chat = all.filter { !ModelInfo.isNonChat($0) }.count
-                Text(chat == all.count ? "已获取 \(all.count) 个模型" : "已获取 \(all.count) 个模型，其中 \(chat) 个可以用来做题")
+                Text(chat == all.count ? String(localized: "已获取 \(all.count) 个模型") : String(localized: "已获取 \(all.count) 个模型，其中 \(chat) 个可以用来做题"))
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -584,7 +595,7 @@ struct ProviderEditView: View {
                 persist()
                 store.activeProviderID = providerID
             } label: {
-                Label(store.activeProviderID == providerID ? "正在使用" : "设为当前使用", systemImage: "checkmark.circle")
+                Label(store.activeProviderID == providerID ? L("正在使用") : L("设为当前使用"), systemImage: "checkmark.circle")
             }
             .disabled(store.activeProviderID == providerID)
 
@@ -637,7 +648,7 @@ struct ProviderEditView: View {
                 self.config?.model = first
             }
             persist()
-            testResult = models.isEmpty ? "服务商没有返回模型列表，请手动填写模型名称。" : nil
+            testResult = models.isEmpty ? L("服务商没有返回模型列表，请手动填写模型名称。") : nil
         } catch {
             testResult = error.localizedDescription
         }
@@ -652,8 +663,8 @@ struct ProviderEditView: View {
             defer { testing = false }
             do {
                 let reply = try await LLMClient(config: config, apiKey: apiKey).complete(
-                    system: "你是一个助手。",
-                    messages: [LLMMessage(role: .user, parts: [.text("请只回复四个字：连接成功")])])
+                    system: Tutor.pick("你是一个助手。", "You are an assistant."),
+                    messages: [LLMMessage(role: .user, parts: [.text(Tutor.pick("请只回复四个字：连接成功", "Reply with exactly two words: Connection successful"))])])
                 testResult = "✅ " + reply.trimmingCharacters(in: .whitespacesAndNewlines)
             } catch {
                 testResult = "❌ " + error.localizedDescription
@@ -689,7 +700,7 @@ struct ModelOverrideRows: View {
                 if let p = store.providers.first(where: { $0.id == id }) { model = p.model }
             })) {
             Text("跟随当前模型").tag("")
-            ForEach(store.providers.filter(\.hasKey)) { p in
+            ForEach(ProviderCatalog.displayOrder(store.providers.filter(\.hasKey))) { p in
                 Text(p.name).tag(p.id)
             }
         }
@@ -699,7 +710,7 @@ struct ModelOverrideRows: View {
                 ModelBrowser(title: title, models: p.allModels, selection: $model, favorites: favorites(for: p.id),
                              recommend: recommend)
             } label: {
-                LabeledContent("模型", value: model.isEmpty ? "未选择" : model)
+                LabeledContent(L("模型"), value: model.isEmpty ? L("未选择") : model)
             }
             if resolved == nil {
                 Label("请选择一个模型，否则会继续使用当前模型", systemImage: "exclamationmark.triangle")
@@ -773,7 +784,7 @@ struct StorageLocationSection: View {
             Button {
                 choose()
             } label: {
-                Label(current == nil ? "选择文件夹…" : "换一个文件夹…", systemImage: "folder")
+                Label(current == nil ? L("选择文件夹…") : L("换一个文件夹…"), systemImage: "folder")
             }
             .disabled(working)
             if current != nil {
@@ -814,7 +825,7 @@ struct StorageLocationSection: View {
 
     /// 现在这份数据有多少，例如“3 个题集、2 篇笔记”
     private var currentSummary: String {
-        "\(store.questionSets.count) 个题集、\(store.notes.count) 篇笔记"
+        String(localized: "\(store.questionSets.count) 个题集、\(store.notes.count) 篇笔记")
     }
 
     private func picked(_ result: Result<URL, Error>) {
@@ -822,15 +833,15 @@ struct StorageLocationSection: View {
         switch result {
         case .success(let url): folder = url
         case .failure(let error):
-            dialog = Dialog(title: "没能打开文件夹", message: error.localizedDescription)
+            dialog = Dialog(title: L("没能打开文件夹"), message: error.localizedDescription)
             return
         }
         if DataLocation.isSame(folder, DataLocation.root) {
-            dialog = Dialog(title: "已经在用这个文件夹", message: "数据现在就存在“\(DataLocation.describe(folder))”。")
+            dialog = Dialog(title: L("已经在用这个文件夹"), message: String(localized: "数据现在就存在“\(DataLocation.describe(folder))”。"))
             return
         }
         if store.hasBackgroundWork {
-            dialog = Dialog(title: "稍等一下", message: "AI 正在回复或生成笔记，等它完成后再换储存位置。")
+            dialog = Dialog(title: L("稍等一下"), message: L("AI 正在回复或生成笔记，等它完成后再换储存位置。"))
             return
         }
         let name = DataLocation.describe(folder)
@@ -840,24 +851,24 @@ struct StorageLocationSection: View {
             working = false
             switch contents {
             case .empty:
-                dialog = Dialog(title: "把现在的数据复制到“\(name)”？",
-                                message: "现在的\(currentSummary)，连同图片、手写笔迹、学习时间、API Key 和各项设置，会复制到这个文件夹，之后都存在那里。原来位置的那份保留不动，可以随时改回来。",
-                                change: Change(folder: folder, mode: .copyCurrent, confirm: "复制并使用这个文件夹"))
+                dialog = Dialog(title: String(localized: "把现在的数据复制到“\(name)”？"),
+                                message: String(localized: "现在的\(currentSummary)，连同图片、手写笔迹、学习时间、API Key 和各项设置，会复制到这个文件夹，之后都存在那里。原来位置的那份保留不动，可以随时改回来。"),
+                                change: Change(folder: folder, mode: .copyCurrent, confirm: L("复制并使用这个文件夹")))
             case .stepwise(let summary):
-                dialog = Dialog(title: "“\(name)”里已经有 Stepwise 数据",
-                                message: "里面有\(summary.text)。改用这个文件夹后，App 显示的是那份数据，不会用现在的数据覆盖它。现在的\(currentSummary)留在原来的位置，不会删除，改回原来的位置就能看到。",
-                                change: Change(folder: folder, mode: .useExisting, confirm: "使用文件夹里的数据"))
+                dialog = Dialog(title: String(localized: "“\(name)”里已经有 Stepwise 数据"),
+                                message: String(localized: "里面有\(summary.text)。改用这个文件夹后，App 显示的是那份数据，不会用现在的数据覆盖它。现在的\(currentSummary)留在原来的位置，不会删除，改回原来的位置就能看到。"),
+                                change: Change(folder: folder, mode: .useExisting, confirm: L("使用文件夹里的数据")))
             case .otherFiles(let names):
-                let list = names.prefix(3).joined(separator: "、") + (names.count > 3 ? " 等" : "")
-                dialog = Dialog(title: "这个文件夹里有其他文件",
-                                message: "“\(name)”里有\(list)。为了不弄乱你的文件，Stepwise 只存在空文件夹里：请在选择时新建一个文件夹（例如“Stepwise 数据”），再选它。")
+                let list = names.prefix(3).joined(separator: L("、")) + (names.count > 3 ? L(" 等") : "")
+                dialog = Dialog(title: L("这个文件夹里有其他文件"),
+                                message: String(localized: "“\(name)”里有\(list)。为了不弄乱你的文件，Stepwise 只存在空文件夹里：请在选择时新建一个文件夹（例如“Stepwise 数据”），再选它。"))
             }
         }
     }
 
     private func prepareReset() {
         if store.hasBackgroundWork {
-            dialog = Dialog(title: "稍等一下", message: "AI 正在回复或生成笔记，等它完成后再换储存位置。")
+            dialog = Dialog(title: L("稍等一下"), message: L("AI 正在回复或生成笔记，等它完成后再换储存位置。"))
             return
         }
         let folderName = DataLocation.describe(current)
@@ -866,14 +877,14 @@ struct StorageLocationSection: View {
             let contents = await Task.detached(priority: .userInitiated) { DataLocation.inspect(DataLocation.defaultRoot) }.value
             working = false
             if case .stepwise(let summary) = contents {
-                dialog = Dialog(title: "App 内已经有一份数据",
-                                message: "App 内有\(summary.text)，可能是选文件夹之前的旧数据。改回后显示的是那份数据，不会被覆盖。“\(folderName)”里现在的\(currentSummary)保留不动，之后再选这个文件夹就能看到。",
-                                change: Change(folder: nil, mode: .useExisting, confirm: "改回并使用 App 内的数据"))
+                dialog = Dialog(title: L("App 内已经有一份数据"),
+                                message: String(localized: "App 内有\(summary.text)，可能是选文件夹之前的旧数据。改回后显示的是那份数据，不会被覆盖。“\(folderName)”里现在的\(currentSummary)保留不动，之后再选这个文件夹就能看到。"),
+                                change: Change(folder: nil, mode: .useExisting, confirm: L("改回并使用 App 内的数据")))
             } else {
                 // App 内没有题库：把文件夹里的数据复制回来（App 内其他文件不会动）
-                dialog = Dialog(title: "把数据复制回 App 内？",
-                                message: "现在的\(currentSummary)，连同图片和手写笔迹，会复制回 App 内，之后存在那里（删除 App 时会一起删掉）。“\(folderName)”里的那份保留不动。",
-                                change: Change(folder: nil, mode: .copyCurrent, confirm: "复制并改回"))
+                dialog = Dialog(title: L("把数据复制回 App 内？"),
+                                message: String(localized: "现在的\(currentSummary)，连同图片和手写笔迹，会复制回 App 内，之后存在那里（删除 App 时会一起删掉）。“\(folderName)”里的那份保留不动。"),
+                                change: Change(folder: nil, mode: .copyCurrent, confirm: L("复制并改回")))
             }
         }
     }
@@ -885,12 +896,12 @@ struct StorageLocationSection: View {
                 try await store.changeDataLocation(to: change.folder, mode: change.mode)
                 current = DataLocation.customFolder
                 let place = DataLocation.describe(current)
-                dialog = Dialog(title: "储存位置已更改",
+                dialog = Dialog(title: L("储存位置已更改"),
                                 message: change.mode == .copyCurrent
-                                    ? "数据已复制，之后都存在“\(place)”。"
-                                    : "现在显示的是“\(place)”里的数据：\(currentSummary)。")
+                                    ? String(localized: "数据已复制，之后都存在“\(place)”。")
+                                    : String(localized: "现在显示的是“\(place)”里的数据：\(currentSummary)。"))
             } catch {
-                dialog = Dialog(title: "没能更改储存位置", message: error.localizedDescription + "\n数据仍然存在原来的位置。")
+                dialog = Dialog(title: L("没能更改储存位置"), message: error.localizedDescription + L("\n数据仍然存在原来的位置。"))
             }
             working = false
         }
@@ -951,7 +962,7 @@ struct UsageView: View {
     }
 
     private func providerName(_ id: String) -> String {
-        ProviderCatalog.presets.first { $0.id == id }?.name ?? (id.hasPrefix("custom-") ? "自定义服务商" : id)
+        ProviderCatalog.presets.first { $0.id == id }?.name ?? (id.hasPrefix("custom-") ? L("自定义服务商") : id)
     }
 
     var body: some View {
@@ -961,7 +972,7 @@ struct UsageView: View {
         Form {
             Section {
                 Picker("时间", selection: $period) {
-                    ForEach(Period.allCases) { Text($0.rawValue).tag($0) }
+                    ForEach(Period.allCases) { Text(L($0.rawValue)).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 let all = totals.values.reduce(into: UsageTotals()) { $0.add($1) }
@@ -995,7 +1006,7 @@ struct UsageView: View {
                                 Text(model).font(.body.weight(.medium)).lineLimit(1)
                                 Spacer()
                                 Text(rowCost.missing && rowCost.amounts.values.allSatisfy { $0 == 0 }
-                                     ? "未填价格" : UsageLog.format(rowCost.amounts) + (rowCost.missing ? "+" : ""))
+                                     ? L("未填价格") : UsageLog.format(rowCost.amounts) + (rowCost.missing ? "+" : ""))
                                     .monospacedDigit()
                                     .foregroundStyle(rowCost.missing ? Color.orange : Color.primary)
                             }
@@ -1056,9 +1067,9 @@ private struct PriceEditor: View {
                         Text("美元 $").tag("USD")
                         Text("人民币 ¥").tag("CNY")
                     }
-                    field("输入", $input)
-                    field("输出", $output)
-                    field("缓存命中（可不填）", $cacheRead)
+                    field(L("输入"), $input)
+                    field(L("输出"), $output)
+                    field(L("缓存命中（可不填）"), $cacheRead)
                 } header: {
                     Text(model)
                 } footer: {

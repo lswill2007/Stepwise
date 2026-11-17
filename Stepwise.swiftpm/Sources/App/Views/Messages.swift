@@ -8,10 +8,10 @@ struct StatusPill: View {
     var body: some View {
         let (text, color): (String, Color) = {
             switch status {
-            case .todo: return ("未作答", .secondary)
-            case .wrong: return ("待订正", Ink.red)
-            case .passed: return ("已做对", Ink.green)
-            case .revealed: return ("看过答案", Ink.blue)
+            case .todo: return (L("未作答"), .secondary)
+            case .wrong: return (L("待订正"), Ink.red)
+            case .passed: return (L("已做对"), Ink.green)
+            case .revealed: return (L("看过答案"), Ink.blue)
             }
         }()
         // 只是一行小字，不做成彩色胶囊
@@ -39,16 +39,16 @@ struct MessageRow: View {
             }
 
         case .verdictCorrect:
-            card(title: "对了", color: Ink.red)
+            card(title: L("对了"), color: Ink.red)
 
         case .verdictWrong:
             card(title: PenMark.needsWorkTitle, color: Ink.red)
 
         case .hint:
-            card(title: message.isStuckHelp ? "卡住的地方" : "提示", color: .secondary)
+            card(title: message.isStuckHelp ? L("卡住的地方") : L("提示"), color: .secondary)
 
         case .solution:
-            card(title: "完整答案", color: Ink.blue)
+            card(title: L("完整答案"), color: Ink.blue)
 
         case .hintRequest, .solutionRequest:
             VStack(alignment: .trailing, spacing: 6) {
@@ -90,8 +90,8 @@ struct MessageRow: View {
     private var timingText: String? {
         guard store.showTiming, let duration = message.duration else { return nil }
         let seconds = String(format: duration < 10 ? "%.1f" : "%.0f", duration)
-        if let model = message.model, !model.isEmpty { return "用时 \(seconds) 秒 · \(model)" }
-        return "用时 \(seconds) 秒"
+        if let model = message.model, !model.isEmpty { return String(localized: "用时 \(seconds) 秒 · \(model)") }
+        return String(localized: "用时 \(seconds) 秒")
     }
 
     private func card(title: String, color: Color) -> some View {

@@ -51,9 +51,9 @@ struct ModelBrowser: View {
             Section {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        filterChip("全部", selected: family == nil) { family = nil }
+                        filterChip(L("全部"), selected: family == nil) { family = nil }
                         ForEach(families, id: \.self) { f in
-                            filterChip(f.rawValue, selected: family == f) { family = (family == f) ? nil : f }
+                            filterChip(f.title, selected: family == f) { family = (family == f) ? nil : f }
                         }
                     }
                     .padding(.vertical, 2)
@@ -90,7 +90,7 @@ struct ModelBrowser: View {
 
             ForEach(ModelInfo.Family.allCases, id: \.self) { f in
                 if let rows = grouped[f], !rows.isEmpty {
-                    Section("\(f.rawValue)（\(rows.count)）") {
+                    Section("\(f.title)（\(rows.count)）") {
                         ForEach(rows, id: \.self, content: row)
                     }
                 }
@@ -98,7 +98,7 @@ struct ModelBrowser: View {
 
             if list.isEmpty {
                 Section {
-                    Text(models.isEmpty ? "还没有模型列表。点右上角“获取模型列表”，或在下面直接填写模型名称。" : "没有符合条件的模型")
+                    Text(models.isEmpty ? L("还没有模型列表。点右上角“获取模型列表”，或在下面直接填写模型名称。") : L("没有符合条件的模型"))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -178,7 +178,7 @@ struct ModelBrowser: View {
                     .foregroundStyle(isFavorite ? Color.yellow : Color.secondary)
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel(isFavorite ? "取消常用" : "加入常用")
+            .accessibilityLabel(isFavorite ? L("取消常用") : L("加入常用"))
         }
     }
 

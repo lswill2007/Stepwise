@@ -3,7 +3,7 @@ import Foundation
 /// 所有提示词和模型输出解析集中在这里，方便调整。
 /// 模型输出用 XML 风格标签而不是 JSON：LaTeX 里大量的反斜杠在 JSON 中极易被转义坏（如 \frac 里的 \f），标签可以原样保留公式。
 enum Tutor {
-    static let formatRule = """
+    static let formatRuleZH = """
     排版要求：
     - 使用中文。
     - 所有数学表达式一律用 LaTeX 书写：行内公式用 $...$，单独成行的公式用 $$...$$。哪怕只是一个变量或数字式子（如 $x$、$a_1$、$3\\times 4$）也放进 $ 里。
@@ -15,7 +15,7 @@ enum Tutor {
 
     // MARK: - 拆分题目
 
-    static func splitSystem(requirement: String, hasImages: Bool, multiPart: Bool = false) -> String {
+    static func splitSystemZH(requirement: String, hasImages: Bool, multiPart: Bool = false) -> String {
         var s = """
         你是题目整理助手。用户会提供一份题目文件的内容（文字或图片），请把其中每一道题目完整、准确地拆分出来。
 
@@ -115,13 +115,13 @@ enum Tutor {
             }
             if !jsonItems.isEmpty { return (object?["title"] as? String ?? title, jsonItems) }
         }
-        throw LLMError(message: "模型返回的内容无法解析成题目列表，请重试或换一个模型。\n\n模型返回：\(text.prefix(300))")
+        throw LLMError(message: String(localized: "模型返回的内容无法解析成题目列表，请重试或换一个模型。\n\n模型返回：\(String(text.prefix(300)))"))
     }
 
     // MARK: - 辅导
 
     /// origin：这道题是 AI 出的新题时，原题的内容和作答记录
-    static func tutorSystem(for q: Question, origin: String? = nil) -> String {
+    static func tutorSystemZH(for q: Question, origin: String? = nil) -> String {
         var answerSection: String
         if let ref = q.referenceAnswer, !ref.isEmpty {
             answerSection = "【参考答案】（只供你判断对错，学生看不到。在学生请求完整答案之前不要泄露）\n\(ref)"
@@ -159,7 +159,7 @@ enum Tutor {
     }
 
     /// lineNumbers：手写图片左边印了行号，可以要求模型指出错在哪一行
-    static func checkInstruction(lineNumbers: Bool) -> String {
+    static func checkInstructionZH(lineNumbers: Bool) -> String {
         var s = """
         请帮我检查作答（如果附有图片，那是我的手写作答）。像老师坐在旁边陪我看一样，从第一步开始按我写的顺序一步一步往下看。
         第一行只输出 <verdict>correct</verdict> 或 <verdict>wrong</verdict>（只给程序用，我看不到），从第二行开始写给我的反馈：
@@ -181,7 +181,7 @@ enum Tutor {
     }
 
     /// 提示分三档，一档比一档具体
-    static let hintLevels = ["思路方向", "关键一步", "下一步写什么"]
+    static var hintLevels: [String] { [L("思路方向"), L("关键一步"), L("下一步写什么")] }
 
     static func hintLevelName(_ level: Int) -> String {
         hintLevels[min(max(level, 1), hintLevels.count) - 1]
@@ -189,11 +189,11 @@ enum Tutor {
 
     /// 按钮和小标签上用的短名字
     static func hintLevelShortName(_ level: Int) -> String {
-        ["思路", "关键一步", "下一步"][min(max(level, 1), hintLevels.count) - 1]
+        [L("思路"), L("关键一步"), L("下一步")][min(max(level, 1), hintLevels.count) - 1]
     }
 
     /// level：第几次提示，决定这次提示的档次；note：学生补充的文字说明
-    static func hintInstruction(level: Int, note: String? = nil) -> String {
+    static func hintInstructionZH(level: Int, note: String? = nil) -> String {
         let detail: String
         switch level {
         case 1:
@@ -215,7 +215,7 @@ enum Tutor {
 
     /// 点“卡了”：把现在写到哪里一起发过去，让 AI 自己找出卡在哪一步
     /// hasImage：附了手写图片（左边印着行号）；typed：打字写的部分
-    static func stuckInstruction(hasImage: Bool, typed: String) -> String {
+    static func stuckInstructionZH(hasImage: Bool, typed: String) -> String {
         var s = "我卡住了，写不下去。"
         if hasImage {
             s += "附图是我到目前为止的手写（左边的灰色数字是行号）。"
@@ -239,7 +239,7 @@ enum Tutor {
     }
 
     /// 用笔圈出一步来提问
-    static func stepQuestion(_ text: String, done: Bool) -> String {
+    static func stepQuestionZH(_ text: String, done: Bool) -> String {
         var s = "【我圈出的这一步】见手写图片里蓝框圈住的部分（左边的灰色数字是行号）。\n" + text
         if !done {
             s += "\n（这道题我还没做完：请只针对我圈出的这一步回答，可以指出问题、提示方向，不要直接给出最终答案。）"
@@ -247,11 +247,11 @@ enum Tutor {
         return s + "\n请简洁回答，控制在几句话以内。"
     }
 
-    static let solutionInstruction = "请给出这道题的完整答案和详细的解题过程（推导写成对齐的公式），最后总结一下解题的关键点。"
+    static let solutionInstructionZH = "请给出这道题的完整答案和详细的解题过程（推导写成对齐的公式），最后总结一下解题的关键点。"
 
     // MARK: - 预先求解
 
-    static func presolveSystem(for q: Question) -> String {
+    static func presolveSystemZH(for q: Question) -> String {
         """
         你是严谨的解题老师。请认真求解下面这道题，结果用于之后批改学生的作答，学生看不到。
 
@@ -267,13 +267,13 @@ enum Tutor {
         """
     }
 
-    static let presolveInstruction = "请求解这道题。"
+    static let presolveInstructionZH = "请求解这道题。"
 
     // MARK: - 精简上下文
 
     /// 之前的作答记录摘要：每次判定和反馈、每次提示、是否看过答案。
     /// 代替完整对话发给模型，对话变长后回复也不会越来越慢。
-    static func progressSummary(_ messages: [ChatMessage]) -> String? {
+    static func progressSummaryZH(_ messages: [ChatMessage]) -> String? {
         var lines: [String] = []
         var attempts = 0, hints = 0
         for m in messages {
@@ -304,10 +304,10 @@ enum Tutor {
     }
 
     /// 检查答案时附在作答记录后面：以这次作答为准重新批改
-    static let regradeNote = "以上记录只用来了解我的进展。请只根据下面这次的作答重新批改，不要因为之前错过就判错；之前指出过的错误如果还在，简单点明即可，不要重复整段反馈。"
+    static let regradeNoteZH = "以上记录只用来了解我的进展。请只根据下面这次的作答重新批改，不要因为之前错过就判错；之前指出过的错误如果还在，简单点明即可，不要重复整段反馈。"
 
     /// 出的新题要记住的原题内容：题干和作答记录（包括错题本里重新练习之前的记录）
-    static func originNote(for source: Question) -> String {
+    static func originNoteZH(for source: Question) -> String {
         let history = (source.previousAttempts ?? []).flatMap { $0 } + source.messages
         var s = "原题（第 \(source.label) 题）：\n" + clip(source.content, 800) + "\n\n"
         s += progressSummary(history) ?? "学生在原题上没有错误记录。"
@@ -320,7 +320,10 @@ enum Tutor {
 
     /// 对话里直接打字让 AI 出题时，也用出新题模型
     static func asksForNewQuestion(_ text: String) -> Bool {
-        ["出一道", "出两道", "出三道", "出几道", "再出", "出道题", "出个题", "新题"].contains { text.contains($0) }
+        let lower = text.lowercased()
+        return ["出一道", "出两道", "出三道", "出几道", "再出", "出道题", "出个题", "新题",
+                "new question", "another question", "similar question", "harder question", "practice question",
+                "new problem", "another problem", "similar problem", "harder problem", "practice problem"].contains { lower.contains($0) }
     }
 
     static func clip(_ s: String, _ limit: Int) -> String {
@@ -400,7 +403,7 @@ enum Tutor {
         var shown = extractMarks(extractNewQuestions(text).display).text
         if let r = shown.range(of: "<mark") { shown = String(shown[..<r.lowerBound]) }
         if let r = shown.range(of: "<new_question") {
-            return String(shown[..<r.lowerBound]) + "\n\n（正在出题…）"
+            return String(shown[..<r.lowerBound]) + "\n\n" + L("（正在出题…）")
         }
         return shown
     }
@@ -453,7 +456,7 @@ enum Tutor {
     }
 
     /// 补全选项时追加的要求
-    static func missingOptionsFollowUp(labels: [String]) -> String {
+    static func missingOptionsFollowUpZH(labels: [String]) -> String {
         let list = labels.map { "第 \($0) 题" }.joined(separator: "、")
         return """
         检查发现 \(list) 看起来是选择题，但你输出的题干里没有选项。请对照原文，只重新输出这几道题，必须包含全部选项（A、B、C、D……每个选项单独一行，放在 <content> 里）。格式和之前一样（<question label="…"><content>…</content><answer>…</answer></question>），不要输出其他题目，也不要输出 <title>。如果原文中这道题确实没有选项，就原样输出它。

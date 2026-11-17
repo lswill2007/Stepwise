@@ -67,11 +67,11 @@ struct LibraryBackup: Codable {
         let noteCount = notes?.count ?? 0
         let name = questionSets.count == 1 && noteCount == 0 ? questionSets[0].title
             : noteCount == 1 && questionSets.isEmpty ? notes![0].title
-            : [questionSets.isEmpty ? nil : "\(questionSets.count) 个题集", noteCount == 0 ? nil : "\(noteCount) 篇笔记"]
+            : [questionSets.isEmpty ? nil : String(localized: "\(questionSets.count) 个题集"), noteCount == 0 ? nil : String(localized: "\(noteCount) 篇笔记")]
                 .compactMap { $0 }.joined(separator: " ")
         let safeName = name.components(separatedBy: CharacterSet(charactersIn: "/\\:?*\"<>|")).joined(separator: "-")
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Stepwise 备份 \(safeName) \(formatter.string(from: exportedAt)).json")
+            .appendingPathComponent(String(localized: "Stepwise 备份 \(safeName) \(formatter.string(from: exportedAt)).json"))
         // 日期格式和题库文件 library.json 一致，导入后时间一点不差
         try JSONEncoder().encode(self).write(to: url, options: .atomic)
         return url
@@ -82,7 +82,7 @@ struct LibraryBackup: Codable {
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         let data = try Data(contentsOf: url)
         guard let backup = try? JSONDecoder().decode(LibraryBackup.self, from: data), backup.format == formatName else {
-            throw BackupError(message: "这不是 Stepwise 导出的备份文件。要导入新的题目，请在左侧点“+”导入题目文件。")
+            throw BackupError(message: L("这不是 Stepwise 导出的备份文件。要导入新的题目，请在左侧点“+”导入题目文件。"))
         }
         return backup
     }
@@ -146,7 +146,7 @@ extension AppStore {
                 let newID = UUID()
                 setIDMap[set.id] = newID
                 set.id = newID
-                set.title += "（导入）"
+                set.title += L("（导入）")
                 if set.noteID == nil { result.copies += 1 }
             }
             questionIDMap.merge(idMap) { $1 }
@@ -182,7 +182,7 @@ extension AppStore {
             let copy = notes.contains(where: { $0.id == doc.id })
             if copy {
                 doc.id = UUID()
-                doc.title += "（导入）"
+                doc.title += L("（导入）")
             }
             // 笔记上的涂鸦：副本的块换新 id，涂鸦跟着换；整页涂鸦的位置记号也跟着换
             for i in doc.blocks.indices {

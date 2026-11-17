@@ -113,12 +113,12 @@ struct FollowUpAction: Codable, Identifiable, Equatable {
     var makesQuestion = false
 
     static let defaults: [FollowUpAction] = [
-        FollowUpAction(title: "出一道类似的新题", prompt: "请出一道考查相同知识点的类似新题。", makesQuestion: true),
-        FollowUpAction(title: "出一道更难的题", prompt: "请出一道考查相同知识点、但更难一些的新题。", makesQuestion: true),
-        FollowUpAction(title: "总结做题技巧", prompt: "请总结这道题用到的做题技巧和通用方法，以后遇到类似的题应该怎么想？"),
-        FollowUpAction(title: "讲讲解题思路", prompt: "请从头讲一下这道题的解题思路：拿到题目时先注意什么，突破口在哪里？"),
-        FollowUpAction(title: "还有别的解法吗", prompt: "这道题还有其他解法吗？请和原来的方法比较一下。"),
-        FollowUpAction(title: "常见易错点", prompt: "这类题有哪些常见的易错点？")
+        FollowUpAction(title: L("出一道类似的新题"), prompt: L("请出一道考查相同知识点的类似新题。"), makesQuestion: true),
+        FollowUpAction(title: L("出一道更难的题"), prompt: L("请出一道考查相同知识点、但更难一些的新题。"), makesQuestion: true),
+        FollowUpAction(title: L("总结做题技巧"), prompt: L("请总结这道题用到的做题技巧和通用方法，以后遇到类似的题应该怎么想？")),
+        FollowUpAction(title: L("讲讲解题思路"), prompt: L("请从头讲一下这道题的解题思路：拿到题目时先注意什么，突破口在哪里？")),
+        FollowUpAction(title: L("还有别的解法吗"), prompt: L("这道题还有其他解法吗？请和原来的方法比较一下。")),
+        FollowUpAction(title: L("常见易错点"), prompt: L("这类题有哪些常见的易错点？"))
     ]
 }
 
@@ -137,6 +137,24 @@ struct QuestionSet: Codable, Identifiable, Equatable {
 }
 
 /// 笔记模式：导入 PDF 后按要求生成的可编辑文档
+/// 根据别的题出的新题，题号后面加的记号（“3-新1”）：新出的题按界面语言，认题号时两种都认
+enum GeneratedLabel {
+    static var suffix: String { L("-新") }
+    static let allSuffixes = ["-新", "-new"]
+
+    static func isGenerated(_ label: String, from base: String) -> Bool {
+        allSuffixes.contains { label.hasPrefix(base + $0) }
+    }
+
+    /// “3-新1” → “3”
+    static func base(of label: String) -> String? {
+        for s in allSuffixes {
+            if let r = label.range(of: s, options: .backwards) { return String(label[..<r.lowerBound]) }
+        }
+        return nil
+    }
+}
+
 struct NoteDoc: Codable, Identifiable, Equatable {
     var id = UUID()
     var title: String

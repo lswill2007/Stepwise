@@ -52,7 +52,7 @@ struct ModelMenu: View {
     var onOpenSettings: () -> Void
 
     var body: some View {
-        let configured = store.providers.filter(\.hasKey)
+        let configured = ProviderCatalog.displayOrder(store.providers.filter(\.hasKey))
         Menu {
             if configured.isEmpty {
                 Text("还没有填写任何 API Key")
@@ -80,7 +80,7 @@ struct ModelMenu: View {
             Divider()
             Button("模型设置…", systemImage: "gearshape", action: onOpenSettings)
         } label: {
-            Label(store.activeProvider.map { $0.model.isEmpty ? $0.name : $0.model } ?? "选择模型",
+            Label(store.activeProvider.map { $0.model.isEmpty ? $0.name : $0.model } ?? L("选择模型"),
                   systemImage: "cpu")
                 .labelStyle(.titleAndIcon)
         }

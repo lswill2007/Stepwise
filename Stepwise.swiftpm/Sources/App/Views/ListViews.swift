@@ -156,10 +156,10 @@ struct SidebarView: View {
 
     private var alertTitle: String {
         switch nameEdit {
-        case .newFolder(let parent): return parent == nil ? "新建文件夹" : "新建子文件夹"
-        case .renameFolder: return "重命名文件夹"
-        case .renameSet: return "重命名题集"
-        case .renameNote: return "重命名笔记"
+        case .newFolder(let parent): return parent == nil ? L("新建文件夹") : L("新建子文件夹")
+        case .renameFolder: return L("重命名文件夹")
+        case .renameSet: return L("重命名题集")
+        case .renameNote: return L("重命名笔记")
         case nil: return ""
         }
     }
@@ -301,7 +301,7 @@ struct NoteRow: View {
                         Text("正在生成…")
                     } else {
                         let exercises = doc.blocks.filter { $0.kind == .exercise }.count
-                        Text(exercises > 0 ? "\(doc.blocks.count) 块 · \(exercises) 道练习" : "\(doc.blocks.count) 块")
+                        Text(exercises > 0 ? String(localized: "\(doc.blocks.count) 块 · \(exercises) 道练习") : String(localized: "\(doc.blocks.count) 块"))
                     }
                 }
                 .font(.caption).foregroundStyle(.secondary)
@@ -477,7 +477,7 @@ struct MistakeBookView: View {
                                 HStack(spacing: 6) {
                                     Text("第 \(q.label) 题").font(.subheadline.weight(.semibold))
                                     if let rounds = q.reviewRounds {
-                                        Text(rounds == 0 ? "复习中" : "复习中 · 已用 \(rounds) 轮")
+                                        Text(rounds == 0 ? L("复习中") : String(localized: "复习中 · 已用 \(rounds) 轮"))
                                             .font(.caption).foregroundStyle(Ink.red)
                                     }
                                     if store.isBusy(q.id) { ProgressView().controlSize(.mini) }

@@ -30,7 +30,7 @@ struct ImportView: View {
     @State private var showSettings = false
     @State private var showConsent = false
 
-    private static let examples = ["每个小问单独作为一道题", "只要选择题", "忽略答案和解析部分", "保留原题号"]
+    private static let examples = [L("每个小问单独作为一道题"), L("只要选择题"), L("忽略答案和解析部分"), L("保留原题号")]
 
     var body: some View {
         NavigationStack {
@@ -178,7 +178,7 @@ struct ImportView: View {
                 DocumentScanner { images in
                     showScanner = false
                     if !images.isEmpty {
-                        material = ImportedMaterial(name: "扫描的题目", images: images)
+                        material = ImportedMaterial(name: L("扫描的题目"), images: images)
                     }
                 }
                 .ignoresSafeArea()
@@ -191,7 +191,7 @@ struct ImportView: View {
     private var currentMaterial: ImportedMaterial? {
         if let material, !material.isEmpty { return material }
         let text = pastedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : ImportedMaterial(name: "粘贴的题目", textPages: [text])
+        return text.isEmpty ? nil : ImportedMaterial(name: L("粘贴的题目"), textPages: [text])
     }
 
     private func handleFile(_ result: Result<[URL], Error>) {
@@ -230,9 +230,9 @@ struct ImportView: View {
             }
             photoItems = []
             if images.isEmpty {
-                store.errorMessage = "没有读取到图片"
+                store.errorMessage = L("没有读取到图片")
             } else {
-                material = ImportedMaterial(name: "相册图片", images: images)
+                material = ImportedMaterial(name: L("相册图片"), images: images)
             }
         }
     }
@@ -245,11 +245,11 @@ struct ImportView: View {
             return
         }
         working = true
-        progressText = "正在拆分…"
+        progressText = L("正在拆分…")
         task = Task {
             do {
                 var newSet = try await store.split(material: source, requirement: requirement, title: title) { i, n in
-                    progressText = n > 1 ? "正在拆分 第 \(i)/\(n) 部分…" : "正在拆分…"
+                    progressText = n > 1 ? String(localized: "正在拆分 第 \(i)/\(n) 部分…") : L("正在拆分…")
                 }
                 newSet.folderID = folderID
                 store.addSet(newSet)

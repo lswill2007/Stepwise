@@ -136,7 +136,7 @@ PRIVACY
 • Your questions, answers and handwriting stay on your iPad; API keys are stored in the Keychain
 • Content is sent only to the AI provider you choose, and only when you use an AI feature
 
-Note: You need your own API key from an AI provider. Handwritten answers and image questions require a vision-capable model. The app interface is currently in Simplified Chinese.
+Note: You need your own API key from an AI provider. Handwritten answers and image questions require a vision-capable model. The app is available in English and Simplified Chinese and follows your iPad's language; AI responses can be set to either language.
 ```
 
 ---

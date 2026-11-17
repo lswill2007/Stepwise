@@ -109,9 +109,9 @@ final class InkTools: ObservableObject {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .fountain: return "钢笔"
-            case .ballpoint: return "圆珠笔"
-            case .felt: return "签字笔"
+            case .fountain: return L("钢笔")
+            case .ballpoint: return L("圆珠笔")
+            case .felt: return L("签字笔")
             }
         }
     }
@@ -551,7 +551,30 @@ struct NotebookCanvas: UIViewRepresentable {
         private var penDown = false
         init(model: HandwritingModel) { self.model = model }
 
+        /// 写字时锁住的页面：手掌碰到屏幕把页面滚动了，笔下的纸跟着动，会画出一条笔直的长线
+        private weak var lockedScroll: UIScrollView?
+
+        private func lockScrolling(_ gesture: UIGestureRecognizer) {
+            guard lockedScroll == nil else { return }
+            var view = gesture.view?.superview
+            while let v = view, !(v is UIScrollView && v.bounds.height > 0 && !(v is PKCanvasView)) { view = v.superview }
+            guard let scroll = view as? UIScrollView, scroll.isScrollEnabled else { return }
+            // 关掉再打开会取消正在进行的拖动
+            scroll.isScrollEnabled = false
+            lockedScroll = scroll
+        }
+
+        private func unlockScrolling() {
+            lockedScroll?.isScrollEnabled = true
+            lockedScroll = nil
+        }
+
         @objc func drawingGesture(_ gesture: UIGestureRecognizer) {
+            switch gesture.state {
+            case .began, .changed: lockScrolling(gesture)
+            case .ended, .cancelled, .failed: unlockScrolling()
+            default: break
+            }
             // 开始写：工具栏自动缩小。笔记上的涂鸦层把书写手势挂在文字视图上，
             // 不一定会走 canvasViewDidBeginUsingTool，手势也可能只收到“结束”，所以这里也发
             if [.began, .changed, .ended].contains(gesture.state) { model.tools.writingBegan.send() }
@@ -1028,20 +1051,20 @@ struct InkPalette: View {
 
     private func fullBar(labels: Bool) -> some View {
         HStack(spacing: labels ? 6 : 2) {
-            toolButton(.pen, title: "笔", label: labels)
-            toolButton(.marker, title: "荧光笔", label: labels)
-            toolButton(.eraser, title: "橡皮", label: labels)
-            toolButton(.lasso, title: "框选", label: labels)
-            toolButton(.ask, title: "圈出来问", label: labels)
+            toolButton(.pen, title: L("笔"), label: labels)
+            toolButton(.marker, title: L("荧光笔"), label: labels)
+            toolButton(.eraser, title: L("橡皮"), label: labels)
+            toolButton(.lasso, title: L("框选"), label: labels)
+            toolButton(.ask, title: L("圈出来问"), label: labels)
 
             Divider().frame(height: 30).padding(.horizontal, labels ? 4 : 2)
 
-            iconButton("arrow.uturn.backward", "撤销") { tools.undo() }
-            iconButton("arrow.uturn.forward", "重做") { tools.redo() }
-            iconButton(showOptions ? "slider.horizontal.below.square.filled.and.square" : "slider.horizontal.3", "调节") {
+            iconButton("arrow.uturn.backward", L("撤销")) { tools.undo() }
+            iconButton("arrow.uturn.forward", L("重做")) { tools.redo() }
+            iconButton(showOptions ? "slider.horizontal.below.square.filled.and.square" : "slider.horizontal.3", L("调节")) {
                 showOptions.toggle()
             }
-            iconButton("chevron.down", "收起工具栏") {
+            iconButton("chevron.down", L("收起工具栏")) {
                 showOptions = false
                 collapsed = true
             }
@@ -1149,10 +1172,10 @@ private struct InkOptionsPanel: View {
                 ForEach(InkTools.PenKind.allCases) { Text($0.title).tag($0) }
             }
             .pickerStyle(.segmented)
-            slider("笔尖粗细", $tools.penWidth, InkTools.penWidthRange, String(format: "%.1f", tools.penWidth))
-            slider("压力灵敏度", $tools.penPressure, 0...1, percent(tools.penPressure))
-            slider("笔尖扁平度", $tools.penFlatness, 0...1, percent(tools.penFlatness))
-            slider("画笔稳定性", $tools.penStability, 0...1, percent(tools.penStability))
+            slider(L("笔尖粗细"), $tools.penWidth, InkTools.penWidthRange, String(format: "%.1f", tools.penWidth))
+            slider(L("压力灵敏度"), $tools.penPressure, 0...1, percent(tools.penPressure))
+            slider(L("笔尖扁平度"), $tools.penFlatness, 0...1, percent(tools.penFlatness))
+            slider(L("画笔稳定性"), $tools.penStability, 0...1, percent(tools.penStability))
             HStack {
                 Text("扁平的笔尖斜着写：横细竖粗，像钢笔、书法笔。稳定性越高，手抖时线条越顺。")
                     .font(.caption).foregroundStyle(.secondary)
@@ -1181,8 +1204,8 @@ private struct InkOptionsPanel: View {
                 Text("荧光笔预览 Aa 你好").font(.callout).foregroundStyle(.primary).padding(.leading, 8)
             }
             .frame(height: 44)
-            slider("粗细", $tools.markerWidth, InkTools.markerWidthRange, "\(Int(tools.markerWidth.rounded()))")
-            slider("不透明度", $tools.markerOpacity, InkTools.markerOpacityRange, percent(tools.markerOpacity))
+            slider(L("粗细"), $tools.markerWidth, InkTools.markerWidthRange, "\(Int(tools.markerWidth.rounded()))")
+            slider(L("不透明度"), $tools.markerOpacity, InkTools.markerOpacityRange, percent(tools.markerOpacity))
         }
     }
 
@@ -1196,7 +1219,7 @@ private struct InkOptionsPanel: View {
             }
             .pickerStyle(.segmented)
             if tools.eraserKind == .area {
-                slider("大小", $tools.eraserWidth, InkTools.eraserWidthRange, "\(Int(tools.eraserWidth.rounded()))")
+                slider(L("大小"), $tools.eraserWidth, InkTools.eraserWidthRange, "\(Int(tools.eraserWidth.rounded()))")
             }
         }
     }

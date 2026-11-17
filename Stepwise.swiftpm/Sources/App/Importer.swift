@@ -15,8 +15,8 @@ struct ImportedMaterial {
     var summary: String {
         var parts: [String] = []
         let chars = textPages.reduce(0) { $0 + $1.count }
-        if chars > 0 { parts.append("\(textPages.count) 页文字，约 \(chars) 字") }
-        if !images.isEmpty { parts.append("\(images.count) 张图片") }
+        if chars > 0 { parts.append(String(localized: "\(textPages.count) 页文字，约 \(chars) 字")) }
+        if !images.isEmpty { parts.append(String(localized: "\(images.count) 张图片")) }
         return parts.joined(separator: "，")
     }
 }
@@ -42,7 +42,7 @@ enum Importer {
             return try loadPDF(data: data, name: name, mode: .auto)
         }
         if type?.conforms(to: .image) == true {
-            guard let jpeg = ImageUtil.normalizedJPEG(data) else { throw LLMError(message: "无法读取这张图片") }
+            guard let jpeg = ImageUtil.normalizedJPEG(data) else { throw LLMError(message: L("无法读取这张图片")) }
             return ImportedMaterial(name: name, images: [jpeg])
         }
         if type?.conforms(to: .rtf) == true,
@@ -52,7 +52,7 @@ enum Importer {
         if let text = decodeText(data) {
             return ImportedMaterial(name: name, textPages: [text])
         }
-        throw LLMError(message: "不支持这种文件。请导入 PDF、图片或文本文件（Word 文档可以先导出为 PDF）。")
+        throw LLMError(message: L("不支持这种文件。请导入 PDF、图片或文本文件（Word 文档可以先导出为 PDF）。"))
     }
 
     enum PDFMode {
@@ -63,7 +63,7 @@ enum Importer {
 
     /// 按图片识别时把每页渲染成图片交给模型，适合扫描件或含公式、图形的 PDF。
     static func loadPDF(data: Data, name: String, mode: PDFMode) throws -> ImportedMaterial {
-        guard let doc = PDFDocument(data: data) else { throw LLMError(message: "无法打开这个 PDF") }
+        guard let doc = PDFDocument(data: data) else { throw LLMError(message: L("无法打开这个 PDF")) }
         var material = ImportedMaterial(name: name, pdfData: data)
         let pages = (0..<doc.pageCount).compactMap { doc.page(at: $0) }
         let texts = pages.map { $0.string ?? "" }
@@ -79,7 +79,7 @@ enum Importer {
 
         if useImages {
             guard pages.count <= maxPDFPagesAsImages else {
-                throw LLMError(message: "PDF 有 \(pages.count) 页，按图片识别最多支持 \(maxPDFPagesAsImages) 页，请拆分后再导入。")
+                throw LLMError(message: String(localized: "PDF 有 \(pages.count) 页，按图片识别最多支持 \(maxPDFPagesAsImages) 页，请拆分后再导入。"))
             }
             material.images = pages.compactMap(render)
         } else {

@@ -10,17 +10,17 @@ enum NoteExerciseLevel: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .off: return "不出"
-        case .needed: return "必要时出"
-        case .more: return "更多例题"
+        case .off: return L("不出")
+        case .needed: return L("必要时出")
+        case .more: return L("更多例题")
         }
     }
 
     var detail: String {
         switch self {
-        case .off: return "只整理笔记，不加练习题。之后可以在任意小节下面点“出例题”。"
-        case .needed: return "资料里没有例题的重要知识点后面，加一道练习题和手写区。"
-        case .more: return "每个重要知识点后面都加 1–2 道练习题，由浅入深，适合复习时多练。"
+        case .off: return L("只整理笔记，不加练习题。之后可以在任意小节下面点“出例题”。")
+        case .needed: return L("资料里没有例题的重要知识点后面，加一道练习题和手写区。")
+        case .more: return L("每个重要知识点后面都加 1–2 道练习题，由浅入深，适合复习时多练。")
         }
     }
 }
@@ -37,10 +37,10 @@ struct NoteInsertion: Equatable {
 
 extension Tutor {
     /// 生成笔记时默认的要求
-    static let defaultNotePrompt = "整理成预习和复习用的笔记：按小节列出核心概念、公式、方法和易错点"
+    static var defaultNotePrompt: String { L("整理成预习和复习用的笔记：按小节列出核心概念、公式、方法和易错点") }
 
     /// exercises：出不出练习题、出多少
-    static func noteSystem(prompt: String, exercises: NoteExerciseLevel, hasImages: Bool, multiPart: Bool, first: Bool) -> String {
+    static func noteSystemZH(prompt: String, exercises: NoteExerciseLevel, hasImages: Bool, multiPart: Bool, first: Bool) -> String {
         var s = """
         你是一位擅长整理学习资料的老师。学生上传了一份学习资料（课件、讲义或教材），要用来预习和复习。请按学生的要求，把资料整理成一份结构清晰、讲得明白的学习笔记。
 
@@ -133,13 +133,16 @@ extension Tutor {
         var makesExercise = false
     }
 
-    static let noteAskOptions: [NoteAskOption] = [
-        NoteAskOption(title: "解释一下", prompt: "请用更容易懂的话解释我选中的这部分，必要时补充推导或直观理解。"),
-        NoteAskOption(title: "举个例子", prompt: "请针对我选中的这部分举一个具体的例子，并讲清楚。"),
-        NoteAskOption(title: "出一道练习题", prompt: "请针对我选中的这部分出一道练习题。", makesExercise: true)
-    ]
+    static var noteAskOptions: [NoteAskOption] { [
+        NoteAskOption(title: L("解释一下"), prompt: pick("请用更容易懂的话解释我选中的这部分，必要时补充推导或直观理解。",
+                                                      "Please explain the part I selected in simpler terms, adding a derivation or an intuitive explanation if it helps.")),
+        NoteAskOption(title: L("举个例子"), prompt: pick("请针对我选中的这部分举一个具体的例子，并讲清楚。",
+                                                      "Please give a concrete example of the part I selected and explain it clearly.")),
+        NoteAskOption(title: L("出一道练习题"), prompt: pick("请针对我选中的这部分出一道练习题。",
+                                                        "Please write a practice question on the part I selected."), makesExercise: true)
+    ] }
 
-    static func noteAskSystem(doc: NoteDoc) -> String {
+    static func noteAskSystemZH(doc: NoteDoc) -> String {
         let body = doc.blocks.filter { $0.kind == .text }.map(\.text).joined(separator: "\n\n")
         return """
         你是一位耐心的学习辅导老师。学生正在用下面这份笔记预习或复习，会选中笔记里的一段向你提问。回答要紧扣选中的内容，简洁清楚，必要时写出推导。
@@ -152,7 +155,7 @@ extension Tutor {
     }
 
     /// 用笔圈出来问：圈住的地方截了图，问题写在后面
-    static func noteCircleInstruction(block: String, question: String, hasImage: Bool) -> String {
+    static func noteCircleInstructionZH(block: String, question: String, hasImage: Bool) -> String {
         """
         \(hasImage ? "【我圈出的部分】见图片（笔记里圈住的一小段，可能带着我的笔迹）。\n\n" : "")【这段所在的笔记原文】
         \(clip(block, 3000))
@@ -164,7 +167,7 @@ extension Tutor {
     }
 
     /// 问答之后记到笔记里：不照抄回答，结合原文在提问的地方补一段解释
-    static func noteIntegrateSystem(doc: NoteDoc) -> String {
+    static func noteIntegrateSystemZH(doc: NoteDoc) -> String {
         let body = doc.blocks.filter { $0.kind == .text }.map(\.text).joined(separator: "\n\n")
         return """
         你在帮学生完善自己的学习笔记。学生刚才就笔记里的一处提了问题、得到了回答，现在要把这次问答的收获补进笔记，就补在提问的地方。下面是整份笔记，补的内容要和它融为一体。
@@ -177,7 +180,7 @@ extension Tutor {
     }
 
     /// section：提问的那一块笔记原文，带上行号发过去，让 AI 说出插在哪一行后面
-    static func noteIntegrateInstruction(section: String, quote: String?, question: String, answer: String) -> String {
+    static func noteIntegrateInstructionZH(section: String, quote: String?, question: String, answer: String) -> String {
         var s = "【提问的那一节（笔记原文，每行开头方括号里是行号，只用来定位，不是笔记内容）】\n\(numberedLines(section))\n\n"
         if let quote, !quote.isEmpty {
             s += "【学生选中提问的内容】\(clip(quote, 600))\n\n"
@@ -308,7 +311,7 @@ extension Tutor {
 
     /// selection：从排版后的页面选中的文字（公式可能显示不全），block：选中的文字所在的笔记块原文
     /// exerciseCount：出几道练习题；0 表示不是出题，是回答问题
-    static func noteAskInstruction(selection: String, block: String, question: String, exerciseCount: Int = 0) -> String {
+    static func noteAskInstructionZH(selection: String, block: String, question: String, exerciseCount: Int = 0) -> String {
         var s = """
         【我选中的内容】（从排版后的页面复制，公式可能不完整）
         \(clip(selection, 1500))

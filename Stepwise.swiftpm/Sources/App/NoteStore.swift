@@ -56,7 +56,7 @@ extension AppStore {
     /// 新建一篇空笔记（连同存放练习题的题集）
     @discardableResult
     func createNote(title: String, sourceName: String = "", prompt: String = "") -> UUID {
-        let exerciseSet = QuestionSet(title: "笔记练习：\(title)", questions: [])
+        let exerciseSet = QuestionSet(title: String(localized: "笔记练习：\(title)"), questions: [])
         var doc = NoteDoc(title: title, sourceName: sourceName, prompt: prompt, exerciseSetID: exerciseSet.id)
         doc.blocks = []
         doc.paperWidth = NoteDoc.currentPaperWidth
@@ -170,7 +170,7 @@ extension AppStore {
         let label = set.questions[i].label
         var result = [set.questions[i]]
         var j = i + 1
-        while j < set.questions.count && set.questions[j].label.hasPrefix(label + "-新") {
+        while j < set.questions.count && GeneratedLabel.isGenerated(set.questions[j].label, from: label) {
             result.append(set.questions[j])
             j += 1
         }
@@ -203,26 +203,27 @@ extension AppStore {
                              folderID: UUID? = nil) throws {
         let client = try makeClient(for: .note)
         let chunks = Importer.chunks(for: material)
-        guard !chunks.isEmpty else { throw LLMError(message: "没有可以整理的内容。") }
+        guard !chunks.isEmpty else { throw LLMError(message: L("没有可以整理的内容。")) }
         let givenTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let docID = createNote(title: givenTitle.isEmpty ? material.name : givenTitle,
                                sourceName: material.name, prompt: prompt)
         mutateNote(docID) { $0.folderID = folderID }
-        noteJobs[docID] = NoteJob(label: "正在生成笔记…")
+        noteJobs[docID] = NoteJob(label: L("正在生成笔记…"))
 
         noteTasks[docID] = Task { [weak self] in
             var failedParts: [Int] = []
             var firstError: Error?
             for (index, chunk) in chunks.enumerated() {
                 guard let self, !Task.isCancelled else { break }
-                self.noteJobs[docID]?.label = chunks.count > 1 ? "正在生成 第 \(index + 1)/\(chunks.count) 部分…" : "正在生成笔记…"
+                self.noteJobs[docID]?.label = chunks.count > 1 ? String(localized: "正在生成 第 \(index + 1)/\(chunks.count) 部分…") : L("正在生成笔记…")
                 self.noteJobs[docID]?.partial = ""
 
                 var parts: [LLMContent] = chunk.images.map(LLMContent.image)
                 var text = chunks.count > 1
-                    ? "以下是学习资料的第 \(index + 1)/\(chunks.count) 部分。"
-                    : "以下是学习资料的内容。"
-                text += chunk.text.isEmpty ? "内容见上面的图片。" : "\n\n" + chunk.text
+                    ? Tutor.pick("以下是学习资料的第 \(index + 1)/\(chunks.count) 部分。",
+                                 "Below is part \(index + 1) of \(chunks.count) of the study material.")
+                    : Tutor.pick("以下是学习资料的内容。", "Below is the content of the study material.")
+                text += chunk.text.isEmpty ? Tutor.pick("内容见上面的图片。", "The content is in the images above.") : "\n\n" + chunk.text
                 parts.append(.text(text))
                 let system = Tutor.noteSystem(prompt: prompt, exercises: exercises, hasImages: !chunk.images.isEmpty,
                                               multiPart: chunks.count > 1, first: index == 0)
@@ -278,7 +279,7 @@ extension AppStore {
                 self.deleteNote(docID)
                 self.errorMessage = firstError.localizedDescription
             } else if !failedParts.isEmpty {
-                self.errorMessage = "共 \(chunks.count) 部分，其中第 \(failedParts.map(String.init).joined(separator: "、")) 部分没有生成成功，笔记可能不完整。"
+                self.errorMessage = String(localized: "共 \(chunks.count) 部分，其中第 \(failedParts.map(String.init).joined(separator: L("、"))) 部分没有生成成功，笔记可能不完整。")
             }
         }
     }
@@ -316,7 +317,7 @@ extension AppStore {
         guard answer.kind == .answer, !answer.text.isEmpty else { return }
         // 回答前面最近的一块正文就是提问的那一节
         guard let section = doc.blocks[..<index].last(where: { $0.kind == .text }) else {
-            errorMessage = "前面没有可以补充的笔记。"
+            errorMessage = L("前面没有可以补充的笔记。")
             return
         }
         integrateIntoNote(docID, blockID: section.id, quote: answer.quote,
@@ -332,7 +333,7 @@ extension AppStore {
                                    question: String, answer: String, done: @escaping (Bool) -> Void) -> Bool {
         guard let doc = note(docID), let block = doc.blocks.first(where: { $0.id == blockID }) else { return false }
         guard noteTasks[docID] == nil else {
-            errorMessage = "上一个任务还没完成，稍等一下再记到笔记里。"
+            errorMessage = L("上一个任务还没完成，稍等一下再记到笔记里。")
             return false
         }
         let client: LLMClient
@@ -343,7 +344,7 @@ extension AppStore {
         let system = Tutor.noteIntegrateSystem(doc: doc)
         let messages = [LLMMessage(role: .user, parts: [.text(Tutor.noteIntegrateInstruction(
             section: block.text, quote: quote, question: question, answer: answer))])]
-        noteJobs[docID] = NoteJob(label: "正在补进笔记…", afterBlock: blockID)
+        noteJobs[docID] = NoteJob(label: L("正在补进笔记…"), afterBlock: blockID)
         noteTasks[docID] = Task { [weak self] in
             var full = ""
             var lastFlush = Date.distantPast
@@ -363,7 +364,7 @@ extension AppStore {
                     self.noteJobs[docID]?.partial = parsed.insert
                     ok = await self.insertIntoBlock(docID, blockID, parsed.insert, afterLine: parsed.line, quote: quote)
                 }
-                if !ok && !Task.isCancelled { self?.errorMessage = "没能补进笔记，请再试一次。" }
+                if !ok && !Task.isCancelled { self?.errorMessage = L("没能补进笔记，请再试一次。") }
             } catch {
                 if !(error is CancellationError) { self?.errorMessage = error.localizedDescription }
             }
@@ -429,7 +430,7 @@ extension AppStore {
         let parts: [LLMContent] = (image.map { [LLMContent.image($0)] } ?? [])
             + [.text(Tutor.noteCircleInstruction(block: block.text, question: question, hasImage: image != nil))]
         let system = Tutor.noteAskSystem(doc: doc)
-        noteJobs[docID] = NoteJob(label: "正在回答…", commentID: comment.id)
+        noteJobs[docID] = NoteJob(label: L("正在回答…"), commentID: comment.id)
         noteTasks[docID] = Task { [weak self] in
             var full = ""
             var lastFlush = Date.distantPast
@@ -475,7 +476,7 @@ extension AppStore {
             selection: selection, block: source, question: prompt, exerciseCount: exerciseCount))])]
 
         if makesExercise {
-            noteJobs[docID] = NoteJob(label: exerciseCount > 1 ? "正在出 \(exerciseCount) 道题…" : "正在出题…", afterBlock: blockID)
+            noteJobs[docID] = NoteJob(label: exerciseCount > 1 ? String(localized: "正在出 \(exerciseCount) 道题…") : L("正在出题…"), afterBlock: blockID)
             noteTasks[docID] = Task { [weak self] in
                 do {
                     let output = try await client.complete(system: system, messages: messages)
@@ -489,7 +490,7 @@ extension AppStore {
                             if let id = self.addExercise(to: docID, after: after, content: item.text, answer: item.answer) { after = id }
                         }
                     } else {
-                        self.errorMessage = "AI 没有按格式出题，请再试一次。"
+                        self.errorMessage = L("AI 没有按格式出题，请再试一次。")
                     }
                 } catch {
                     if !(error is CancellationError) { self?.errorMessage = error.localizedDescription }
@@ -502,7 +503,7 @@ extension AppStore {
 
         let answer = NoteBlock(kind: .answer, quote: selection, question: title)
         insertBlock(answer, in: docID, after: blockID)
-        noteJobs[docID] = NoteJob(label: "正在回答…", afterBlock: answer.id)
+        noteJobs[docID] = NoteJob(label: L("正在回答…"), afterBlock: answer.id)
         noteTasks[docID] = Task { [weak self] in
             var full = ""
             var lastFlush = Date.distantPast

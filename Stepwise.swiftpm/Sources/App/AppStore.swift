@@ -288,7 +288,7 @@ final class AppStore: ObservableObject {
         defer { loading = false }
         writesBlocked = !snapshot.unreadable.isEmpty
         if writesBlocked {
-            errorMessage = "读不到储存位置里的 \(snapshot.unreadable.joined(separator: "、"))（可能还没从 iCloud 下载完）。为了不覆盖原来的数据，现在的改动不会保存。请确认网络和 iCloud 正常后重新打开 App。"
+            errorMessage = String(localized: "读不到储存位置里的 \(snapshot.unreadable.joined(separator: L("、")))（可能还没从 iCloud 下载完）。为了不覆盖原来的数据，现在的改动不会保存。请确认网络和 iCloud 正常后重新打开 App。")
         }
         sets = snapshot.sets
         notes = snapshot.notes
@@ -376,7 +376,7 @@ final class AppStore: ObservableObject {
     /// 两种方式都只复制或改读，不删除、不覆盖原来位置的数据，改回去就能看到。
     func changeDataLocation(to folder: URL?, mode: LocationChange) async throws {
         guard !hasBackgroundWork else {
-            throw LocationError(message: "AI 正在回复或生成笔记，等它完成后再换储存位置。")
+            throw LocationError(message: L("AI 正在回复或生成笔记，等它完成后再换储存位置。"))
         }
         let source = DataLocation.root
         let target = folder ?? DataLocation.defaultRoot
@@ -385,7 +385,7 @@ final class AppStore: ObservableObject {
         saveNow()
         if mode == .copyCurrent {
             guard !writesBlocked else {
-                throw LocationError(message: "当前位置的数据没有完整读出来，不能复制。请先确认原来的数据能正常打开。")
+                throw LocationError(message: L("当前位置的数据没有完整读出来，不能复制。请先确认原来的数据能正常打开。"))
             }
             try await Task.detached(priority: .userInitiated) {
                 try DataLocation.copyData(from: source, to: target)
@@ -436,6 +436,8 @@ final class AppStore: ObservableObject {
         var merged: [ProviderConfig] = ProviderCatalog.presets.map { preset in
             guard var old = saved.first(where: { $0.id == preset.id }) else { return preset }
             old.presetModels = preset.presetModels
+            // 名称和说明跟着预设（界面语言换了，名称跟着换）
+            old.name = preset.name
             old.note = preset.note
             return old
         }
@@ -621,7 +623,7 @@ final class AppStore: ObservableObject {
         if purpose == .note, let note = noteProvider {
             return LLMClient(config: note, apiKey: note.apiKey)
         }
-        guard let config = activeProvider else { throw LLMError(message: "请先在设置里选择一个模型服务商。") }
+        guard let config = activeProvider else { throw LLMError(message: L("请先在设置里选择一个模型服务商。")) }
         return LLMClient(config: config, apiKey: config.apiKey)
     }
 
@@ -802,7 +804,7 @@ final class AppStore: ObservableObject {
     func check(_ setID: UUID, _ qID: UUID, answer: String, handwriting: Data?) {
         let answer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !answer.isEmpty || handwriting != nil else { return }
-        var prompt = "【我的作答】\n" + (answer.isEmpty ? "（见手写图片）" : answer)
+        var prompt = Tutor.pick("【我的作答】\n", "[My answer]\n") + (answer.isEmpty ? Tutor.pick("（见手写图片）", "(see the handwriting image)") : answer)
         // 手写图片左边印着行号，AI 可以指出错在哪一行
         prompt += "\n\n" + Tutor.checkInstruction(lineNumbers: handwriting != nil)
         let imageIDs = handwriting.map { [ImageStore.save($0)] } ?? []
@@ -850,7 +852,7 @@ final class AppStore: ObservableObject {
         findRelatedNote(setID, qID, wrong: false)
         let level = q.hintCount + 1
         let note = note?.trimmingCharacters(in: .whitespacesAndNewlines)
-        var message = ChatMessage(role: .user, kind: .hintRequest, text: "需要进一步提示（第 \(level) 次）",
+        var message = ChatMessage(role: .user, kind: .hintRequest, text: String(localized: "需要进一步提示（第 \(level) 次）"),
                                   prompt: Tutor.hintInstruction(level: level, note: note))
         message.note = note?.isEmpty == false ? note : nil
         run(setID, qID, userMessage: message, replyKind: .hint, purpose: .hint) { [weak self] full in
@@ -871,7 +873,7 @@ final class AppStore: ObservableObject {
         findRelatedNote(setID, qID, wrong: false)
         let answer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         let imageIDs = handwriting.map { [ImageStore.save($0)] } ?? []
-        let message = ChatMessage(role: .user, kind: .hintRequest, text: "卡了",
+        let message = ChatMessage(role: .user, kind: .hintRequest, text: L("卡了"),
                                   prompt: Tutor.stuckInstruction(hasImage: !imageIDs.isEmpty, typed: answer),
                                   imageIDs: imageIDs)
         run(setID, qID, userMessage: message, replyKind: .hint, purpose: .hint) { [weak self] full in
@@ -882,11 +884,11 @@ final class AppStore: ObservableObject {
                 _ = self?.countReviewRound(&q)
             }
         }
-        pending[qID]?.label = "正在看你卡在哪…"
+        pending[qID]?.label = L("正在看你卡在哪…")
     }
 
     func requestSolution(_ setID: UUID, _ qID: UUID) {
-        let message = ChatMessage(role: .user, kind: .solutionRequest, text: "给出完整答案", prompt: Tutor.solutionInstruction)
+        let message = ChatMessage(role: .user, kind: .solutionRequest, text: L("给出完整答案"), prompt: Tutor.solutionInstruction)
         run(setID, qID, userMessage: message, replyKind: .solution, purpose: .solution) { [weak self] full in
             self?.mutate(setID, qID) { q in
                 q.messages.append(ChatMessage(role: .assistant, kind: .solution, text: full))
@@ -911,7 +913,7 @@ final class AppStore: ObservableObject {
             let (display, newOnes) = Tutor.extractNewQuestions(full)
             let created = self.insertGenerated(newOnes, after: qID, in: setID)
             self.mutate(setID, qID) { q in
-                q.messages.append(ChatMessage(role: .assistant, kind: .chat, text: display.isEmpty && !created.isEmpty ? "出了一道新题：" : display,
+                q.messages.append(ChatMessage(role: .assistant, kind: .chat, text: display.isEmpty && !created.isEmpty ? L("出了一道新题：") : display,
                                               prompt: full, generatedQuestionIDs: created))
             }
         }
@@ -941,15 +943,15 @@ final class AppStore: ObservableObject {
               let qi = sets[si].questions.firstIndex(where: { $0.id == qID }) else { return [] }
         let baseLabel = sets[si].questions[qi].label
         let origin = Tutor.originNote(for: sets[si].questions[qi])
-        let existing = sets[si].questions.filter { $0.label.hasPrefix(baseLabel + "-新") }.count
+        let existing = sets[si].questions.filter { GeneratedLabel.isGenerated($0.label, from: baseLabel) }.count
         var insertAt = qi + 1
         // 跳过之前已插入的变式题，保持顺序
-        while insertAt < sets[si].questions.count && sets[si].questions[insertAt].label.hasPrefix(baseLabel + "-新") {
+        while insertAt < sets[si].questions.count && GeneratedLabel.isGenerated(sets[si].questions[insertAt].label, from: baseLabel) {
             insertAt += 1
         }
         var ids: [UUID] = []
         for (k, item) in items.enumerated() {
-            var q = Question(label: "\(baseLabel)-新\(existing + k + 1)", content: item.content,
+            var q = Question(label: baseLabel + GeneratedLabel.suffix + "\(existing + k + 1)", content: item.content,
                              referenceAnswer: item.answer, isGenerated: true)
             q.originNote = origin
             sets[si].questions.insert(q, at: insertAt + k)
@@ -993,7 +995,7 @@ final class AppStore: ObservableObject {
                 try Task.checkCancellation()
                 self?.pending[qID] = nil
                 if full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    throw LLMError(message: "模型没有返回内容，请重试。")
+                    throw LLMError(message: L("模型没有返回内容，请重试。"))
                 }
                 finish(full)
                 // 记下用时和模型，显示在回复旁边
@@ -1020,8 +1022,7 @@ final class AppStore: ObservableObject {
 
     /// 旧版本出的新题没有保存原题记忆：按题号（“3-新1”的原题是“3”）找到原题现场生成
     private func legacyOrigin(of q: Question, in setID: UUID) -> String? {
-        guard q.isGenerated, let range = q.label.range(of: "-新", options: .backwards) else { return nil }
-        let base = String(q.label[..<range.lowerBound])
+        guard q.isGenerated, let base = GeneratedLabel.base(of: q.label) else { return nil }
         guard let source = set(setID)?.questions.first(where: { $0.label == base }) else { return nil }
         return Tutor.originNote(for: source)
     }
@@ -1040,7 +1041,7 @@ final class AppStore: ObservableObject {
         var result: [LLMMessage] = []
         let questionImages = q.imageIDs.compactMap(ImageStore.load).map(LLMContent.image)
         if !questionImages.isEmpty {
-            result.append(LLMMessage(role: .user, parts: questionImages + [.text("（以上是题目原图，题目中的图形、表格以图片为准）")]))
+            result.append(LLMMessage(role: .user, parts: questionImages + [.text(Tutor.pick("（以上是题目原图，题目中的图形、表格以图片为准）", "(Above are the original images of the question; for figures and tables, go by the images.)"))]))
         }
 
         switch purpose {
@@ -1055,14 +1056,15 @@ final class AppStore: ObservableObject {
                 parts = images(current)
             } else if purpose == .hint, let last = earlier.last(where: { $0.kind == .submission }) {
                 parts = images(last)
-                blocks.append("【我最近一次的作答】\n" + (last.text.isEmpty ? "（见手写图片）" : Tutor.clip(last.text, 1500)))
+                blocks.append(Tutor.pick("【我最近一次的作答】\n", "[My latest answer]\n")
+                              + (last.text.isEmpty ? Tutor.pick("（见手写图片）", "(see the handwriting image)") : Tutor.clip(last.text, 1500)))
             }
             blocks.append(current.prompt ?? current.text)
             result.append(LLMMessage(role: .user, parts: parts + [.text(blocks.compactMap { $0 }.joined(separator: "\n\n"))]))
         case .chat, .newQuestion:
             var background = [summary]
             if let solution = earlier.last(where: { $0.kind == .solution }) {
-                background.append("【完整答案和解题过程】\n" + Tutor.clip(solution.text, 3000))
+                background.append(Tutor.pick("【完整答案和解题过程】\n", "[Full answer and worked solution]\n") + Tutor.clip(solution.text, 3000))
             }
             // 只带最近几轮对话，从学生的一句话开始
             var recent = Array(earlier.filter { $0.kind == .chat }.suffix(6)) + [current]
@@ -1071,7 +1073,8 @@ final class AppStore: ObservableObject {
                 var text = m.prompt ?? m.text
                 let notes = background.compactMap { $0 }
                 if i == 0 && !notes.isEmpty {
-                    text = "【这道题之前的批改和讲解】（背景信息）\n" + notes.joined(separator: "\n\n") + "\n\n" + text
+                    text = Tutor.pick("【这道题之前的批改和讲解】（背景信息）\n", "[Earlier checking and explanations for this question] (background)\n")
+                        + notes.joined(separator: "\n\n") + "\n\n" + text
                 }
                 // 这次提问带的图片（圈出一步来问时的手写）
                 let attached = m.id == current.id ? images(m) : []
@@ -1098,7 +1101,7 @@ final class AppStore: ObservableObject {
                progress: @escaping (Int, Int) -> Void) async throws -> QuestionSet {
         let client = try makeClient(for: .split)
         let chunks = Importer.chunks(for: material)
-        guard !chunks.isEmpty else { throw LLMError(message: "没有可以拆分的内容。") }
+        guard !chunks.isEmpty else { throw LLMError(message: L("没有可以拆分的内容。")) }
 
         var questions: [Question] = []
         var keys: [String] = []          // 与 questions 一一对应的题号，用于合并重叠页产生的重复题
@@ -1111,9 +1114,10 @@ final class AppStore: ObservableObject {
             progress(index + 1, chunks.count)
             var parts: [LLMContent] = chunk.images.map(LLMContent.image)
             var text = chunks.count > 1
-                ? "以下是题目文件的第 \(index + 1)/\(chunks.count) 部分（与前后部分各有一页重叠）。"
-                : "以下是题目文件的内容。"
-            text += chunk.text.isEmpty ? "内容见上面的图片。" : "\n\n" + chunk.text
+                ? Tutor.pick("以下是题目文件的第 \(index + 1)/\(chunks.count) 部分（与前后部分各有一页重叠）。",
+                             "Below is part \(index + 1) of \(chunks.count) of the question file (it overlaps the neighboring parts by one page).")
+                : Tutor.pick("以下是题目文件的内容。", "Below is the content of the question file.")
+            text += chunk.text.isEmpty ? Tutor.pick("内容见上面的图片。", "The content is in the images above.") : "\n\n" + chunk.text
             parts.append(.text(text))
 
             var parsed: (title: String?, items: [Tutor.SplitItem])
@@ -1178,10 +1182,10 @@ final class AppStore: ObservableObject {
             }
         }
         guard !questions.isEmpty else {
-            throw firstError ?? LLMError(message: "没有识别出题目。可以调整拆分要求，或换一个能力更强的模型再试。")
+            throw firstError ?? LLMError(message: L("没有识别出题目。可以调整拆分要求，或换一个能力更强的模型再试。"))
         }
         if !failedParts.isEmpty {
-            errorMessage = "共 \(chunks.count) 部分，其中第 \(failedParts.map(String.init).joined(separator: "、")) 部分没有识别成功，可能漏了题目。可以检查一下题目列表，必要时重新导入。"
+            errorMessage = String(localized: "共 \(chunks.count) 部分，其中第 \(failedParts.map(String.init).joined(separator: L("、"))) 部分没有识别成功，可能漏了题目。可以检查一下题目列表，必要时重新导入。")
         }
 
         let finalTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1192,7 +1196,7 @@ final class AppStore: ObservableObject {
 
 /// 需要先同意数据发送说明（会弹出说明页，不显示错误提示）
 struct ConsentRequired: LocalizedError {
-    var errorDescription: String? { "需要先同意数据发送说明才能使用 AI 功能。" }
+    var errorDescription: String? { L("需要先同意数据发送说明才能使用 AI 功能。") }
 }
 
 // MARK: - 文件夹
@@ -1257,7 +1261,7 @@ extension AppStore {
     @discardableResult
     func addFolder(name: String, parent: UUID?) -> UUID {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let new = Folder(name: trimmed.isEmpty ? "新文件夹" : trimmed, parentID: parent)
+        let new = Folder(name: trimmed.isEmpty ? L("新文件夹") : trimmed, parentID: parent)
         folders.append(new)
         // 在文件夹里新建时，把上一级展开
         if let parent, let i = folders.firstIndex(where: { $0.id == parent }) { folders[i].collapsed = false }

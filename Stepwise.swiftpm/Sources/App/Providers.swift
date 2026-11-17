@@ -8,7 +8,7 @@ enum APIProtocol: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .openAI: return "OpenAI 兼容"
+        case .openAI: return L("OpenAI 兼容")
         case .anthropic: return "Anthropic"
         case .gemini: return "Google Gemini"
         }
@@ -57,82 +57,93 @@ enum ProviderCatalog {
             id: "openai", name: "OpenAI", apiProtocol: .openAI,
             baseURL: "https://api.openai.com/v1", model: "gpt-5",
             presetModels: ["gpt-5", "gpt-5-mini", "o3", "gpt-4.1"],
-            note: "platform.openai.com 获取 Key"),
+            note: L("platform.openai.com 获取 Key")),
         ProviderConfig(
             id: "anthropic", name: "Anthropic Claude", apiProtocol: .anthropic,
             baseURL: "https://api.anthropic.com", model: "claude-opus-5-5",
             presetModels: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"],
-            note: "platform.claude.com 获取 Key"),
+            note: L("platform.claude.com 获取 Key")),
         ProviderConfig(
             id: "gemini", name: "Google Gemini", apiProtocol: .gemini,
             baseURL: "https://generativelanguage.googleapis.com/v1beta", model: "gemini-2.5-pro",
             presetModels: ["gemini-2.5-pro", "gemini-2.5-flash"],
-            note: "aistudio.google.com 获取 Key"),
+            note: L("aistudio.google.com 获取 Key")),
         ProviderConfig(
             id: "deepseek", name: "DeepSeek", apiProtocol: .openAI,
             baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat",
             presetModels: ["deepseek-chat", "deepseek-reasoner"],
-            note: "不支持图片：手写作答和图片题请换用其他模型"),
+            note: L("不支持图片：手写作答和图片题请换用其他模型")),
         ProviderConfig(
-            id: "qwen", name: "通义千问", apiProtocol: .openAI,
+            id: "qwen", name: L("通义千问"), apiProtocol: .openAI,
             baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-max",
             presetModels: ["qwen-max", "qwen-plus", "qwen-vl-max"],
-            note: "阿里云百炼获取 Key；带 vl 的模型支持图片"),
+            note: L("阿里云百炼获取 Key；带 vl 的模型支持图片")),
         ProviderConfig(
-            id: "moonshot", name: "Kimi (月之暗面)", apiProtocol: .openAI,
+            id: "moonshot", name: L("Kimi (月之暗面)"), apiProtocol: .openAI,
             baseURL: "https://api.moonshot.cn/v1", model: "kimi-latest",
             presetModels: ["kimi-latest", "moonshot-v1-128k-vision-preview"],
-            note: "platform.moonshot.cn 获取 Key"),
+            note: L("platform.moonshot.cn 获取 Key")),
         ProviderConfig(
-            id: "zhipu", name: "智谱 GLM", apiProtocol: .openAI,
+            id: "zhipu", name: L("智谱 GLM"), apiProtocol: .openAI,
             baseURL: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4.6",
             presetModels: ["glm-4.6", "glm-4.5v"],
-            note: "open.bigmodel.cn 获取 Key；带 v 的模型支持图片"),
+            note: L("open.bigmodel.cn 获取 Key；带 v 的模型支持图片")),
         ProviderConfig(
-            id: "doubao", name: "豆包 (火山方舟)", apiProtocol: .openAI,
+            id: "doubao", name: L("豆包 (火山方舟)"), apiProtocol: .openAI,
             baseURL: "https://ark.cn-beijing.volces.com/api/v3", model: "",
             presetModels: [],
-            note: "模型处填写方舟控制台里的模型 ID 或接入点 ID"),
+            note: L("模型处填写方舟控制台里的模型 ID 或接入点 ID")),
         ProviderConfig(
             id: "xai", name: "xAI Grok", apiProtocol: .openAI,
             baseURL: "https://api.x.ai/v1", model: "grok-4",
             presetModels: ["grok-4"],
-            note: "console.x.ai 获取 Key"),
+            note: L("console.x.ai 获取 Key")),
         ProviderConfig(
-            id: "openrouter", name: "OpenRouter (聚合)", apiProtocol: .openAI,
+            id: "openrouter", name: L("OpenRouter (聚合)"), apiProtocol: .openAI,
             baseURL: "https://openrouter.ai/api/v1", model: "",
             presetModels: [],
-            note: "一个 Key 用几乎所有模型，点“获取模型列表”选择"),
+            note: L("一个 Key 用几乎所有模型，点“获取模型列表”选择")),
         ProviderConfig(
-            id: "siliconflow", name: "硅基流动 (聚合)", apiProtocol: .openAI,
+            id: "siliconflow", name: L("硅基流动 (聚合)"), apiProtocol: .openAI,
             baseURL: "https://api.siliconflow.cn/v1", model: "",
             presetModels: [],
-            note: "国内聚合平台，点“获取模型列表”选择"),
+            note: L("国内聚合平台，点“获取模型列表”选择")),
         ProviderConfig(
-            id: "aihubmix", name: "AIHubMix (聚合)", apiProtocol: .openAI,
+            id: "aihubmix", name: L("AIHubMix (聚合)"), apiProtocol: .openAI,
             baseURL: "https://aihubmix.com/v1", model: "",
             presetModels: [],
-            note: "一个 Key 调用 GPT、Claude、Gemini、DeepSeek 等，点“获取模型列表”选择"),
+            note: L("一个 Key 调用 GPT、Claude、Gemini、DeepSeek 等，点“获取模型列表”选择")),
         ProviderConfig(
-            id: "302ai", name: "302.AI (聚合)", apiProtocol: .openAI,
+            id: "302ai", name: L("302.AI (聚合)"), apiProtocol: .openAI,
             baseURL: "https://api.302.ai/v1", model: "",
             presetModels: [],
-            note: "聚合平台，点“获取模型列表”选择"),
+            note: L("聚合平台，点“获取模型列表”选择")),
         ProviderConfig(
-            id: "dmxapi", name: "DMXAPI (聚合)", apiProtocol: .openAI,
+            id: "dmxapi", name: L("DMXAPI (聚合)"), apiProtocol: .openAI,
             baseURL: "https://www.dmxapi.cn/v1", model: "",
             presetModels: [],
-            note: "聚合平台，点“获取模型列表”选择；接口地址以平台后台为准")
+            note: L("聚合平台，点“获取模型列表”选择；接口地址以平台后台为准"))
     ]
+
+    /// 英文界面里国际服务商排前面，国内服务商放后面；自定义的放最后。中文界面保持原来的顺序
+    static func displayOrder(_ list: [ProviderConfig]) -> [ProviderConfig] {
+        guard UILanguage.isEnglish else { return list }
+        let order = ["openai", "anthropic", "gemini", "openrouter", "xai", "deepseek", "aihubmix", "302ai",
+                     "qwen", "moonshot", "zhipu", "doubao", "siliconflow", "dmxapi"]
+        func rank(_ p: ProviderConfig) -> Int { order.firstIndex(of: p.id) ?? order.count }
+        return list.enumerated().sorted { a, b in
+            rank(a.element) != rank(b.element) ? rank(a.element) < rank(b.element) : a.offset < b.offset
+        }.map(\.element)
+    }
 
     /// 一个 Key 调用多家模型的平台
     static let aggregatorIDs: Set<String> = ["openrouter", "siliconflow", "aihubmix", "302ai", "dmxapi"]
 
     static func newCustom() -> ProviderConfig {
         ProviderConfig(
-            id: "custom-" + UUID().uuidString, name: "自定义服务商", apiProtocol: .openAI,
+            id: "custom-" + UUID().uuidString, name: L("自定义服务商"), apiProtocol: .openAI,
             baseURL: "https://", model: "", presetModels: [],
-            note: "任何兼容 OpenAI 接口的服务：其他聚合平台、OneAPI / NewAPI 中转、本地部署等", isCustom: true)
+            note: L("任何兼容 OpenAI 接口的服务：其他聚合平台、OneAPI / NewAPI 中转、本地部署等"), isCustom: true)
     }
 }
 
@@ -151,6 +162,9 @@ enum ModelInfo {
         case meta = "Llama"
         case mistral = "Mistral"
         case other = "其他"
+
+        /// 显示用的名称（按界面语言）
+        var title: String { L(rawValue) }
     }
 
     /// 去掉 “openai/”“anthropic/” 这类厂商前缀后的小写名称

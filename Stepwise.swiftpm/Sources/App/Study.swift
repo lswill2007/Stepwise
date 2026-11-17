@@ -84,8 +84,8 @@ final class StudyTracker: ObservableObject {
     /// “3 小时 25 分钟”
     static func duration(_ seconds: Double) -> String {
         let minutes = Int(seconds / 60)
-        if minutes < 60 { return "\(minutes) 分钟" }
-        return "\(minutes / 60) 小时 \(minutes % 60) 分钟"
+        if minutes < 60 { return String(localized: "\(minutes) 分钟") }
+        return String(localized: "\(minutes / 60) 小时 \(minutes % 60) 分钟")
     }
 }
 
@@ -244,7 +244,10 @@ extension AppStore {
         for i in 0..<7 {
             guard let day = cal.date(byAdding: .day, value: i, to: start) else { continue }
             let st = dayStats(day)
-            lines.append("\(StudyTracker.key(day))：学习 \(StudyTracker.duration(tracker.seconds(on: day)))，做了 \(st.questions) 道题，作答 \(st.submissions) 次，做对 \(st.correct) 次，提示 \(st.hints) 次")
+            let time = StudyTracker.duration(tracker.seconds(on: day))
+            lines.append(Tutor.pick(
+                "\(StudyTracker.key(day))：学习 \(time)，做了 \(st.questions) 道题，作答 \(st.submissions) 次，做对 \(st.correct) 次，提示 \(st.hints) 次",
+                "\(StudyTracker.key(day)): studied \(time), \(st.questions) questions, \(st.submissions) attempts, \(st.correct) correct, \(st.hints) hints"))
         }
         let end = cal.date(byAdding: .day, value: 7, to: start) ?? start
         var hard: [String] = []
@@ -254,23 +257,33 @@ extension AppStore {
                 let wrong = week.filter { $0.kind == .verdictWrong }.count
                 let hints = week.filter { $0.kind == .hint }.count
                 guard wrong + hints > 0 else { continue }
-                hard.append("- 「\(set.noteID.flatMap { note($0)?.title } ?? set.title)」第 \(q.label) 题（错 \(wrong) 次，提示 \(hints) 次）：\(Tutor.clip(Tutor.plainPreview(q.content), 80))")
+                let title = set.noteID.flatMap { note($0)?.title } ?? set.title
+                let preview = Tutor.clip(Tutor.plainPreview(q.content), 80)
+                hard.append(Tutor.pick("- 「\(title)」第 \(q.label) 题（错 \(wrong) 次，提示 \(hints) 次）：\(preview)",
+                                       "- \"\(title)\" question \(q.label) (\(wrong) wrong, \(hints) hints): \(preview)"))
             }
         }
-        var s = "【每天】\n" + lines.joined(separator: "\n")
-        s += "\n\n【这周卡住过的题】\n" + (hard.isEmpty ? "没有" : hard.prefix(12).joined(separator: "\n"))
-        s += "\n\n【错题本】现在有 \(starredEntries.count) 道"
+        var s = Tutor.pick("【每天】\n", "[Each day]\n") + lines.joined(separator: "\n")
+        s += Tutor.pick("\n\n【这周卡住过的题】\n", "\n\n[Questions they got stuck on this week]\n")
+            + (hard.isEmpty ? Tutor.pick("没有", "None") : hard.prefix(12).joined(separator: "\n"))
+        s += Tutor.pick("\n\n【错题本】现在有 \(starredEntries.count) 道", "\n\n[Review list] \(starredEntries.count) questions now")
         if !notes.isEmpty {
-            s += "\n\n【笔记】" + notes.prefix(8).map(\.title).joined(separator: "、")
+            s += Tutor.pick("\n\n【笔记】", "\n\n[Notes] ") + notes.prefix(8).map(\.title).joined(separator: Tutor.pick("、", ", "))
         }
         return s
     }
 
-    static let weeklySystem = """
-    你是一位温和、具体的学习教练，根据学生这一周在 App 里的学习记录写一份周报。
-    结构（Markdown，用 ### 小标题）：本周概况（2–3 句，点出总时长和节奏）、做得好的地方、需要加强的地方（结合卡住过的题，说出具体知识点）、下周建议（3 条以内，可执行）。
-    语气鼓励但不空泛，不编造记录里没有的内容，不超过 400 字。
-    """
+    static var weeklySystem: String {
+        Tutor.pick("""
+        你是一位温和、具体的学习教练，根据学生这一周在 App 里的学习记录写一份周报。
+        结构（Markdown，用 ### 小标题）：本周概况（2–3 句，点出总时长和节奏）、做得好的地方、需要加强的地方（结合卡住过的题，说出具体知识点）、下周建议（3 条以内，可执行）。
+        语气鼓励但不空泛，不编造记录里没有的内容，不超过 400 字。
+        """, """
+        You are a warm, specific study coach. Based on the student's study record in the app this week, write a weekly report.
+        Structure (Markdown, ### subheadings): This week at a glance (2–3 sentences on total time and pace), What went well, What to work on (refer to the questions they got stuck on and name the specific concepts), Suggestions for next week (at most 3, actionable).
+        Be encouraging but not vague, don't invent anything that isn't in the record, and keep it under 250 words.
+        """)
+    }
 }
 
 /// 设置里的“学习日志”：最近两周每天的学习时间、做题情况，和 AI 周报
@@ -329,7 +342,7 @@ struct StudyLogView: View {
                 HStack {
                     Button { weekOffset += 1 } label: { Image(systemName: "chevron.left") }
                     Spacer()
-                    Text(weekOffset == 0 ? "本周" : weekOffset == 1 ? "上周" : "\(weekOffset) 周前").textCase(nil)
+                    Text(weekOffset == 0 ? L("本周") : weekOffset == 1 ? L("上周") : String(localized: "\(weekOffset) 周前")).textCase(nil)
                     Spacer()
                     Button { weekOffset -= 1 } label: { Image(systemName: "chevron.right") }
                         .disabled(weekOffset == 0)
@@ -362,8 +375,6 @@ struct StudyLogView: View {
             }
         }
         .navigationTitle("学习日志")
-        // 日期、星期用中文显示
-        .environment(\.locale, Locale(identifier: "zh_CN"))
     }
 
     private func write(key: String) {
@@ -396,14 +407,14 @@ struct StudySummaryRow: View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             let total = Int(tracker.totalSeconds)
             VStack(alignment: .leading, spacing: 4) {
-                Text("已使用 Stepwise 学习")
+                Text(L("已使用 Stepwise 学习"))
                     .font(.caption).foregroundStyle(.secondary)
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    number(tracker.studyDays, "天")
-                    number(total / 3600, "小时")
-                    number(total % 3600 / 60, "分钟")
+                    number(tracker.studyDays, L("天"))
+                    number(total / 3600, L("小时"))
+                    number(total % 3600 / 60, L("分钟"))
                 }
-                Text("今天 \(StudyTracker.duration(tracker.todaySeconds))")
+                Text(String(localized: "今天 \(StudyTracker.duration(tracker.todaySeconds))"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)

@@ -20,7 +20,7 @@ extension Tutor {
         let text: String
     }
 
-    static func relatedNoteSystem() -> String {
+    static func relatedNoteSystemZH() -> String {
         """
         学生在做一道题时做错了或者卡住了。下面给出这道题和学生自己笔记里的若干小节（每节有编号）。
         判断笔记里有没有和这道题关联度很高的知识点：看了这一节，学生就能想到这道题该怎么做。只有关联度确实很高时才选，否则宁可不选。
@@ -31,7 +31,7 @@ extension Tutor {
         """
     }
 
-    static func relatedNoteInstruction(question: Question, sections: [NoteSection], wrong: Bool) -> String {
+    static func relatedNoteInstructionZH(question: Question, sections: [NoteSection], wrong: Bool) -> String {
         var s = "【题目】\n" + clip(question.content, 1500) + "\n\n【学生的情况】" + (wrong ? "刚才做错了。" : "不会做，想要提示。")
         s += "\n\n【学生的笔记】"
         for (i, section) in sections.enumerated() {
@@ -61,7 +61,7 @@ extension Tutor {
     }
 
     /// “详细记录 xxx”：把一个知识点详细整理成一块笔记
-    static func detailNoteInstruction(topic: String, block: String) -> String {
+    static func detailNoteInstructionZH(topic: String, block: String) -> String {
         """
         【笔记里相关的一段】
         \(clip(block, 2000))
@@ -143,7 +143,7 @@ extension AppStore {
         insertBlock(newBlock, in: docID, after: guide.blockID)
         let system = Tutor.noteAskSystem(doc: doc)
         let messages = [LLMMessage(role: .user, parts: [.text(Tutor.detailNoteInstruction(topic: guide.summary, block: block.text))])]
-        noteJobs[docID] = NoteJob(label: "正在记录…", afterBlock: newBlock.id)
+        noteJobs[docID] = NoteJob(label: L("正在记录…"), afterBlock: newBlock.id)
         noteTasks[docID] = Task { [weak self] in
             var full = ""
             var lastFlush = Date.distantPast

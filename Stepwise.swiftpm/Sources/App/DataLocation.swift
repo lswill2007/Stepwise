@@ -59,7 +59,7 @@ enum DataLocation {
             var isDir: ObjCBool = false
             guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDir), isDir.boolValue else {
                 if accessing { folder.stopAccessingSecurityScopedResource() }
-                throw LocationError(message: accessing ? "文件夹不存在" : "没有访问权限")
+                throw LocationError(message: accessing ? L("文件夹不存在") : L("没有访问权限"))
             }
             // 文件夹被移动或改名后 bookmark 过期：用新位置重新存一份
             if stale, let fresh = try? folder.bookmarkData(options: bookmarkCreateOptions, includingResourceValuesForKeys: nil, relativeTo: nil) {
@@ -69,7 +69,7 @@ enum DataLocation {
             startDownloading(folder)
         } catch {
             // 打不开就先用 App 内的位置，bookmark 留着，下次启动再试（例如 iCloud 暂时不可用）
-            state.withLock { $0.problem = "找不到之前选的储存文件夹（\(error.localizedDescription)）。这次先用 App 内的位置，这里的数据和那个文件夹里的不是同一份。请到“设置 › 文件储存位置”重新选择那个文件夹。" }
+            state.withLock { $0.problem = String(localized: "找不到之前选的储存文件夹（\(error.localizedDescription)）。这次先用 App 内的位置，这里的数据和那个文件夹里的不是同一份。请到“设置 › 文件储存位置”重新选择那个文件夹。") }
         }
     }
 
@@ -100,7 +100,7 @@ enum DataLocation {
             UserDefaults.standard.set(bookmark, forKey: bookmarkKey)
         } catch {
             if accessing { folder.stopAccessingSecurityScopedResource() }
-            throw LocationError(message: "无法记住这个文件夹：\(error.localizedDescription)")
+            throw LocationError(message: String(localized: "无法记住这个文件夹：\(error.localizedDescription)"))
         }
         let old = state.withLock { s -> URL? in
             let old = s.custom
@@ -129,19 +129,19 @@ enum DataLocation {
 
     /// 设置里显示的位置，例如“iCloud 云盘 › Stepwise 数据”
     static func describe(_ folder: URL?) -> String {
-        guard let folder else { return "App 内（默认）" }
+        guard let folder else { return L("App 内（默认）") }
         let path = folder.standardizedFileURL.path
         if let range = path.range(of: "/Mobile Documents/com~apple~CloudDocs") {
             let rest = path[range.upperBound...].split(separator: "/").joined(separator: " › ")
-            return rest.isEmpty ? "iCloud 云盘" : "iCloud 云盘 › \(rest)"
+            return rest.isEmpty ? L("iCloud 云盘") : String(localized: "iCloud 云盘 › \(rest)")
         }
         if path.contains("/Mobile Documents/") {
-            return "iCloud 云盘 › \(folder.lastPathComponent)"
+            return String(localized: "iCloud 云盘 › \(folder.lastPathComponent)")
         }
         // “我的 iPad”下的文件夹在 File Provider Storage 里
         if let range = path.range(of: "/File Provider Storage") {
             let rest = path[range.upperBound...].split(separator: "/").joined(separator: " › ")
-            return rest.isEmpty ? "我的 iPad" : "我的 iPad › \(rest)"
+            return rest.isEmpty ? L("我的 iPad") : String(localized: "我的 iPad › \(rest)")
         }
         return FileManager.default.displayName(atPath: path)
     }
@@ -173,8 +173,8 @@ enum DataLocation {
         var isEmpty: Bool { allSets == 0 && notes == 0 && folders == 0 && !hasSettings && !unreadable }
 
         var text: String {
-            if unreadable && sets == 0 && notes == 0 { return "Stepwise 数据（暂时读不出内容，可能还没从 iCloud 下载完）" }
-            return "\(sets) 个题集（\(questions) 道题）、\(notes) 篇笔记" + (hasSettings ? "，以及 API Key、学习时间和各项设置" : "")
+            if unreadable && sets == 0 && notes == 0 { return L("Stepwise 数据（暂时读不出内容，可能还没从 iCloud 下载完）") }
+            return String(localized: "\(sets) 个题集（\(questions) 道题）、\(notes) 篇笔记") + (hasSettings ? L("，以及 API Key、学习时间和各项设置") : "")
         }
     }
 
@@ -259,7 +259,7 @@ enum DataLocation {
             try write(data, to: to)
             // 读回来核对一遍，确认写完整了
             guard (try? read(to)) == data else {
-                throw LocationError(message: "复制 \(name) 后核对不一致，请再试一次。")
+                throw LocationError(message: String(localized: "复制 \(name) 后核对不一致，请再试一次。"))
             }
         }
     }
@@ -295,7 +295,7 @@ enum DataLocation {
         if FileManager.default.isUbiquitousItem(at: url) {
             try? FileManager.default.startDownloadingUbiquitousItem(at: url)
         }
-        var result: Result<Data, Error> = .failure(LocationError(message: "无法读取 \(url.lastPathComponent)"))
+        var result: Result<Data, Error> = .failure(LocationError(message: String(localized: "无法读取 \(url.lastPathComponent)")))
         var coordError: NSError?
         NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { actual in
             result = Result { try Data(contentsOf: actual) }

@@ -141,7 +141,7 @@ struct LLMClient {
 
     private func url(_ string: String) throws -> URL {
         guard let url = URL(string: string), url.scheme?.hasPrefix("http") == true else {
-            throw LLMError(message: "接口地址无效：\(string)")
+            throw LLMError(message: String(localized: "接口地址无效：\(string)"))
         }
         return url
     }
@@ -226,8 +226,8 @@ struct LLMClient {
     }
 
     private func makeChatRequest(system: String, messages: [LLMMessage], fast: Bool = false, usage: Bool = false) throws -> URLRequest {
-        guard !apiKey.isEmpty else { throw LLMError(message: "还没有填写 \(config.name) 的 API Key，请到设置里填写。") }
-        guard !model.isEmpty else { throw LLMError(message: "还没有选择 \(config.name) 的模型，请到设置里选择。") }
+        guard !apiKey.isEmpty else { throw LLMError(message: String(localized: "还没有填写 \(config.name) 的 API Key，请到设置里填写。")) }
+        guard !model.isEmpty else { throw LLMError(message: String(localized: "还没有选择 \(config.name) 的模型，请到设置里选择。")) }
 
         var request: URLRequest
         var body: [String: Any]
@@ -353,13 +353,13 @@ struct LLMClient {
     private func parseChunk(_ json: [String: Any]) throws -> String? {
         if let error = json["error"] {
             let msg = (error as? [String: Any])?["message"] as? String ?? "\(error)"
-            throw LLMError(message: "模型返回错误：\(msg)")
+            throw LLMError(message: String(localized: "模型返回错误：\(msg)"))
         }
         switch config.apiProtocol {
         case .openAI:
             guard let choice = (json["choices"] as? [[String: Any]])?.first else { return nil }
             var text = (choice["delta"] as? [String: Any])?["content"] as? String ?? ""
-            if choice["finish_reason"] as? String == "length" { text += "\n\n（回答因长度限制被截断）" }
+            if choice["finish_reason"] as? String == "length" { text += L("\n\n（回答因长度限制被截断）") }
             return text
 
         case .anthropic:
@@ -369,8 +369,8 @@ struct LLMClient {
                 return delta?["type"] as? String == "text_delta" ? delta?["text"] as? String : nil
             case "message_delta":
                 switch (json["delta"] as? [String: Any])?["stop_reason"] as? String {
-                case "refusal": return "\n\n（模型拒绝回答这个请求，可以换个说法或换个模型试试）"
-                case "max_tokens": return "\n\n（回答因长度限制被截断）"
+                case "refusal": return L("\n\n（模型拒绝回答这个请求，可以换个说法或换个模型试试）")
+                case "max_tokens": return L("\n\n（回答因长度限制被截断）")
                 default: return nil
                 }
             default:
@@ -397,7 +397,7 @@ struct LLMClient {
             }
         }
         if result.first?.role == .assistant {
-            result.insert(LLMMessage(role: .user, parts: [.text("你好")]), at: 0)
+            result.insert(LLMMessage(role: .user, parts: [.text(Tutor.pick("你好", "Hello"))]), at: 0)
         }
         return result
     }
@@ -417,13 +417,13 @@ struct LLMClient {
         if detail.count > 400 { detail = String(detail.prefix(400)) + "…" }
         let hint: String
         switch status {
-        case 401, 403: hint = "API Key 无效或没有权限。"
-        case 404: hint = "接口地址或模型名称不对。"
-        case 429: hint = "请求太频繁或余额不足。"
-        case 400: hint = "请求被拒绝（如果附带了图片，可能是该模型不支持图片）。"
+        case 401, 403: hint = L("API Key 无效或没有权限。")
+        case 404: hint = L("接口地址或模型名称不对。")
+        case 429: hint = L("请求太频繁或余额不足。")
+        case 400: hint = L("请求被拒绝（如果附带了图片，可能是该模型不支持图片）。")
         default: hint = ""
         }
-        return "请求失败（HTTP \(status)）\(hint)\n\(detail)"
+        return String(localized: "请求失败（HTTP \(status)）\(hint)\n\(detail)")
     }
 }
 

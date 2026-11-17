@@ -116,7 +116,7 @@ struct NotebookView: View {
                 ContentUnavailableView("错题本是空的", systemImage: "bookmark")
             }
         }
-        .navigationTitle(setID.flatMap { store.set($0)?.title } ?? "错题本")
+        .navigationTitle(setID.flatMap { store.set($0)?.title } ?? L("错题本"))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -125,7 +125,7 @@ struct NotebookView: View {
                 Button {
                     store.setFullScreen(!store.isFullScreen)
                 } label: {
-                    Label(store.isFullScreen ? "显示题目列表" : "全屏做题",
+                    Label(store.isFullScreen ? L("显示题目列表") : L("全屏做题"),
                           systemImage: store.isFullScreen ? "sidebar.left" : "arrow.up.left.and.arrow.down.right")
                 }
                 ModelMenu { showSettings = true }
@@ -316,12 +316,12 @@ struct QuestionBlock: View {
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) { store.toggleStar(setID, qID) }
             } label: {
-                Label(q.isStarred ? "在错题本里" : "加入错题本", systemImage: q.isStarred ? "bookmark.fill" : "bookmark")
+                Label(q.isStarred ? L("在错题本里") : L("加入错题本"), systemImage: q.isStarred ? "bookmark.fill" : "bookmark")
                     .font(.callout)
                     .foregroundStyle(q.isStarred ? Ink.red : Color.secondary)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(q.isStarred ? "移出错题本" : "加入错题本")
+            .accessibilityLabel(q.isStarred ? L("移出错题本") : L("加入错题本"))
             Menu {
                 // 做完之后的快捷操作（出新题、总结技巧……）收在这里，页面上只留批改、提示、看答案
                 if q.status.isDone {
@@ -368,8 +368,8 @@ struct QuestionBlock: View {
             }
         } else if let rounds = q.reviewRounds {
             Label(rounds == 0
-                  ? "错题复习中 · \(AppStore.masteryRounds) 轮之内做对就移出错题本（检查一次或提示一次算一轮）"
-                  : "错题复习中 · 已用 \(rounds) 轮" + (rounds < AppStore.masteryRounds ? "，这一轮做对就移出错题本" : "，这次做对也会留在错题本里"),
+                  ? String(localized: "错题复习中 · \(AppStore.masteryRounds) 轮之内做对就移出错题本（检查一次或提示一次算一轮）")
+                  : String(localized: "错题复习中 · 已用 \(rounds) 轮") + (rounds < AppStore.masteryRounds ? L("，这一轮做对就移出错题本") : L("，这次做对也会留在错题本里")),
                   systemImage: "bookmark.fill")
                 .font(.callout)
                 .foregroundStyle(Ink.red)
@@ -406,7 +406,7 @@ struct QuestionBlock: View {
 
             // 打字作答默认隐藏；以前打过的字仍然显示，不会丢
             if store.keyboardAnswer || !HandwritingModel.isAvailable || !draft.isEmpty {
-                TextField(model.isEmpty ? "在这里打字作答…" : "可以补充文字说明（可选）", text: $draft, axis: .vertical)
+                TextField(model.isEmpty ? L("在这里打字作答…") : L("可以补充文字说明（可选）"), text: $draft, axis: .vertical)
                     .lineLimit(1...8)
                     .padding(10)
                     .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
@@ -530,7 +530,7 @@ struct QuestionBlock: View {
                 .disabled(busy || empty)
 
                 // 提示分三档：思路方向 → 关键一步 → 下一步写什么，按钮上写着下一档是什么
-                Button("提示：" + Tutor.hintLevelShortName(q.hintCount + 1)) {
+                Button(L("提示：") + Tutor.hintLevelShortName(q.hintCount + 1)) {
                     store.requestHint(setID, qID)
                 }
                 .lineLimit(1)
@@ -562,8 +562,8 @@ struct QuestionBlock: View {
     }
 
     private var askPopover: some View {
-        notePopover(title: "提问", prompt: "关于这道题想问什么…", text: $askText,
-                    button: "发送", tint: Ink.pen) {
+        notePopover(title: L("提问"), prompt: L("关于这道题想问什么…"), text: $askText,
+                    button: L("发送"), tint: Ink.pen) {
             store.sendChat(setID, qID, text: askText)
             askText = ""
             showAsk = false
@@ -707,7 +707,7 @@ private struct StepAskPopover: View {
     let send: (String) -> Void
     @State private var text = ""
 
-    static let quick = ["这一步对吗？", "这一步为什么不对？", "这一步是怎么来的？", "接下来该怎么写？"]
+    static let quick = [L("这一步对吗？"), L("这一步为什么不对？"), L("这一步是怎么来的？"), L("接下来该怎么写？")]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -864,14 +864,14 @@ struct MarginNotes: View {
     private func tabTitle(_ m: ChatMessage, index: Int, in items: [ChatMessage]) -> String {
         let before = items[..<index]
         switch m.kind {
-        case .verdictCorrect: return "✓ 检查"
-        case .verdictWrong: return "检查"
+        case .verdictCorrect: return L("✓ 检查")
+        case .verdictWrong: return L("检查")
         case .hint:
-            if m.isStuckHelp { return "卡了" }
+            if m.isStuckHelp { return L("卡了") }
             let n = before.filter { $0.kind == .hint && !$0.isStuckHelp }.count + 1
             return "\(n) " + Tutor.hintLevelShortName(m.hintLevel ?? n)
-        case .chat: return "问 \(before.filter { $0.kind == .chat }.count + 1)"
-        case .solution: return "答案"
+        case .chat: return String(localized: "问 \(before.filter { $0.kind == .chat }.count + 1)")
+        case .solution: return L("答案")
         default: return ""
         }
     }
@@ -902,7 +902,7 @@ struct MarginNotes: View {
                 } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         PenMark(correct: true)
-                        Text(showCorrectDetail ? "收起" : "说明")
+                        Text(showCorrectDetail ? L("收起") : L("说明"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -912,7 +912,7 @@ struct MarginNotes: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("做对了")
-                .accessibilityHint(showCorrectDetail ? "收起说明" : "展开说明")
+                .accessibilityHint(showCorrectDetail ? L("收起说明") : L("展开说明"))
                 if showCorrectDetail {
                     RichText(message.text, scale: 0.92)
                 }
@@ -944,7 +944,7 @@ struct MarginNotes: View {
                             .opacity(erased.contains(i) ? 0.4 : 1)
                         }
                         HStack(spacing: 12) {
-                            Text(erased.isEmpty ? "改好了就用橡皮擦掉红笔批注" : "已擦掉 \(erased.count) 处")
+                            Text(erased.isEmpty ? L("改好了就用橡皮擦掉红笔批注") : String(localized: "已擦掉 \(erased.count) 处"))
                                 .font(.caption).foregroundStyle(.secondary)
                             if !erased.isEmpty {
                                 Button("全部显示") {
@@ -966,7 +966,7 @@ struct MarginNotes: View {
             // 便签：方角、淡淡的影子，像贴在页边
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text(message.isStuckHelp ? "卡住的地方" : "提示 · " + Tutor.hintLevelName(hintLevel(message, in: q)))
+                    Text(message.isStuckHelp ? L("卡住的地方") : L("提示 · ") + Tutor.hintLevelName(hintLevel(message, in: q)))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -1017,7 +1017,7 @@ struct MarginNotes: View {
     @ViewBuilder
     private func timing(_ message: ChatMessage) -> some View {
         if store.showTiming, let duration = message.duration {
-            Text(String(format: duration < 10 ? "%.1f 秒" : "%.0f 秒", duration))
+            Text(String(format: duration < 10 ? L("%.1f 秒") : L("%.0f 秒"), duration))
                 .font(.caption2).monospacedDigit().foregroundStyle(.tertiary)
         }
     }
@@ -1028,9 +1028,9 @@ struct MarginNotes: View {
         if let outcome = store.reviewOutcomes[qID] {
             let (icon, text, color): (String, String, Color) = {
                 switch outcome {
-                case .mastered(let rounds): return ("checkmark", "\(rounds) 轮就做对了，已移出错题本。", Ink.green)
-                case .keep(let rounds): return ("bookmark", "这次用了 \(rounds) 轮，先留在错题本里，下次再练一遍。", Ink.red)
-                case .revealed: return ("bookmark", "这次看了完整答案，先留在错题本里，过几天再练一遍。", Ink.red)
+                case .mastered(let rounds): return ("checkmark", String(localized: "\(rounds) 轮就做对了，已移出错题本。"), Ink.green)
+                case .keep(let rounds): return ("bookmark", String(localized: "这次用了 \(rounds) 轮，先留在错题本里，下次再练一遍。"), Ink.red)
+                case .revealed: return ("bookmark", L("这次看了完整答案，先留在错题本里，过几天再练一遍。"), Ink.red)
                 }
             }()
             Label(text, systemImage: icon)
@@ -1044,7 +1044,7 @@ struct MarginNotes: View {
 struct PenMark: View {
     let correct: Bool
     /// 没做对时的标题：说要改哪里，不说“不对”，免得打击信心
-    static let needsWorkTitle = "找到要改的地方"
+    static let needsWorkTitle = L("找到要改的地方")
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -1063,7 +1063,7 @@ struct PenMark: View {
             }
             .frame(width: 30, height: 26)
             .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 4 }
-            Text(correct ? "对了" : PenMark.needsWorkTitle)
+            Text(correct ? L("对了") : PenMark.needsWorkTitle)
                 .font(.headline)
                 .foregroundStyle(Ink.red)
         }
@@ -1106,10 +1106,10 @@ struct PendingNote: View {
 
     private var label: String {
         switch pending.kind {
-        case .verdictWrong, .verdictCorrect: return "正在一步一步检查…"
-        case .hint: return pending.label ?? "正在写提示…"
-        case .solution: return "正在写答案…"
-        default: return "正在写…"
+        case .verdictWrong, .verdictCorrect: return L("正在一步一步检查…")
+        case .hint: return pending.label ?? L("正在写提示…")
+        case .solution: return L("正在写答案…")
+        default: return L("正在写…")
         }
     }
 }
@@ -1194,7 +1194,7 @@ struct QuestionNotes: View {
             if m.role == .user {
                 lastQuestion = store.followUps.first { $0.prompt == m.text }?.title ?? m.text
             } else {
-                result.append((lastQuestion ?? "笔记", m))
+                result.append((lastQuestion ?? L("笔记"), m))
                 lastQuestion = nil
             }
         }
