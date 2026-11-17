@@ -228,6 +228,8 @@ struct LLMClient {
     private func makeChatRequest(system: String, messages: [LLMMessage], fast: Bool = false, usage: Bool = false) throws -> URLRequest {
         guard !apiKey.isEmpty else { throw LLMError(message: String(localized: "还没有填写 \(config.name) 的 API Key，请到设置里填写。")) }
         guard !model.isEmpty else { throw LLMError(message: String(localized: "还没有选择 \(config.name) 的模型，请到设置里选择。")) }
+        // 选了粤语回答：所有请求的系统提示词最后都加上粤语要求
+        let system = AILanguage.decorate(system: system)
 
         var request: URLRequest
         var body: [String: Any]

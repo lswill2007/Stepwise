@@ -505,7 +505,9 @@
 "未填价格" = "No Price";
 "未选择" = "Not Selected";
 "查看数据发送说明" = "How Data Is Sent";
-"检查、提示、讲解、笔记和周报用的语言。默认跟随界面语言；用英文学 AP、IB 等课程时可以单独选 English。" = "The language used for checking, hints, explanations, notes and weekly reports. It follows the interface language by default; choose English separately if you study AP, IB or similar courses in English.";
+"检查、提示、讲解、笔记和周报用的语言。默认跟随界面语言（繁体界面默认用粤语）；用英文学 AP、IB 等课程时可以单独选 English，准备香港 DSE 可以选粤语：讲解用粤语口语，答案用 DSE 的繁体书面语。" = "The language used for checking, hints, explanations, notes and weekly reports. It follows the interface language by default (Cantonese for a Traditional Chinese interface). Choose English if you study AP, IB or similar courses in English, or Cantonese for the Hong Kong DSE: explanations in spoken Cantonese, answers in the written Traditional Chinese used in DSE papers.";
+"简体中文" = "Chinese (Simplified)";
+"粤语（DSE）" = "Cantonese (DSE)";
 "检查与提示模型" = "Checking and Hint Model";
 "检查答案和给提示时让模型少思考" = "Let the model think less when checking answers and giving hints";
 "检查速度" = "Checking Speed";

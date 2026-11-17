@@ -81,7 +81,7 @@ struct SettingsView: View {
                         Label("AI 回答语言", systemImage: "character.bubble")
                     }
                 } footer: {
-                    Text("检查、提示、讲解、笔记和周报用的语言。默认跟随界面语言；用英文学 AP、IB 等课程时可以单独选 English。")
+                    Text("检查、提示、讲解、笔记和周报用的语言。默认跟随界面语言（繁体界面默认用粤语）；用英文学 AP、IB 等课程时可以单独选 English，准备香港 DSE 可以选粤语：讲解用粤语口语，答案用 DSE 的繁体书面语。")
                 }
 
                 gradingSection
