@@ -25,7 +25,7 @@ struct ImportView: View {
     @State private var showScanner = false
 
     @State private var working = false
-    @State private var progressText = ""
+    @State private var progress = GenerationProgress()
     @State private var task: Task<Void, Never>?
     @State private var showSettings = false
     @State private var showConsent = false
@@ -125,22 +125,23 @@ struct ImportView: View {
                 }
 
                 Section {
-                    Button {
-                        start()
-                    } label: {
-                        HStack {
-                            Spacer()
-                            if working {
-                                ProgressView().padding(.trailing, 6)
-                                Text(progressText)
-                            } else {
+                    if working {
+                        // 拆分要一会儿：显示大概进度、找到了几道题、用了多久
+                        GenerationProgressView(progress: progress) { String(localized: "已识别 \($0) 道题") }
+                            .padding(.vertical, 6)
+                    } else {
+                        Button {
+                            start()
+                        } label: {
+                            HStack {
+                                Spacer()
                                 Label("开始拆分题目", systemImage: "scissors")
                                     .font(.headline)
+                                Spacer()
                             }
-                            Spacer()
                         }
+                        .disabled(currentMaterial == nil)
                     }
-                    .disabled(working || currentMaterial == nil)
                 } footer: {
                     if let p = store.activeProvider {
                         Text("将使用 \(p.name) · \(p.model.isEmpty ? "未选择模型" : p.model)。图片和扫描件需要支持图片输入的模型。")
@@ -245,11 +246,11 @@ struct ImportView: View {
             return
         }
         working = true
-        progressText = L("正在拆分…")
+        progress = GenerationProgress()
         task = Task {
             do {
-                var newSet = try await store.split(material: source, requirement: requirement, title: title) { i, n in
-                    progressText = n > 1 ? String(localized: "正在拆分 第 \(i)/\(n) 部分…") : L("正在拆分…")
+                var newSet = try await store.split(material: source, requirement: requirement, title: title) { p in
+                    progress = p
                 }
                 newSet.folderID = folderID
                 store.addSet(newSet)

@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>%@ · %lld 次 · 输入 %@ · 输出 %@</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%@ · %lld 次 · 输入 %@ · 输出 %@</string>
+	</dict>
+	<key>%lld token</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld token</string>
+	</dict>
+	<key>%lld 个题集</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld 个题集</string>
+	</dict>
+	<key>%lld 个题集、%lld 篇笔记</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld 个题集、%lld 篇笔记</string>
+	</dict>
+	<key>%lld 个题集（%lld 道题）、%lld 篇笔记</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld 个题集（%lld 道题）、%lld 篇笔记</string>
+	</dict>
+	<key>%lld 周前</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld 周前</string>
+	</dict>
+	<key>%lld 块</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld 块</string>
+	</dict>
+	<key>%lld 块 · %lld 道练习</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld 块 · %lld 道练习</string>
+	</dict>
+	<key>%lld 张图片</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld 张图片</string>
+	</dict>
+	<key>%lld 篇笔记</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld 篇笔记</string>
+	</dict>
+	<key>%lld 轮就做对了，已移出错题本。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld 轮就做对了，已移出错题本。</string>
+	</dict>
+	<key>%lld 道题 · 已完成 %lld</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld 道题 · 已完成 %lld</string>
+	</dict>
+	<key>%lld 页文字，约 %lld 字</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld 页文字，约 %lld 字</string>
+	</dict>
+	<key>PDF 有 %lld 页，按图片识别最多支持 %lld 页，请拆分后再导入。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>PDF 有 %lld 页，按图片识别最多支持 %lld 页，请拆分后再导入。</string>
+	</dict>
+	<key>做了 %lld 道题 · 作答 %lld 次 · 做对 %lld 次 · 提示 %lld 次</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>做了 %lld 道题 · 作答 %lld 次 · 做对 %lld 次 · 提示 %lld 次</string>
+	</dict>
+	<key>做题时点题目右上角的“错题”，把需要重点复习的题加进来。
+在错题本里 %lld 轮之内做对，就会自动移出。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>做题时点题目右上角的“错题”，把需要重点复习的题加进来。
+在错题本里 %lld 轮之内做对，就会自动移出。</string>
+	</dict>
+	<key>其中 %lld 个题集本机已经有了，作为副本导入（名称后面带“导入”）。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>其中 %lld 个题集本机已经有了，作为副本导入（名称后面带“导入”）。</string>
+	</dict>
+	<key>出 %lld 道</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>出 %lld 道</string>
+	</dict>
+	<key>可以重新练一遍：%lld 轮之内做对，就从错题本移出</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>可以重新练一遍：%lld 轮之内做对，就从错题本移出</string>
+	</dict>
+	<key>复习中 · 已用 %lld 轮</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>复习中 · 已用 %lld 轮</string>
+	</dict>
+	<key>已写好 %lld 块</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>已写好 %lld 块</string>
+	</dict>
+	<key>已导入 %lld 个题集，共 %lld 道题</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>已导入 %lld 个题集，共 %lld 道题</string>
+	</dict>
+	<key>已擦掉 %lld 处</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>已擦掉 %lld 处</string>
+	</dict>
+	<key>已获取 %lld 个模型</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>已获取 %lld 个模型</string>
+	</dict>
+	<key>已获取 %lld 个模型，其中 %lld 个可以用来做题</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>已获取 %lld 个模型，其中 %lld 个可以用来做题</string>
+	</dict>
+	<key>已识别 %lld 道题</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>已识别 %lld 道题</string>
+	</dict>
+	<key>正在出 %lld 道题…</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>正在出 %lld 道题…</string>
+	</dict>
+	<key>请针对这一小节的内容出 %lld 道练习题。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>请针对这一小节的内容出 %lld 道练习题。</string>
+	</dict>
+	<key>这次用了 %lld 轮，先留在错题本里，下次再练一遍。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>这次用了 %lld 轮，先留在错题本里，下次再练一遍。</string>
+	</dict>
+	<key>错题复习中 · %lld 轮之内做对就移出错题本（检查一次或提示一次算一轮）</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>错题复习中 · %lld 轮之内做对就移出错题本（检查一次或提示一次算一轮）</string>
+	</dict>
+	<key>错题复习中 · 已用 %lld 轮</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>错题复习中 · 已用 %lld 轮</string>
+	</dict>
+	<key>，以及 %lld 篇笔记，都放在左侧列表的最上面。</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>，以及 %lld 篇笔记，都放在左侧列表的最上面。</string>
+	</dict>
+</dict>
+</plist>

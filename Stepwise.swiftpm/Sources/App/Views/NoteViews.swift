@@ -667,6 +667,11 @@ struct NoteDocView: View {
                 Button("停止") { store.stopNoteJob(noteID) }
                     .buttonStyle(InkTextButtonStyle(color: .secondary))
             }
+            // 生成整篇笔记时：大概进度、写好几块、用了多久
+            if let progress = job.progress {
+                GenerationProgressView(progress: progress) { String(localized: "已写好 \($0) 块") }
+                    .frame(maxWidth: 420)
+            }
         }
     }
 

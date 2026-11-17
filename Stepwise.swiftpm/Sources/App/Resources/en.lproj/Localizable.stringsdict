@@ -412,6 +412,22 @@ Answer one correctly within %#@a@ in the Review List and it's removed automatica
 			<string>%lld rounds</string>
 		</dict>
 	</dict>
+	<key>已写好 %lld 块</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@ written</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld block</string>
+			<key>other</key>
+			<string>%lld blocks</string>
+		</dict>
+	</dict>
 	<key>已导入 %lld 个题集，共 %lld 道题</key>
 	<dict>
 		<key>NSStringLocalizedFormatKey</key>
@@ -485,6 +501,22 @@ Answer one correctly within %#@a@ in the Review List and it's removed automatica
 			<string>%lld model</string>
 			<key>other</key>
 			<string>%lld models</string>
+		</dict>
+	</dict>
+	<key>已识别 %lld 道题</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@ found</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld question</string>
+			<key>other</key>
+			<string>%lld questions</string>
 		</dict>
 	</dict>
 	<key>正在出 %lld 道题…</key>

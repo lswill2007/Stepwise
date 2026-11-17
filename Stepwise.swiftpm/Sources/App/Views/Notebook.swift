@@ -514,9 +514,21 @@ struct QuestionBlock: View {
     // MARK: 操作
 
     private func actionRow(_ q: Question) -> some View {
+        // 侧栏、笔记栏都打开时这一栏会很窄：先收紧间距、提示按钮只写“提示”，还放不下就把“卡了”“看答案”收进“⋯”。
+        // 每个按钮的字都不换行
+        ViewThatFits(in: .horizontal) {
+            actionButtons(q, spacing: 20, fullHint: true, collapse: false)
+            actionButtons(q, spacing: 12, fullHint: false, collapse: false)
+            actionButtons(q, spacing: 12, fullHint: false, collapse: true)
+        }
+        .buttonStyle(InkTextButtonStyle())
+    }
+
+    private func actionButtons(_ q: Question, spacing: CGFloat, fullHint: Bool, collapse: Bool) -> some View {
         let busy = store.isBusy(qID)
         let empty = model.isEmpty && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return HStack(spacing: 20) {
+        let hintTitle = fullHint ? L("提示：") + Tutor.hintLevelShortName(q.hintCount + 1) : L("提示")
+        return HStack(spacing: spacing) {
             // 做对之前：检查、提示、看答案。只有“检查”是实心按钮，其余是文字
             if q.status != .passed {
                 Button {
@@ -530,35 +542,50 @@ struct QuestionBlock: View {
                 .disabled(busy || empty)
 
                 // 提示分三档：思路方向 → 关键一步 → 下一步写什么，按钮上写着下一档是什么
-                Button(L("提示：") + Tutor.hintLevelShortName(q.hintCount + 1)) {
-                    store.requestHint(setID, qID)
+                Button { store.requestHint(setID, qID) } label: {
+                    Text(hintTitle).lineLimit(1).fixedSize()
                 }
-                .lineLimit(1)
-                .fixedSize()
                 .disabled(busy)
 
-                // 卡住了：把现在写到哪里直接发过去，AI 自己找出卡在哪一步
-                Button("卡了") {
-                    saveDraft()
-                    model.saveNow()
-                    store.reportStuck(setID, qID, answer: draft, handwriting: model.exportJPEG())
-                }
-                .lineLimit(1)
-                .fixedSize()
-                .disabled(busy)
+                if collapse {
+                    Menu {
+                        Button(L("卡了"), systemImage: "questionmark.bubble") { reportStuck() }
+                        if q.status != .revealed {
+                            Button(L("看答案"), systemImage: "eye") { store.requestSolution(setID, qID) }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle").imageScale(.large)
+                    }
+                    .disabled(busy)
+                } else {
+                    // 卡住了：把现在写到哪里直接发过去，AI 自己找出卡在哪一步
+                    Button { reportStuck() } label: {
+                        Text("卡了").lineLimit(1).fixedSize()
+                    }
+                    .disabled(busy)
 
-                if q.status != .revealed {
-                    Button("看答案") { store.requestSolution(setID, qID) }
+                    if q.status != .revealed {
+                        Button { store.requestSolution(setID, qID) } label: {
+                            Text("看答案").lineLimit(1).fixedSize()
+                        }
                         .disabled(busy)
+                    }
                 }
             }
-            Spacer()
+            Spacer(minLength: 8)
             if busy {
-                Button("停止") { store.cancelReply(qID) }
-                    .buttonStyle(InkTextButtonStyle(color: .secondary))
+                Button { store.cancelReply(qID) } label: {
+                    Text("停止").lineLimit(1).fixedSize()
+                }
+                .buttonStyle(InkTextButtonStyle(color: .secondary))
             }
         }
-        .buttonStyle(InkTextButtonStyle())
+    }
+
+    private func reportStuck() {
+        saveDraft()
+        model.saveNow()
+        store.reportStuck(setID, qID, answer: draft, handwriting: model.exportJPEG())
     }
 
     private var askPopover: some View {

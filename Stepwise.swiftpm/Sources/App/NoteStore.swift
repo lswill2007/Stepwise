@@ -10,6 +10,17 @@ struct NoteJob: Equatable {
     /// 圈出来问时：正在写哪一条页边批注
     var commentID: UUID?
     var startedAt = Date()
+    /// 生成笔记时的进度（问答、出题时为 nil）
+    var progress: GenerationProgress?
+}
+
+/// 生成笔记时一部分的请求：在后台收着，笔记页每 0.2 秒把收到的放进笔记
+@MainActor
+final class StreamBuffer {
+    var text = ""
+    var finished = false
+    var error: Error?
+    var task: Task<Void, Never>?
 }
 
 /// 笔记一块里插进了内容，y 以下的笔迹要往下挪 dy（笔记页上的画布收到后处理，标记 handled）
@@ -210,29 +221,54 @@ extension AppStore {
         mutateNote(docID) { $0.folderID = folderID }
         noteJobs[docID] = NoteJob(label: L("正在生成笔记…"))
 
+        // 生成笔记要一会儿：按写完的部分和正在写的部分估算进度
+        let started = Date()
+        var estimator = ChunkEstimator(chunks, ratio: 0.8, perImage: 900, minimum: 1500)
+        noteJobs[docID]?.progress = GenerationProgress(parts: chunks.count, startedAt: started)
+
+        // 第几部分的请求：在后台收，写的时候按顺序放进笔记
+        var buffers: [Int: StreamBuffer] = [:]
+        func startBuffer(_ index: Int) {
+            guard index < chunks.count, buffers[index] == nil else { return }
+            let chunk = chunks[index]
+            var parts: [LLMContent] = chunk.images.map(LLMContent.image)
+            var text = chunks.count > 1
+                ? Tutor.pick("以下是学习资料的第 \(index + 1)/\(chunks.count) 部分。",
+                             "Below is part \(index + 1) of \(chunks.count) of the study material.")
+                : Tutor.pick("以下是学习资料的内容。", "Below is the content of the study material.")
+            text += chunk.text.isEmpty ? Tutor.pick("内容见上面的图片。", "The content is in the images above.") : "\n\n" + chunk.text
+            parts.append(.text(text))
+            let system = Tutor.noteSystem(prompt: prompt, exercises: exercises, hasImages: !chunk.images.isEmpty,
+                                          multiPart: chunks.count > 1, first: index == 0)
+            let buffer = StreamBuffer()
+            buffers[index] = buffer
+            buffer.task = Task { @MainActor in
+                do {
+                    for try await piece in client.stream(system: system, messages: [LLMMessage(role: .user, parts: parts)]) {
+                        buffer.text += piece
+                    }
+                } catch {
+                    buffer.error = error
+                }
+                buffer.finished = true
+            }
+        }
+
         noteTasks[docID] = Task { [weak self] in
             var failedParts: [Int] = []
             var firstError: Error?
-            for (index, chunk) in chunks.enumerated() {
+            var blocksWritten = 0
+            for (index, _) in chunks.enumerated() {
                 guard let self, !Task.isCancelled else { break }
+                startBuffer(index)
+                guard let buffer = buffers[index] else { continue }
                 self.noteJobs[docID]?.label = chunks.count > 1 ? String(localized: "正在生成 第 \(index + 1)/\(chunks.count) 部分…") : L("正在生成笔记…")
                 self.noteJobs[docID]?.partial = ""
 
-                var parts: [LLMContent] = chunk.images.map(LLMContent.image)
-                var text = chunks.count > 1
-                    ? Tutor.pick("以下是学习资料的第 \(index + 1)/\(chunks.count) 部分。",
-                                 "Below is part \(index + 1) of \(chunks.count) of the study material.")
-                    : Tutor.pick("以下是学习资料的内容。", "Below is the content of the study material.")
-                text += chunk.text.isEmpty ? Tutor.pick("内容见上面的图片。", "The content is in the images above.") : "\n\n" + chunk.text
-                parts.append(.text(text))
-                let system = Tutor.noteSystem(prompt: prompt, exercises: exercises, hasImages: !chunk.images.isEmpty,
-                                              multiPart: chunks.count > 1, first: index == 0)
-
-                var full = ""
                 var added = 0
-                var lastFlush = Date.distantPast
                 // 把已经写完的块加进笔记，没写完的那块实时显示
                 @MainActor func flush() {
+                    let full = buffer.text
                     let parsed = Tutor.parseNote(full)
                     if index == 0, givenTitle.isEmpty, let t = parsed.title, !t.isEmpty,
                        self.note(docID)?.title == material.name {
@@ -243,32 +279,43 @@ extension AppStore {
                         case .note: self.insertBlock(NoteBlock(kind: .text, text: item.text), in: docID, after: nil)
                         case .exercise: self.addExercise(to: docID, after: nil, content: item.text, answer: item.answer)
                         }
+                        blocksWritten += 1
                     }
                     added = max(added, parsed.items.count)
                     self.noteJobs[docID]?.partial = Tutor.unfinishedNote(full) ?? ""
+                    // 进度：写完的部分加上这部分已经写了多少
+                    for (i, b) in buffers { estimator.update(i, written: b.text.count) }
+                    self.noteJobs[docID]?.progress = GenerationProgress(
+                        fraction: estimator.fraction, parts: chunks.count, doneParts: index,
+                        found: blocksWritten, startedAt: started)
                 }
-                do {
-                    for try await piece in client.stream(system: system, messages: [LLMMessage(role: .user, parts: parts)]) {
-                        full += piece
-                        if Date().timeIntervalSince(lastFlush) > 0.2 {
-                            flush()
-                            lastFlush = Date()
-                        }
-                    }
-                    try Task.checkCancellation()
+                // 每 0.2 秒把新收到的内容放进笔记，直到这部分写完
+                while !buffer.finished && !Task.isCancelled {
                     flush()
-                    // 完全没按格式输出：整段当成一块笔记
-                    if added == 0 {
-                        let loose = Tutor.looseNote(full)
-                        if !loose.isEmpty { self.insertBlock(NoteBlock(kind: .text, text: loose), in: docID, after: nil) }
-                    }
-                } catch {
-                    if error is CancellationError || Task.isCancelled { break }
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
+                if Task.isCancelled { break }
+                if let error = buffer.error {
+                    if error is CancellationError { break }
                     // 某一部分失败不影响其他部分
                     failedParts.append(index + 1)
                     if firstError == nil { firstError = error }
+                    estimator.finish(index)
+                    continue
                 }
+                flush()
+                // 完全没按格式输出：整段当成一块笔记
+                if added == 0 {
+                    let loose = Tutor.looseNote(buffer.text)
+                    if !loose.isEmpty {
+                        self.insertBlock(NoteBlock(kind: .text, text: loose), in: docID, after: nil)
+                        blocksWritten += 1
+                    }
+                }
+                estimator.finish(index)
             }
+            // 停止或写完：后台还在写的部分一起停掉
+            for buffer in buffers.values { buffer.task?.cancel() }
             guard let self else { return }
             let cancelled = Task.isCancelled
             self.noteJobs[docID] = nil

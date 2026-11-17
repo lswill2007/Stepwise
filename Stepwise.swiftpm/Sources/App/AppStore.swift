@@ -1098,10 +1098,28 @@ final class AppStore: ObservableObject {
     // MARK: - 拆分题目
 
     func split(material: ImportedMaterial, requirement: String, title: String,
-               progress: @escaping (Int, Int) -> Void) async throws -> QuestionSet {
+               progress: @escaping (GenerationProgress) -> Void) async throws -> QuestionSet {
         let client = try makeClient(for: .split)
         let chunks = Importer.chunks(for: material)
         guard !chunks.isEmpty else { throw LLMError(message: L("没有可以拆分的内容。")) }
+
+        // 一部分一部分拆，边收边更新进度
+        let tracker = SplitTracker(chunks: chunks, report: progress)
+        tracker.report(force: true)
+        typealias Parsed = (title: String?, items: [Tutor.SplitItem])
+        var results = [Result<Parsed, Error>?](repeating: nil, count: chunks.count)
+        for i in chunks.indices {
+            try Task.checkCancellation()
+            do {
+                results[i] = .success(try await splitChunk(i, chunks[i], count: chunks.count, client: client,
+                                                           requirement: requirement, tracker: tracker))
+            } catch {
+                if error is CancellationError || Task.isCancelled { throw CancellationError() }
+                results[i] = .failure(error)
+                tracker.finish(i)
+            }
+        }
+        tracker.report(force: true)
 
         var questions: [Question] = []
         var keys: [String] = []          // 与 questions 一一对应的题号，用于合并重叠页产生的重复题
@@ -1110,47 +1128,16 @@ final class AppStore: ObservableObject {
         var firstError: Error?
 
         for (index, chunk) in chunks.enumerated() {
-            try Task.checkCancellation()
-            progress(index + 1, chunks.count)
-            var parts: [LLMContent] = chunk.images.map(LLMContent.image)
-            var text = chunks.count > 1
-                ? Tutor.pick("以下是题目文件的第 \(index + 1)/\(chunks.count) 部分（与前后部分各有一页重叠）。",
-                             "Below is part \(index + 1) of \(chunks.count) of the question file (it overlaps the neighboring parts by one page).")
-                : Tutor.pick("以下是题目文件的内容。", "Below is the content of the question file.")
-            text += chunk.text.isEmpty ? Tutor.pick("内容见上面的图片。", "The content is in the images above.") : "\n\n" + chunk.text
-            parts.append(.text(text))
-
-            var parsed: (title: String?, items: [Tutor.SplitItem])
-            let system = Tutor.splitSystem(requirement: requirement, hasImages: !chunk.images.isEmpty, multiPart: chunks.count > 1)
-            do {
-                let output = try await client.complete(system: system, messages: [LLMMessage(role: .user, parts: parts)])
-                parsed = try Tutor.parseSplit(output)
-
-                // 选择题漏了选项：把这几道题指出来，让模型对照原文重新输出
-                let missing = parsed.items.filter { Tutor.looksLikeMissingOptions($0.content) }.map(\.label)
-                if !missing.isEmpty {
-                    progress(index + 1, chunks.count)
-                    let followUp: [LLMMessage] = [
-                        LLMMessage(role: .user, parts: parts),
-                        LLMMessage(role: .assistant, parts: [.text(output)]),
-                        LLMMessage(role: .user, parts: [.text(Tutor.missingOptionsFollowUp(labels: missing))])
-                    ]
-                    if let repairedText = try? await client.complete(system: system, messages: followUp),
-                       let repaired = try? Tutor.parseSplit(repairedText) {
-                        for fixed in repaired.items where Tutor.optionLetterCount(fixed.content) >= 2 {
-                            let key = Tutor.labelKey(fixed.label)
-                            guard let i = parsed.items.firstIndex(where: { Tutor.labelKey($0.label) == key }) else { continue }
-                            parsed.items[i].content = fixed.content
-                            if parsed.items[i].answer == nil { parsed.items[i].answer = fixed.answer }
-                        }
-                    }
-                }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
+            let parsed: Parsed
+            switch results[index] {
+            case .success(let value)?:
+                parsed = value
+            case .failure(let error)?:
                 // 某一部分失败（比如只有封面）不影响其他部分
                 failedParts.append(index + 1)
                 if firstError == nil { firstError = error }
+                continue
+            case nil:
                 continue
             }
             if suggestedTitle == nil { suggestedTitle = parsed.title }
@@ -1191,6 +1178,98 @@ final class AppStore: ObservableObject {
         let finalTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? (suggestedTitle ?? material.name) : title
         return QuestionSet(title: finalTitle, requirement: requirement, questions: questions)
+    }
+}
+
+extension AppStore {
+    /// 拆一部分：边收边数已经写出来的题，写完检查选择题有没有漏选项
+    fileprivate func splitChunk(_ index: Int, _ chunk: SplitChunk, count: Int, client: LLMClient, requirement: String,
+                                tracker: SplitTracker) async throws -> (title: String?, items: [Tutor.SplitItem]) {
+        var parts: [LLMContent] = chunk.images.map(LLMContent.image)
+        var text = count > 1
+            ? Tutor.pick("以下是题目文件的第 \(index + 1)/\(count) 部分（与前后部分各有一页重叠）。",
+                         "Below is part \(index + 1) of \(count) of the question file (it overlaps the neighboring parts by one page).")
+            : Tutor.pick("以下是题目文件的内容。", "Below is the content of the question file.")
+        text += chunk.text.isEmpty ? Tutor.pick("内容见上面的图片。", "The content is in the images above.") : "\n\n" + chunk.text
+        parts.append(.text(text))
+        let system = Tutor.splitSystem(requirement: requirement, hasImages: !chunk.images.isEmpty, multiPart: count > 1)
+
+        var output = ""
+        for try await piece in client.stream(system: system, messages: [LLMMessage(role: .user, parts: parts)]) {
+            output += piece
+            tracker.update(index, output: output)
+        }
+        try Task.checkCancellation()
+        var parsed = try Tutor.parseSplit(output)
+
+        // 选择题漏了选项：把这几道题指出来，让模型对照原文重新输出
+        let missing = parsed.items.filter { Tutor.looksLikeMissingOptions($0.content) }.map(\.label)
+        if !missing.isEmpty {
+            let followUp: [LLMMessage] = [
+                LLMMessage(role: .user, parts: parts),
+                LLMMessage(role: .assistant, parts: [.text(output)]),
+                LLMMessage(role: .user, parts: [.text(Tutor.missingOptionsFollowUp(labels: missing))])
+            ]
+            if let repairedText = try? await client.complete(system: system, messages: followUp),
+               let repaired = try? Tutor.parseSplit(repairedText) {
+                for fixed in repaired.items where Tutor.optionLetterCount(fixed.content) >= 2 {
+                    let key = Tutor.labelKey(fixed.label)
+                    guard let i = parsed.items.firstIndex(where: { Tutor.labelKey($0.label) == key }) else { continue }
+                    parsed.items[i].content = fixed.content
+                    if parsed.items[i].answer == nil { parsed.items[i].answer = fixed.answer }
+                }
+            }
+        }
+        tracker.finish(index)
+        return parsed
+    }
+}
+
+/// 拆题的进度：每部分写了多少、已经写出哪些题号（重叠页里的同一道题只算一次）
+@MainActor
+final class SplitTracker {
+    private var estimator: ChunkEstimator
+    private var labels: [Set<String>]
+    private let report: (GenerationProgress) -> Void
+    private let parts: Int
+    private let started = Date()
+    private var lastReport = Date.distantPast
+
+    init(chunks: [SplitChunk], report: @escaping (GenerationProgress) -> Void) {
+        // 拆题基本是照抄原文：输出大约和原文一样长，一页图片大约 1300 字
+        estimator = ChunkEstimator(chunks, ratio: 1.15, perImage: 1300, minimum: 800)
+        labels = Array(repeating: [], count: chunks.count)
+        parts = chunks.count
+        self.report = report
+    }
+
+    func update(_ i: Int, output: String) {
+        estimator.update(i, written: output.count)
+        guard Date().timeIntervalSince(lastReport) > 0.25 else { return }
+        labels[i] = Self.labels(in: output)
+        report(force: false)
+    }
+
+    func finish(_ i: Int) {
+        estimator.finish(i)
+        report(force: true)
+    }
+
+    func report(force: Bool) {
+        guard force || Date().timeIntervalSince(lastReport) > 0.25 else { return }
+        lastReport = Date()
+        let found = labels.reduce(into: Set<String>()) { $0.formUnion($1) }.count
+        report(GenerationProgress(fraction: estimator.fraction, parts: parts, doneParts: estimator.doneCount,
+                                  found: found, startedAt: started))
+    }
+
+    /// 已经写完的题（有了 </question>）的题号
+    private static func labels(in output: String) -> Set<String> {
+        let pattern = #"<question\s+label\s*=\s*"([^"]*)"[\s\S]*?</question>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = output as NSString
+        return Set(regex.matches(in: output, range: NSRange(location: 0, length: ns.length))
+            .map { Tutor.labelKey(ns.substring(with: $0.range(at: 1))) })
     }
 }
 
