@@ -36,13 +36,15 @@ final class PadCanvasView: PKCanvasView {
 
     /// 画布在屏幕上且有了实际尺寸后再放入恢复的笔迹
     override func layoutSubviews() {
+        // 画布大出文字的那一圈也要画得出来：PencilKit 只画内容范围里的笔迹
+        if overflow > 0, contentSize != bounds.size { contentSize = bounds.size }
         super.layoutSubviews()
         guard pendingDrawing != nil, window != nil, bounds.width > 1, bounds.height > 1 else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self, let drawing = self.pendingDrawing else { return }
             self.pendingDrawing = nil
             self.isRefreshing = true
-            self.drawing = drawing
+            self.paperDrawing = drawing
             self.isRefreshing = false
             // 布局动画结束后再刷新一次：PencilKit 在尺寸变化过程中放入的笔迹可能不会被绘制
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
@@ -58,15 +60,60 @@ final class PadCanvasView: PKCanvasView {
     /// 用代码换掉笔迹（不算用户写的）。缩放变化时 PencilKit 常常不重画，清空再放回去逼它重画
     func replaceDrawing(_ newDrawing: PKDrawing) {
         isRefreshing = true
-        drawing = newDrawing
+        paperDrawing = newDrawing
         isRefreshing = false
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.drawing == newDrawing else { return }
+            guard let self, self.paperDrawing == newDrawing else { return }
+            let current = self.drawing
             self.isRefreshing = true
             self.drawing = PKDrawing()
-            self.drawing = newDrawing
+            self.drawing = current
             self.isRefreshing = false
         }
+    }
+
+    /// 画布比文字四周各大出这么多（笔记的涂鸦层）：从文字里写到页边、块和块之间的笔画不会在文字边上被截断。
+    /// PencilKit 画不出坐标为负的笔迹，所以画布上的坐标比纸的坐标（文字左上角为原点）多出这么多；
+    /// 存下的、圈出来问的位置都还是纸的坐标，进出画布时用 paperDrawing 换算
+    var overflow: CGFloat = 0
+
+    private var toPaper: CGAffineTransform { CGAffineTransform(translationX: -overflow, y: -overflow) }
+    private var toCanvas: CGAffineTransform { CGAffineTransform(translationX: overflow, y: overflow) }
+    /// 上一次换算的结果：没变的笔画直接用，来回换算不会带来浮点误差
+    private var converted: (canvas: PKDrawing, paper: PKDrawing)?
+
+    /// 纸的坐标下的笔迹
+    var paperDrawing: PKDrawing {
+        get {
+            guard overflow > 0 else { return drawing }
+            let current = drawing
+            var paper: PKDrawing
+            if let converted, converted.canvas == current {
+                return converted.paper
+            } else if let converted, current.strokes.count > converted.canvas.strokes.count,
+                      PKDrawing(strokes: current.strokes.prefix(converted.canvas.strokes.count)) == converted.canvas {
+                // 平时写字：只是多了几笔，只换算新写的
+                paper = converted.paper
+                let added = PKDrawing(strokes: current.strokes.dropFirst(converted.canvas.strokes.count))
+                paper.strokes.append(contentsOf: added.transformed(using: toPaper).strokes)
+            } else {
+                paper = current.transformed(using: toPaper)
+            }
+            converted = (current, paper)
+            return paper
+        }
+        set {
+            guard overflow > 0 else { drawing = newValue; return }
+            let shown = newValue.transformed(using: toCanvas)
+            converted = (shown, newValue)
+            drawing = shown
+        }
+    }
+
+    /// 纸以外大出来的那一圈不接收触摸（框选时）：下面的空白和别的块照常能写
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        guard overflow > 0 else { return super.point(inside: point, with: event) }
+        return bounds.insetBy(dx: overflow, dy: overflow).contains(point)
     }
 
     override var inputView: UIView? { noKeyboard }
@@ -407,7 +454,7 @@ final class HandwritingModel: ObservableObject {
         drawing = shifted
         if let canvas {
             // 恢复的笔迹还没放上画布：换成挪过的；已经在画布上：直接换（和模型一致，不算用户改的）
-            if canvas.pendingDrawing != nil { canvas.pendingDrawing = shifted } else { canvas.drawing = shifted }
+            if canvas.pendingDrawing != nil { canvas.pendingDrawing = shifted } else { canvas.paperDrawing = shifted }
         }
         saveNow()
     }
@@ -432,7 +479,7 @@ final class HandwritingModel: ObservableObject {
         drawing = PKDrawing()
         storedDrawing = nil
         canvas?.pendingDrawing = nil
-        canvas?.drawing = PKDrawing()
+        canvas?.paperDrawing = PKDrawing()
         isEmpty = true
         height = Self.minHeight
         saveNow()
@@ -505,6 +552,8 @@ struct NotebookCanvas: UIViewRepresentable {
     @ObservedObject var tools: InkTools
     /// 笔记上的涂鸦层：书写手势挂到这个视图（下面的文字）上
     var host: InkHost?
+    /// 画布比文字四周各大出多少：从文字里写出去的笔画照样画得出来
+    var overflow: CGFloat = 0
 
     func makeUIView(context: Context) -> PadCanvasView {
         let canvas = PadCanvasView()
@@ -514,6 +563,7 @@ struct NotebookCanvas: UIViewRepresentable {
         canvas.isScrollEnabled = false
         canvas.minimumZoomScale = 1
         canvas.maximumZoomScale = 1
+        canvas.overflow = overflow
         canvas.delegate = context.coordinator
         // Apple Pencil 双击 / 捏合切换橡皮擦
         let pencil = UIPencilInteraction()
@@ -601,15 +651,15 @@ struct NotebookCanvas: UIViewRepresentable {
             if let pending = pad.pendingDrawing, penDown {
                 pad.pendingDrawing = nil
                 var merged = pending
-                merged.strokes.append(contentsOf: canvasView.drawing.strokes)
+                merged.strokes.append(contentsOf: pad.paperDrawing.strokes)
                 DispatchQueue.main.async {
-                    if pad.drawing != merged { pad.drawing = merged }
+                    if pad.paperDrawing != merged { pad.paperDrawing = merged }
                 }
                 let byPen = penDown
                 penDown = false
-                if byPen, model.tools.tool == .ask, let stroke = canvasView.drawing.strokes.last {
+                if byPen, model.tools.tool == .ask, let stroke = pad.paperDrawing.strokes.last {
                     // 圈的这一笔不留：只放回恢复的笔迹
-                    DispatchQueue.main.async { pad.drawing = pending }
+                    DispatchQueue.main.async { pad.paperDrawing = pending }
                     model.circled(stroke.renderBounds)
                 } else {
                     model.drawingChanged(merged)
@@ -617,21 +667,23 @@ struct NotebookCanvas: UIViewRepresentable {
                 return
             }
             // 恢复、重新放入笔迹时的变化不算；把圈选的一笔撤掉时也会进来，笔迹没变就不算
-            guard pad.pendingDrawing == nil, !pad.isRefreshing, canvasView.drawing != model.drawing else { return }
+            guard pad.pendingDrawing == nil, !pad.isRefreshing else { return }
+            let current = pad.paperDrawing
+            guard current != model.drawing else { return }
             let byPen = penDown
             penDown = false
             // 圈选提问：用户刚画的这一笔只用来圈出地方，不留在纸上
-            if byPen, model.tools.tool == .ask, canvasView.drawing.strokes.count == model.drawing.strokes.count + 1,
-               let stroke = canvasView.drawing.strokes.last {
+            if byPen, model.tools.tool == .ask, current.strokes.count == model.drawing.strokes.count + 1,
+               let stroke = current.strokes.last {
                 let saved = model.drawing
-                DispatchQueue.main.async { canvasView.drawing = saved }
+                DispatchQueue.main.async { pad.paperDrawing = saved }
                 model.circled(stroke.renderBounds)
                 return
             }
             // 笔的手感参数（压力灵敏度、笔尖扁平度、稳定性）：把刚写的这一笔重新整理
             if byPen, model.tools.shapesPenStrokes,
-               canvasView.drawing.strokes.count == model.drawing.strokes.count + 1,
-               let shaped = Self.shaped(canvasView.drawing, tools: model.tools) {
+               current.strokes.count == model.drawing.strokes.count + 1,
+               let shaped = Self.shaped(current, tools: model.tools) {
                 let before = model.drawing
                 model.drawingChanged(shaped)
                 DispatchQueue.main.async { [weak self] in
@@ -640,17 +692,17 @@ struct NotebookCanvas: UIViewRepresentable {
                     if let undoManager = canvasView.undoManager, undoManager.canUndo {
                         undoManager.undo()
                     }
-                    self.replace(canvasView, with: shaped, undoTo: before)
+                    self.replace(pad, with: shaped, undoTo: before)
                 }
                 return
             }
-            model.drawingChanged(canvasView.drawing)
+            model.drawingChanged(current)
         }
 
         /// 用代码换掉画布上的笔迹，PencilKit 不会记撤销，自己记：撤销回到写这一笔之前，重做再放回来
-        private func replace(_ canvasView: PKCanvasView, with drawing: PKDrawing, undoTo previous: PKDrawing) {
+        private func replace(_ canvasView: PadCanvasView, with drawing: PKDrawing, undoTo previous: PKDrawing) {
             let undoManager = canvasView.undoManager
-            canvasView.drawing = drawing
+            canvasView.paperDrawing = drawing
             model.drawingChanged(drawing)
             undoManager?.registerUndo(withTarget: self) { coordinator in
                 coordinator.replace(canvasView, with: previous, undoTo: drawing)
@@ -851,7 +903,7 @@ final class PageInkLayout {
             canvas.zoomScale = scale
             // 缩放变了 PencilKit 不一定重画：放回一次笔迹逼它重画
             if canvas.pendingDrawing == nil, !canvas.drawing.strokes.isEmpty {
-                canvas.replaceDrawing(canvas.drawing)
+                canvas.replaceDrawing(canvas.paperDrawing)
             }
         }
         // 页面内容的原点在画布上的位置
@@ -1311,6 +1363,7 @@ struct NotebookCanvas: View {
     @ObservedObject var model: HandwritingModel
     @ObservedObject var tools: InkTools
     var host: InkHost?
+    var overflow: CGFloat = 0
     var body: some View { Color.clear }
 }
 

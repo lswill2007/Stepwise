@@ -825,6 +825,9 @@ struct NoteTextBlockView<MenuContent: View>: View {
 
     private var isEditing: Bool { editing == block.id }
 
+    /// 涂鸦画布比文字四周各大出多少（纸的坐标）：从文字里写到页边、块和块之间的笔画不会在文字边上被截断
+    private static var inkOverflow: CGFloat { 160 }
+
     var body: some View {
         // 页面宽时批注写在右边页边，和这一块顶端对齐；窄时写在这一块下面
         // 展开、收起页边用同一个分支，只改留白和批注栏的尺寸：换分支会把这一块（连同排版的网页）整个重建，
@@ -944,7 +947,8 @@ struct NoteTextBlockView<MenuContent: View>: View {
                         // 涂鸦层盖在文字上：笔写字、画荧光笔；手指照样能选字、翻页
                         .overlay {
                             if let ink {
-                                NotebookCanvas(model: ink, tools: ink.tools, host: inkHost)
+                                NotebookCanvas(model: ink, tools: ink.tools, host: inkHost, overflow: Self.inkOverflow)
+                                    .padding(-Self.inkOverflow)
                             }
                         }
                         .overlay(alignment: .topLeading) {
