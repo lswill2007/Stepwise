@@ -52,6 +52,8 @@ extension Tutor {
         ## 小节标题
         正文（Markdown：列表、**加粗**、表格；公式用 LaTeX）
         </note>
+
+        笔记显示在平板上，一行放不下太多字：表格尽量窄，一般不超过 4 列，单元格只写简短的词语或公式，较长的解释写在表格下面。
         """
         let exerciseFormat = """
             <exercise>

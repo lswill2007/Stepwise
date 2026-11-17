@@ -464,8 +464,16 @@ enum MathTemplate {
         el.classList.remove("wrap");
         if (el.getBoundingClientRect().width > w + 1) el.classList.add("wrap");
       });
+      // 表格：先不换行；放不下就整张表的字缩小到刚好放下，缩到 0.6 还放不下才换行
       box.querySelectorAll("table").forEach(function (t) {
+        t.style.fontSize = "";
         t.classList.add("nw");
+        for (var k = 0; k < 3 && t.scrollWidth > t.clientWidth + 1; k++) {
+          var cur = parseFloat(t.style.fontSize) || 1;
+          var r = Math.max(0.6, Math.floor(cur * t.clientWidth / t.scrollWidth * 100) / 100);
+          if (r >= cur) break;
+          t.style.fontSize = r + "em";
+        }
         if (t.scrollWidth > t.clientWidth + 1) t.classList.remove("nw");
       });
       box.querySelectorAll(".katex-display").forEach(function (d) {
@@ -484,7 +492,11 @@ enum MathTemplate {
       if (box.clientWidth !== lastWidth) { lastWidth = box.clientWidth; fit(); post(); }
     });
 
-    function draw() { box.innerHTML = md(SRC); applyHL(); fit(); lastWidth = box.clientWidth; post(); }
+    function draw() {
+      box.innerHTML = md(SRC); applyHL(); fit(); lastWidth = box.clientWidth; post();
+      // 字体（公式字体、中文字体）加载完宽度会变：再量一次，表格、公式按真正的宽度缩放
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { fit(); post(); });
+    }
 
     function setContent(s, scale, tone, hl) {
       SRC = s;

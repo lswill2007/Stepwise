@@ -357,6 +357,8 @@ struct NoteDocView: View {
     /// 整页涂鸦层的位置（页边、块和块之间也能写）
     @State private var pageInk = PageInkLayout()
     @State private var editing: UUID?
+    /// 正在圈出来问的那一块：提问框在页边，页边要展开
+    @State private var askingBlock: UUID?
     @State private var selection: Selection?
     @State private var showAskField = false
     @State private var askText = ""
@@ -519,7 +521,7 @@ struct NoteDocView: View {
     /// 页边有展开的批注（或做题时被引导来看笔记的提示）：正文往左让出页边
     private func marginOpen(_ doc: NoteDoc) -> Bool {
         guard commentMargin != nil else { return false }
-        if store.activeNoteGuide?.noteID == noteID { return true }
+        if askingBlock != nil || store.activeNoteGuide?.noteID == noteID { return true }
         return (doc.comments ?? []).contains { !$0.minimized }
     }
 
@@ -563,6 +565,8 @@ struct NoteDocView: View {
                               paperScale: paperScale(doc),
                               guide: store.activeNoteGuide?.noteID == noteID && store.activeNoteGuide?.blockID == block.id
                                   ? store.activeNoteGuide : nil,
+                              asking: askingBlock == block.id,
+                              onAskChange: { askChanged($0, in: block.id) },
                               onSelect: { handleSelection($0, in: block.id) },
                               onExercises: { exercises(count: $0, after: block) }) {
                 blockMenu(block, in: doc)
@@ -621,6 +625,16 @@ struct NoteDocView: View {
                 .contentShape(Rectangle())
         }
         .accessibilityLabel("这一块的操作")
+    }
+
+    /// 圈出来问：同一时间只在一块上问，换到别的块时把上一块圈的撤掉
+    private func askChanged(_ asking: Bool, in blockID: UUID) {
+        if asking {
+            if let old = askingBlock, old != blockID { ink.existingModel(for: old)?.circledRegion = nil }
+            askingBlock = blockID
+        } else if askingBlock == blockID {
+            askingBlock = nil
+        }
     }
 
     private func addTextBlock(after: UUID?) {
@@ -789,6 +803,9 @@ struct NoteTextBlockView<MenuContent: View>: View {
     let paperScale: CGFloat
     /// 做题卡住时被引导来看的就是这一块：临时荧光笔标出重点，页边有“详细记录”
     let guide: NoteGuide?
+    /// 这一块上圈出来问，提问框正开着
+    let asking: Bool
+    let onAskChange: (Bool) -> Void
     let onSelect: (String) -> Void
     /// 小节下面的“出例题”，参数是出几道
     let onExercises: (Int) -> Void
@@ -798,6 +815,8 @@ struct NoteTextBlockView<MenuContent: View>: View {
     @FocusState private var focused: Bool
     /// 文字视图，涂鸦层把书写手势挂上去
     @State private var inkHost = InkHost()
+    /// 正文的高度：最后一条批注最多写到哪里
+    @State private var contentHeight: CGFloat = 0
 
     private var isEditing: Bool { editing == block.id }
 
@@ -807,31 +826,76 @@ struct NoteTextBlockView<MenuContent: View>: View {
         // 重建时高度一下变成 0，页面就被弹回最上面
         if let commentMargin {
             content
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
                 // 展开：批注浮在页边，不占版面，长批注往下延伸也不会把下面的笔记推开
                 .padding(.trailing, marginOpen ? commentMargin + 16 : 0)
                 .overlay(alignment: .topTrailing) {
-                    commentColumn
+                    marginColumn(pinned: true)
                         .frame(width: marginOpen ? commentMargin : nil, alignment: .leading)
                         // 收起：小图标挂在这一块右边外面，点一下展开
-                        .fixedSize(horizontal: !marginOpen, vertical: !marginOpen)
+                        .fixedSize(horizontal: !marginOpen, vertical: true)
                         .alignmentGuide(.trailing) { marginOpen ? $0[.trailing] : $0[.leading] - 10 }
                 }
-                .zIndex(comments.isEmpty ? 0 : 1)
+                .zIndex(comments.isEmpty && !asking ? 0 : 1)
         } else {
             VStack(alignment: .trailing, spacing: 8) {
                 content
-                commentColumn.frame(maxWidth: 420, alignment: .leading)
+                marginColumn(pinned: false).frame(maxWidth: 420, alignment: .leading)
             }
         }
     }
 
+    /// 页边：圈出来问的回答写在圈住的地方右边，同一高度；提问框也在那里。
+    /// pinned 为 false 时（页面窄，没有页边）依次写在这一块下面
     @ViewBuilder
-    private var commentColumn: some View {
-        if !comments.isEmpty || guide != nil {
-            VStack(alignment: .leading, spacing: 10) {
-                if let guide { NoteGuideCard(guide: guide) }
-                ForEach(Array(comments.enumerated()), id: \.element.id) { i, comment in
-                    NoteCommentView(noteID: noteID, comment: comment, number: i + 1)
+    private func marginColumn(pinned: Bool) -> some View {
+        if let ink {
+            AskRegionReader(ink: ink) { region in
+                marginItems(pinned: pinned, askRegion: asking ? region : nil, ink: ink)
+            }
+        } else {
+            marginItems(pinned: pinned, askRegion: nil, ink: nil)
+        }
+    }
+
+    @ViewBuilder
+    private func marginItems(pinned: Bool, askRegion: CGRect?, ink: HandwritingModel?) -> some View {
+        let numbered = Array(comments.enumerated())
+        // 按圈住的位置从上到下
+        let entries: [MarginEntry] = (guide.map { [MarginEntry.guide($0)] } ?? [])
+            + numbered.map { MarginEntry.comment($0.element, number: $0.offset + 1, y: $0.element.region.rect.minY * paperScale) }
+            + (askRegion.map { [MarginEntry.ask(y: $0.minY * paperScale)] } ?? [])
+        let sorted = pinned ? entries.sorted { $0.y < $1.y } : entries.sorted { $0.order < $1.order }
+        if !sorted.isEmpty {
+            PinnedColumn(spacing: pinned ? 8 : 10, pinned: pinned) {
+                ForEach(Array(sorted.enumerated()), id: \.element.id) { i, entry in
+                    marginEntry(entry, room: pinned && marginOpen ? room(after: i, in: sorted) : nil, ink: ink)
+                        .layoutValue(key: PinY.self, value: entry.y)
+                }
+            }
+        }
+    }
+
+    /// 这一条往下能写多高：写到下一条圈住的地方为止；最后一条写到这一块底下。不够写就压缩
+    private func room(after i: Int, in entries: [MarginEntry]) -> CGFloat {
+        let y = entries[i].y
+        let next = entries.dropFirst(i + 1).first?.y ?? max(contentHeight + 40, y + 180)
+        return max(next - y - 8, 90)
+    }
+
+    @ViewBuilder
+    private func marginEntry(_ entry: MarginEntry, room: CGFloat?, ink: HandwritingModel?) -> some View {
+        switch entry {
+        case .guide(let guide):
+            NoteGuideCard(guide: guide)
+        case .comment(let comment, let number, _):
+            NoteCommentView(noteID: noteID, comment: comment, number: number, room: room)
+        case .ask:
+            if let ink {
+                CircleAskCard(busy: busy) { question in
+                    send(question, ink: ink)
+                } cancel: {
+                    ink.circledRegion = nil
                 }
             }
         }
@@ -880,7 +944,7 @@ struct NoteTextBlockView<MenuContent: View>: View {
                         }
                         .overlay(alignment: .topLeading) {
                             if let ink {
-                                CircleAskAnchor(ink: ink, busy: busy) { send($0, ink: ink) }
+                                CircleAskAnchor(ink: ink, onAskChange: onAskChange)
                             }
                         }
                         .modifier(NotePaper(width: paperWidth, scale: paperScale))
@@ -927,6 +991,8 @@ struct NoteTextBlockView<MenuContent: View>: View {
 
     private func send(_ question: String, ink: HandwritingModel) {
         guard let region = ink.circledRegion else { return }
+        // 提问框换成这条批注（同一个位置）
+        defer { ink.circledRegion = nil }
         let ask = { (image: Data?) in
             store.askCircled(noteID, blockID: block.id, region: InkRegion(region), question: question, image: image)
         }
@@ -982,12 +1048,10 @@ private struct AnswerRule: ViewModifier {
     }
 }
 
-/// 圈完一处：在圈住的地方画虚线框，从那里弹出提问框
+/// 圈完一处：在圈住的地方画虚线框；提问框在右边页边、同一高度（见 CircleAskCard）
 private struct CircleAskAnchor: View {
     @ObservedObject var ink: HandwritingModel
-    let busy: Bool
-    let send: (String) -> Void
-    @State private var showAsk = false
+    let onAskChange: (Bool) -> Void
 
     var body: some View {
         let r = ink.circledRegion ?? .zero
@@ -999,55 +1063,127 @@ private struct CircleAskAnchor: View {
                     .frame(width: r.width, height: r.height)
                     .offset(x: r.minX, y: r.minY)
             }
-            Color.clear
-                .frame(width: max(r.width, 1), height: max(r.height, 1))
-                .padding(.leading, max(0, r.minX))
-                .padding(.top, max(0, r.minY))
-                .popover(isPresented: $showAsk) {
-                    CircleAskPopover(busy: busy) { question in
-                        send(question)
-                        showAsk = false
-                    }
-                    .onDisappear { ink.circledRegion = nil }
-                }
         }
         .allowsHitTesting(false)
-        .onChange(of: ink.circledRegion) {
-            guard ink.circledRegion != nil else { return }
-            // 等圈的那一笔抬起来再弹出，否则会被同一次触摸关掉
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                if ink.circledRegion != nil { showAsk = true }
-            }
+        .onChange(of: ink.circledRegion != nil) { onAskChange(ink.circledRegion != nil) }
+        .onDisappear { if ink.circledRegion != nil { onAskChange(false) } }
+    }
+}
+
+/// 页边上的一条：引导卡、批注或提问框；y 是它想对齐的高度（这一块里的坐标）
+private enum MarginEntry: Identifiable {
+    case guide(NoteGuide)
+    case comment(NoteComment, number: Int, y: CGFloat)
+    case ask(y: CGFloat)
+
+    var id: String {
+        switch self {
+        case .guide: return "guide"
+        case .comment(let c, _, _): return c.id.uuidString
+        case .ask: return "ask"
+        }
+    }
+
+    var y: CGFloat {
+        switch self {
+        case .guide: return 0
+        case .comment(_, _, let y), .ask(let y): return y
+        }
+    }
+
+    /// 页面窄、写在下面时的顺序：引导、提问框、批注
+    var order: Int {
+        switch self {
+        case .guide: return 0
+        case .ask: return 1
+        case .comment(_, let n, _): return 1 + n
         }
     }
 }
 
-/// 圈完一处后弹出：常用问题，或者写下想问的（可以直接用 Apple Pencil 写，系统转成文字）
-private struct CircleAskPopover: View {
+private struct PinY: LayoutValueKey {
+    static let defaultValue: CGFloat = 0
+}
+
+/// 页边一栏：每一条放在它想对齐的高度，和上一条挤到一起时往下让；pinned 为 false 时一条接一条往下排
+private struct PinnedColumn: Layout {
+    var spacing: CGFloat
+    var pinned: Bool
+
+    private func arrange(_ subviews: Subviews, width: CGFloat?) -> (tops: [CGFloat], sizes: [CGSize]) {
+        var tops: [CGFloat] = []
+        var sizes: [CGSize] = []
+        var bottom: CGFloat?
+        for view in subviews {
+            let size = view.sizeThatFits(ProposedViewSize(width: width, height: nil))
+            let want = pinned ? max(0, view[PinY.self]) : 0
+            let top = bottom.map { max(want, $0 + spacing) } ?? want
+            tops.append(top)
+            sizes.append(size)
+            bottom = top + size.height
+        }
+        return (tops, sizes)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let (tops, sizes) = arrange(subviews, width: proposal.width)
+        let height = zip(tops, sizes).map { $0 + $1.height }.max() ?? 0
+        let width = proposal.width ?? (sizes.map(\.width).max() ?? 0)
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (tops, _) = arrange(subviews, width: proposal.width ?? bounds.width)
+        for (view, top) in zip(subviews, tops) {
+            view.place(at: CGPoint(x: bounds.minX, y: bounds.minY + top), anchor: .topLeading,
+                       proposal: ProposedViewSize(width: proposal.width ?? bounds.width, height: nil))
+        }
+    }
+}
+
+/// 跟着圈住的地方变：提问框出现、消失
+private struct AskRegionReader<Content: View>: View {
+    @ObservedObject var ink: HandwritingModel
+    @ViewBuilder let content: (CGRect?) -> Content
+    var body: some View { content(ink.circledRegion) }
+}
+
+/// 圈完一处后在右边页边、同一高度出现的提问框：常用问题，或者写下想问的（可以直接用 Apple Pencil 写，系统转成文字）
+private struct CircleAskCard: View {
     let busy: Bool
     let send: (String) -> Void
+    let cancel: () -> Void
     @State private var text = ""
     @FocusState private var focused: Bool
 
     static let quick = ["这是什么意思？", "为什么是这样？", "举个例子", "和前面有什么联系？"]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("问圈出来的这段").font(.headline)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("问圈出来的这段").font(.caption.weight(.semibold)).foregroundStyle(Ink.blue)
+                Spacer(minLength: 0)
+                Button(action: cancel) {
+                    Image(systemName: "xmark").font(.caption.weight(.semibold))
+                }
+                .buttonStyle(InkTextButtonStyle(color: .secondary))
+                .accessibilityLabel("不问了")
+            }
             TextField("想问什么…", text: $text, axis: .vertical)
                 .focused($focused)
+                .font(.callout)
                 .lineLimit(1...4)
-                .padding(10)
-                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                .padding(8)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
                 .onSubmit { submit(text) }
-            FlowLayout(spacing: 14) {
+            FlowLayout(spacing: 10) {
                 ForEach(Self.quick, id: \.self) { q in
-                    Button(q) { submit(q) }
+                    Button(q) { submit(q) }.font(.caption)
                 }
             }
             .buttonStyle(InkTextButtonStyle())
             Button { submit(text) } label: {
-                Text("发送").frame(maxWidth: .infinity)
+                Text("发送").font(.callout).frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1055,10 +1191,12 @@ private struct CircleAskPopover: View {
                 Text("正在回答上一个问题，稍等一下").font(.caption).foregroundStyle(.secondary)
             }
         }
-        .padding(18)
-        .frame(width: 360)
-        // 直接打字：弹出就聚焦输入框
-        .onAppear { focused = true }
+        .padding(10)
+        .background(Ink.blue.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .stroke(Ink.blue.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
+        // 直接打字：出现就聚焦输入框（等圈的那一笔抬起来）
+        .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { focused = true } }
     }
 
     private func submit(_ q: String) {
@@ -1073,9 +1211,53 @@ struct NoteCommentView: View {
     let noteID: UUID
     let comment: NoteComment
     let number: Int
+    /// 在页边能写多高（写到下一条批注为止）；写不下就把回答的字缩小，最小缩到 minFit，再写不下只显示前面的、双击看全文。
+    /// 为 nil 时不限高度
+    var room: CGFloat? = nil
     @State private var enlarged = false
+    /// 回答的字缩小到多少
+    @State private var fit: CGFloat = 1
+    /// 整条批注的高度、回答完整显示时的高度
+    @State private var cardHeight: CGFloat = 0
+    @State private var answerHeight: CGFloat = 0
+    /// 回答实际显示出来的高度（写不下时只显示一部分）
+    @State private var shownAnswerHeight: CGFloat = 0
+
+    private static let minFit: CGFloat = 0.7
 
     private var streaming: Bool { store.noteJobs[noteID]?.commentID == comment.id }
+
+    /// 除了回答以外占的高度（问题、按钮、留白）
+    private var otherHeight: CGFloat { max(0, cardHeight - shownAnswerHeight) }
+
+    /// 页边地方不够，正在压缩：问题只写一行，“记到笔记”放进 ⋯ 菜单
+    private var compact: Bool { room != nil && fit < 0.995 }
+
+    /// 字已经缩到最小还写不下：回答只显示这么高
+    private var answerCap: CGFloat? {
+        guard let room, fit <= Self.minFit + 0.005, answerHeight > 0 else { return nil }
+        let other = otherHeight
+        guard other + answerHeight > room + 1 else { return nil }
+        return max(36, room - other)
+    }
+
+    /// 量到新高度后重新算字号：回答的高度大约和字号的平方成正比
+    private func refit() {
+        guard let room, answerHeight > 1, cardHeight > 1 else {
+            if room == nil, fit != 1 { fit = 1 }
+            return
+        }
+        let other = otherHeight
+        let natural = other + answerHeight
+        let answerRoom = max(room - other, 20)
+        var target = fit * (answerRoom / answerHeight).squareRoot()
+        target = min(1, max(Self.minFit, target))
+        let tooTall = natural > room + 1
+        let roomy = natural < room * 0.85
+        if (tooTall && target < fit - 0.01) || (roomy && target > fit + 0.03) {
+            fit = (target * 100).rounded(.down) / 100
+        }
+    }
 
     var body: some View {
         if comment.minimized {
@@ -1097,11 +1279,15 @@ struct NoteCommentView: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("\(number)").font(.caption2.weight(.bold)).foregroundStyle(Ink.blue)
-                    Text(comment.question).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(2)
+                    Text(comment.question).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(compact ? 1 : 2)
                     Spacer(minLength: 0)
                     if !streaming && !comment.answer.isEmpty {
                         Menu {
                             Button("放大查看", systemImage: "arrow.up.left.and.arrow.down.right") { enlarged = true }
+                            if compact && !comment.savedToNote {
+                                Button("把这个点记到笔记中", systemImage: "plus") { store.saveCommentToNote(noteID, comment.id) }
+                                    .disabled(store.noteJobs[noteID] != nil)
+                            }
                             Button("删除批注", systemImage: "trash", role: .destructive) { store.deleteComment(noteID, comment.id) }
                         } label: {
                             Image(systemName: "ellipsis").font(.caption).foregroundStyle(.secondary).frame(width: 22, height: 18)
@@ -1121,7 +1307,21 @@ struct NoteCommentView: View {
                         Text("正在写…").font(.caption).foregroundStyle(.secondary)
                     }
                 } else {
-                    RichText(comment.answer, scale: 0.82)
+                    RichText(comment.answer, scale: 0.82 * Double(fit))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { answerHeight = $0; refit() }
+                        .frame(maxHeight: answerCap, alignment: .top)
+                        .clipped()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shownAnswerHeight = $0; refit() }
+                        // 写不下的部分淡出，双击看全文
+                        .mask {
+                            if answerCap != nil {
+                                LinearGradient(stops: [.init(color: .black, location: 0.75), .init(color: .clear, location: 1)],
+                                               startPoint: .top, endPoint: .bottom)
+                            } else {
+                                Color.black
+                            }
+                        }
                         // 文字显示在网页视图里，点击会被它吃掉：盖一层透明的来接双击
                         .overlay {
                             Color.clear
@@ -1129,7 +1329,7 @@ struct NoteCommentView: View {
                                 .onTapGesture(count: 2) { enlarged = true }
                         }
                 }
-                if !streaming && !comment.answer.isEmpty {
+                if !streaming && !comment.answer.isEmpty && !compact {
                     if comment.savedToNote {
                         Label("已记到笔记", systemImage: "checkmark").font(.caption).foregroundStyle(.secondary)
                     } else {
@@ -1148,6 +1348,8 @@ struct NoteCommentView: View {
             .overlay(alignment: .leading) {
                 Rectangle().fill(Ink.blue.opacity(0.5)).frame(width: 2).padding(.vertical, 8)
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight = $0; refit() }
+            .onChange(of: room) { refit() }
             .sheet(isPresented: $enlarged) {
                 NavigationStack {
                     ScrollView {
