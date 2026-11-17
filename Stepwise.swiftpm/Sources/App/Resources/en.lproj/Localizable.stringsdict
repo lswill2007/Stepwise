@@ -615,5 +615,37 @@ Answer one correctly within %#@a@ in the Review List and it's removed automatica
 			<string>%lld notes</string>
 		</dict>
 	</dict>
+	<key>%lld 张便签</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld sticky note</string>
+			<key>other</key>
+			<string>%lld sticky notes</string>
+		</dict>
+	</dict>
+	<key>%lld 块白板</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@a@</string>
+		<key>a</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld whiteboard</string>
+			<key>other</key>
+			<string>%lld whiteboards</string>
+		</dict>
+	</dict>
 </dict>
 </plist>

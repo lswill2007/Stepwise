@@ -12,12 +12,14 @@ struct SidebarView: View {
         case renameFolder(UUID)
         case renameSet(UUID)
         case renameNote(UUID)
+        case renameBoard(UUID)
         var id: String {
             switch self {
             case .newFolder(let parent): return "new-\(parent?.uuidString ?? "root")"
             case .renameFolder(let id): return "folder-\(id)"
             case .renameSet(let id): return "set-\(id)"
             case .renameNote(let id): return "note-\(id)"
+            case .renameBoard(let id): return "board-\(id)"
             }
         }
     }
@@ -25,23 +27,10 @@ struct SidebarView: View {
     @State private var nameText = ""
     @State private var deletingFolder: Folder?
     @State private var deletingNote: NoteDoc?
+    @State private var deletingBoard: Whiteboard?
 
     var body: some View {
-        // 题集、错题本和笔记共用一个选中状态
-        List(selection: Binding(get: { store.selectedNoteID ?? store.selectedSetID }, set: { id in
-            if let id, store.note(id) != nil {
-                store.selectNote(id)
-                return
-            }
-            store.selectedNoteID = nil
-            store.selectedSetID = id
-            if id == AppStore.mistakeBookID {
-                store.selectedQuestionID = store.starredEntries.first?.question.id
-            } else {
-                store.selectedQuestionID = store.set(id)?.questions.first(where: { !$0.status.isDone })?.id
-                    ?? store.set(id)?.questions.first?.id
-            }
-        })) {
+        List(selection: selectionBinding) {
             if !store.questionSets.isEmpty {
                 Section {
                     HStack(spacing: 10) {
@@ -73,6 +62,7 @@ struct SidebarView: View {
             } header: {
                 Text("笔记")
             }
+            boardsSection
             Section {
                 FolderContents(parent: nil, actions: actions)
                 if !store.questionSets.isEmpty || !store.folders.isEmpty {
@@ -94,7 +84,7 @@ struct SidebarView: View {
             }
         }
         .overlay {
-            if store.questionSets.isEmpty && store.folders.isEmpty && store.notes.isEmpty {
+            if store.questionSets.isEmpty && store.folders.isEmpty && store.notes.isEmpty && store.boards.isEmpty {
                 ContentUnavailableView {
                     Label("还没有题目", systemImage: "doc.text.magnifyingglass")
                 } description: {
@@ -111,6 +101,7 @@ struct SidebarView: View {
                 Menu {
                     Button("导入题目", systemImage: "doc.text") { showImport = true }
                     Button("导入资料生成笔记", systemImage: "doc.richtext") { showNoteImport = true }
+                    Button("新建白板", systemImage: "rectangle.and.pencil.and.ellipsis") { store.createBoard() }
                 } label: {
                     Label("导入", systemImage: "plus")
                 }
@@ -148,6 +139,57 @@ struct SidebarView: View {
         } message: {
             Text("笔记和里面的练习题、手写作答都会删除，不能恢复。")
         }
+        .confirmationDialog(
+            "删除白板“\(deletingBoard?.title ?? "")”？",
+            isPresented: Binding(get: { deletingBoard != nil }, set: { if !$0 { deletingBoard = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("删除白板", role: .destructive) {
+                if let id = deletingBoard?.id { store.deleteBoard(id) }
+                deletingBoard = nil
+            }
+        } message: {
+            Text("白板上的笔迹和便签都会删除，不能恢复。")
+        }
+    }
+
+    /// 题集、错题本、笔记和白板共用一个选中状态
+    private var selectionBinding: Binding<UUID?> {
+        Binding(get: { store.selectedBoardID ?? store.selectedNoteID ?? store.selectedSetID }, set: { id in
+            if let id, store.board(id) != nil {
+                store.selectBoard(id)
+                return
+            }
+            store.selectedBoardID = nil
+            if let id, store.note(id) != nil {
+                store.selectNote(id)
+                return
+            }
+            store.selectedNoteID = nil
+            store.selectedSetID = id
+            if id == AppStore.mistakeBookID {
+                store.selectedQuestionID = store.starredEntries.first?.question.id
+            } else {
+                store.selectedQuestionID = store.set(id)?.questions.first(where: { !$0.status.isDone })?.id
+                    ?? store.set(id)?.questions.first?.id
+            }
+        })
+    }
+
+    private var boardsSection: some View {
+        Section {
+            ForEach(store.boards) { board in
+                BoardRow(board: board, rename: { startEdit(.renameBoard(board.id)) }, delete: { deletingBoard = board })
+            }
+            Button {
+                store.createBoard()
+            } label: {
+                Label("新建白板", systemImage: "rectangle.badge.plus")
+                    .foregroundStyle(Color.accentColor)
+            }
+        } header: {
+            Text("AI 白板")
+        }
     }
 
     private var actions: SidebarActions {
@@ -160,6 +202,7 @@ struct SidebarView: View {
         case .renameFolder: return L("重命名文件夹")
         case .renameSet: return L("重命名题集")
         case .renameNote: return L("重命名笔记")
+        case .renameBoard: return L("重命名白板")
         case nil: return ""
         }
     }
@@ -170,6 +213,7 @@ struct SidebarView: View {
         case .renameFolder(let id): nameText = store.folder(id)?.name ?? ""
         case .renameSet(let id): nameText = store.set(id)?.title ?? ""
         case .renameNote(let id): nameText = store.note(id)?.title ?? ""
+        case .renameBoard(let id): nameText = store.board(id)?.title ?? ""
         }
         nameEdit = edit
     }
@@ -181,6 +225,7 @@ struct SidebarView: View {
         case .renameFolder(let id): store.renameFolder(id, to: name)
         case .renameSet(let id): if !name.isEmpty { store.renameSet(id, to: name) }
         case .renameNote(let id): if !name.isEmpty { store.renameNote(id, to: name) }
+        case .renameBoard(let id): if !name.isEmpty { store.renameBoard(id, to: name) }
         case nil: break
         }
         nameEdit = nil
@@ -281,6 +326,46 @@ struct FolderNode: View {
 }
 
 /// 左侧的一篇笔记
+/// 左侧的一块白板
+struct BoardRow: View {
+    @EnvironmentObject var store: AppStore
+    let board: Whiteboard
+    let rename: () -> Void
+    let delete: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(board.title).font(.headline).lineLimit(2)
+                HStack(spacing: 6) {
+                    if store.boardJobs[board.id] != nil {
+                        ProgressView().controlSize(.mini)
+                        Text("正在回复…")
+                    } else {
+                        Text(board.notes.isEmpty ? L("还没有便签") : String(localized: "\(board.notes.count) 张便签"))
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+            Menu { menuItems } label: {
+                Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("白板操作")
+        }
+        .padding(.vertical, 4)
+        .tag(board.id)
+        .contextMenu { menuItems }
+    }
+
+    @ViewBuilder
+    private var menuItems: some View {
+        Button("重命名", systemImage: "pencil", action: rename)
+        Button("删除", systemImage: "trash", role: .destructive, action: delete)
+    }
+}
+
 struct NoteRow: View {
     @EnvironmentObject var store: AppStore
     let doc: NoteDoc

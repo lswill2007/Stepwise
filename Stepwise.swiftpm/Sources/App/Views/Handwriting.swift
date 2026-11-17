@@ -292,6 +292,8 @@ final class HandwritingModel: ObservableObject {
     @Published var circledRegion: CGRect?
     /// 橡皮擦经过的位置（手写区坐标）：用来擦掉叠在纸上的批改标注，它们不是笔迹，PencilKit 的橡皮擦不到
     var onEraserTouch: ((CGPoint) -> Void)?
+    /// 圈选提问画完一笔时交给这里（白板：按圈的形状选出里面的笔迹），不设就按圈住的方框处理
+    var onCircleStroke: ((PKStroke) -> Void)?
     /// 手写区上要不要标出圈选提问的蓝框。一开始继续写字就藏起来，免得挡着书写；点页边的“问”再显示
     @Published var askRegionVisible = false
 
@@ -373,6 +375,16 @@ final class HandwritingModel: ObservableObject {
         return image
     }
 
+    /// 圈选提问画完一笔：交给白板，或者按圈住的方框处理
+    func circled(stroke: PKStroke) {
+        if let onCircleStroke {
+            onCircleStroke(stroke)
+            tools.finishAsk()
+        } else {
+            circled(stroke.renderBounds)
+        }
+    }
+
     /// 圈选提问画完一笔：这一笔不留在纸上，记下圈住的地方。只点了一下就当作圈住这一行
     func circled(_ bounds: CGRect) {
         var region = bounds
@@ -400,6 +412,15 @@ final class HandwritingModel: ObservableObject {
     }
 
     func addSpace() { height += Self.growStep }
+
+    /// 画布变高以后 PencilKit 有时不重画已有的笔迹（笔记里的手写块是缩放过的）：停一下放回一次逼它重画
+    func redrawSoon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, let canvas = self.canvas, canvas.pendingDrawing == nil,
+                  !self.strokeInProgress, !canvas.drawing.strokes.isEmpty else { return }
+            canvas.replaceDrawing(canvas.paperDrawing)
+        }
+    }
 
     /// 写字时推迟的加长：等正在写的这一笔写完再加长
     private var pendingHeight: CGFloat?
@@ -595,7 +616,8 @@ struct NotebookCanvas: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
 
-    final class Coordinator: NSObject, PKCanvasViewDelegate, UIPencilInteractionDelegate {
+    /// 白板的画布在这个基础上再看滚动、缩放和框选（BoardCanvas.Coordinator）
+    class Coordinator: NSObject, PKCanvasViewDelegate, UIPencilInteractionDelegate {
         let model: HandwritingModel
         /// 用户正在用笔（或手指）写，下一次笔迹变化是用户写的
         private var penDown = false
@@ -660,7 +682,7 @@ struct NotebookCanvas: UIViewRepresentable {
                 if byPen, model.tools.tool == .ask, let stroke = pad.paperDrawing.strokes.last {
                     // 圈的这一笔不留：只放回恢复的笔迹
                     DispatchQueue.main.async { pad.paperDrawing = pending }
-                    model.circled(stroke.renderBounds)
+                    model.circled(stroke: stroke)
                 } else {
                     model.drawingChanged(merged)
                 }
@@ -677,7 +699,7 @@ struct NotebookCanvas: UIViewRepresentable {
                let stroke = current.strokes.last {
                 let saved = model.drawing
                 DispatchQueue.main.async { pad.paperDrawing = saved }
-                model.circled(stroke.renderBounds)
+                model.circled(stroke: stroke)
                 return
             }
             // 笔的手感参数（压力灵敏度、笔尖扁平度、稳定性）：把刚写的这一笔重新整理
@@ -1348,6 +1370,7 @@ final class HandwritingModel: ObservableObject {
     @Published var askRegionVisible = false
     var onEraserTouch: ((CGPoint) -> Void)?
     func addSpace() {}
+    func redrawSoon() {}
     func inkSpan(inRow row: Int) -> ClosedRange<CGFloat>? { nil }
     func exportJPEG(highlight: CGRect? = nil) -> Data? { nil }
     func shiftStrokes(below y: CGFloat, by dy: CGFloat) {}

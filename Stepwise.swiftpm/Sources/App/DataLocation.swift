@@ -9,12 +9,14 @@ enum DataLocation {
     static let libraryFile = "library.json"
     static let foldersFile = "folders.json"
     static let notesFile = "notes.json"
+    /// AI 白板（笔迹在 drawings 里，按白板 id 存）
+    static let boardsFile = "boards.json"
     static let imagesFolder = "images"
     static let drawingsFolder = "drawings"
     /// API Key、服务商和选的模型（只在用户选的文件夹里有，见 SettingsFile）
     static let settingsFile = "settings.json"
-    static let jsonFiles = [foldersFile, notesFile, libraryFile]
-    static let ownNames: Set<String> = [libraryFile, foldersFile, notesFile, settingsFile, imagesFolder, drawingsFolder]
+    static let jsonFiles = [foldersFile, notesFile, boardsFile, libraryFile]
+    static let ownNames: Set<String> = [libraryFile, foldersFile, notesFile, boardsFile, settingsFile, imagesFolder, drawingsFolder]
 
     /// 选定的文件夹存成 bookmark 放在 UserDefaults；重装 App 后会清空，需要重新选
     static let bookmarkKey = "dataFolderBookmark"

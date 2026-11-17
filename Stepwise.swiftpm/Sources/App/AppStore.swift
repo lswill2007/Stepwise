@@ -35,7 +35,8 @@ final class AppStore: ObservableObject {
     @Published var sets: [QuestionSet] = [] { didSet { scheduleSave() } }
     /// 左侧的分级文件夹，单独存在 folders.json
     @Published var folders: [Folder] = [] { didSet { saveFolders() } }
-    @Published var selectedSetID: UUID?
+    /// 选了题集（或错题本）、笔记就不再显示白板
+    @Published var selectedSetID: UUID? { didSet { if selectedSetID != nil, selectedBoardID != nil { selectedBoardID = nil } } }
     @Published var selectedQuestionID: UUID?
     /// 错题复习结果提示
     @Published var reviewOutcomes: [UUID: ReviewOutcome] = [:]
@@ -43,7 +44,18 @@ final class AppStore: ObservableObject {
     // MARK: 笔记
     /// 笔记模式的文档，单独存在 notes.json
     @Published var notes: [NoteDoc] = [] { didSet { scheduleNotesSave() } }
-    @Published var selectedNoteID: UUID?
+    @Published var selectedNoteID: UUID? { didSet { if selectedNoteID != nil, selectedBoardID != nil { selectedBoardID = nil } } }
+
+    // MARK: 白板
+    /// AI 白板，单独存在 boards.json
+    @Published var boards: [Whiteboard] = [] { didSet { scheduleBoardsSave() } }
+    @Published var selectedBoardID: UUID?
+    /// 正在回复的便签（白板 id → 便签 id）；每块白板同时只问一处
+    @Published var boardJobs: [UUID: UUID] = [:]
+    var boardTasks: [UUID: Task<Void, Never>] = [:]
+    /// 左边便签列表点了哪一张，白板就滚到哪里
+    @Published var boardJump: UUID?
+    private var boardsSaveTask: Task<Void, Never>?
     /// 正在生成或回答的笔记（每篇笔记同时只有一个）
     @Published var noteJobs: [UUID: NoteJob] = [:]
     /// 左侧笔记目录点了哪一块，笔记就滚到哪一块
@@ -178,6 +190,7 @@ final class AppStore: ObservableObject {
     nonisolated private static var libraryURL: URL { DataLocation.url(DataLocation.libraryFile) }
     nonisolated private static var foldersURL: URL { DataLocation.url(DataLocation.foldersFile) }
     nonisolated private static var notesURL: URL { DataLocation.url(DataLocation.notesFile) }
+    nonisolated private static var boardsURL: URL { DataLocation.url(DataLocation.boardsFile) }
 
     /// 储存位置里有数据文件但读不出来（例如 iCloud 还没下载完）：这时不写盘，免得把原来的数据覆盖成空的
     @Published private(set) var writesBlocked = false
@@ -230,6 +243,7 @@ final class AppStore: ObservableObject {
     private struct DiskSnapshot {
         var sets: [QuestionSet] = []
         var notes: [NoteDoc] = []
+        var boards: [Whiteboard] = []
         var folders: [Folder] = []
         /// 存在但读不出来的文件
         var unreadable: [String] = []
@@ -266,6 +280,9 @@ final class AppStore: ObservableObject {
         if let data = load(notesURL), let decoded = try? JSONDecoder().decode([NoteDoc].self, from: data) {
             snapshot.notes = decoded
         }
+        if let data = load(boardsURL), let decoded = try? JSONDecoder().decode([Whiteboard].self, from: data) {
+            snapshot.boards = decoded
+        }
         if let data = load(foldersURL), let decoded = try? JSONDecoder().decode([Folder].self, from: data) {
             snapshot.folders = decoded
         }
@@ -292,6 +309,7 @@ final class AppStore: ObservableObject {
         }
         sets = snapshot.sets
         notes = snapshot.notes
+        boards = snapshot.boards
         folders = snapshot.folders
         repairFolders()
     }
@@ -318,12 +336,29 @@ final class AppStore: ObservableObject {
         writeSettingsFile()
         saveTask?.cancel()
         notesSaveTask?.cancel()
+        boardsSaveTask?.cancel()
         guard !writesBlocked else { return }
         if let data = try? JSONEncoder().encode(sets) {
             try? DataLocation.write(data, to: Self.libraryURL)
         }
         if let data = try? JSONEncoder().encode(notes) {
             try? DataLocation.write(data, to: Self.notesURL)
+        }
+        if let data = try? JSONEncoder().encode(boards) {
+            try? DataLocation.write(data, to: Self.boardsURL)
+        }
+    }
+
+    /// 便签在流式回复、拖动时变化很频繁，停一会儿再写盘
+    private func scheduleBoardsSave() {
+        guard !loading, !writesBlocked else { return }
+        boardsSaveTask?.cancel()
+        let snapshot = boards
+        let url = Self.boardsURL
+        boardsSaveTask = Task.detached(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled, let data = try? JSONEncoder().encode(snapshot) else { return }
+            try? DataLocation.write(data, to: url)
         }
     }
 
@@ -363,7 +398,7 @@ final class AppStore: ObservableObject {
     // MARK: - 储存位置
 
     /// AI 正在回复、生成笔记或在后台求解（这时不能换储存位置）
-    var hasBackgroundWork: Bool { !pending.isEmpty || !noteJobs.isEmpty || !presolving.isEmpty }
+    var hasBackgroundWork: Bool { !pending.isEmpty || !noteJobs.isEmpty || !presolving.isEmpty || !boardJobs.isEmpty }
 
     enum LocationChange {
         /// 目标是空的：把当前数据复制过去

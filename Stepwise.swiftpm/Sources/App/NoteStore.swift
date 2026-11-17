@@ -111,6 +111,15 @@ extension AppStore {
         }
     }
 
+    /// 手写块换纸；新加的手写块用上次选的纸
+    func setBlockPaper(_ docID: UUID, _ blockID: UUID, _ style: PaperStyle) {
+        UserDefaults.standard.set(style.rawValue, forKey: "noteCanvasPaper")
+        mutateNote(docID) { doc in
+            guard let i = doc.blocks.firstIndex(where: { $0.id == blockID }) else { return }
+            doc.blocks[i].paper = style
+        }
+    }
+
     func updateBlockText(_ docID: UUID, _ blockID: UUID, _ text: String) {
         mutateNote(docID) { doc in
             guard let i = doc.blocks.firstIndex(where: { $0.id == blockID }), doc.blocks[i].text != text else { return }
@@ -474,8 +483,13 @@ extension AppStore {
         }
         let comment = NoteComment(blockID: blockID, region: region, question: question)
         mutateNote(docID) { $0.comments = ($0.comments ?? []) + [comment] }
+        // 手写块没有文字：用它上面那一块笔记当上下文
+        var context = block.text
+        if block.kind == .canvas, let i = doc.blocks.firstIndex(where: { $0.id == blockID }) {
+            context = doc.blocks[..<i].last(where: { $0.kind == .text })?.text ?? ""
+        }
         let parts: [LLMContent] = (image.map { [LLMContent.image($0)] } ?? [])
-            + [.text(Tutor.noteCircleInstruction(block: block.text, question: question, hasImage: image != nil))]
+            + [.text(Tutor.noteCircleInstruction(block: context, question: question, hasImage: image != nil))]
         let system = Tutor.noteAskSystem(doc: doc)
         noteJobs[docID] = NoteJob(label: L("正在回答…"), commentID: comment.id)
         noteTasks[docID] = Task { [weak self] in

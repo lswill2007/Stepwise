@@ -164,5 +164,15 @@
 		<key>NSStringLocalizedFormatKey</key>
 		<string>，以及 %lld 篇筆記，都放在左側列表的最上面。</string>
 	</dict>
+	<key>%lld 张便签</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld 張便條</string>
+	</dict>
+	<key>%lld 块白板</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%lld 塊白板</string>
+	</dict>
 </dict>
 </plist>

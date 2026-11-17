@@ -19,11 +19,14 @@ struct LibraryBackup: Codable {
     var folders: [Folder]?
     /// 笔记；笔记里的练习题在 sets 里（noteID 指向笔记）。旧版本的备份没有
     var notes: [NoteDoc]?
+    /// AI 白板（笔迹在 drawings 里，按白板 id）。旧版本的备份没有
+    var boards: [Whiteboard]?
 
     /// notes：要一起导出的笔记，它们的练习题集由调用方放进 sets
-    init(sets: [QuestionSet], folders allFolders: [Folder] = [], notes: [NoteDoc] = []) {
+    init(sets: [QuestionSet], folders allFolders: [Folder] = [], notes: [NoteDoc] = [], boards: [Whiteboard] = []) {
         self.sets = sets
         self.notes = notes.isEmpty ? nil : notes
+        self.boards = boards.isEmpty ? nil : boards
         var needed: [Folder] = []
         for set in sets {
             var current = allFolders.first { $0.id == set.folderID }
@@ -49,6 +52,9 @@ struct LibraryBackup: Codable {
         for doc in notes {
             drawings[doc.id.uuidString] = DrawingStore.load(doc.id)
         }
+        for board in boards {
+            drawings[board.id.uuidString] = DrawingStore.load(board.id)
+        }
         self.drawings = drawings
     }
 
@@ -65,9 +71,11 @@ struct LibraryBackup: Codable {
         formatter.dateFormat = "yyyy-MM-dd HHmm"
         let questionSets = sets.filter { $0.noteID == nil }
         let noteCount = notes?.count ?? 0
-        let name = questionSets.count == 1 && noteCount == 0 ? questionSets[0].title
-            : noteCount == 1 && questionSets.isEmpty ? notes![0].title
-            : [questionSets.isEmpty ? nil : String(localized: "\(questionSets.count) 个题集"), noteCount == 0 ? nil : String(localized: "\(noteCount) 篇笔记")]
+        let boardCount = boards?.count ?? 0
+        let name = questionSets.count == 1 && noteCount == 0 && boardCount == 0 ? questionSets[0].title
+            : noteCount == 1 && questionSets.isEmpty && boardCount == 0 ? notes![0].title
+            : [questionSets.isEmpty ? nil : String(localized: "\(questionSets.count) 个题集"), noteCount == 0 ? nil : String(localized: "\(noteCount) 篇笔记"),
+               boardCount == 0 ? nil : String(localized: "\(boardCount) 块白板")]
                 .compactMap { $0 }.joined(separator: " ")
         let safeName = name.components(separatedBy: CharacterSet(charactersIn: "/\\:?*\"<>|")).joined(separator: "-")
         let url = FileManager.default.temporaryDirectory
@@ -98,10 +106,11 @@ struct BackupFile: Transferable {
     let sets: [QuestionSet]
     var folders: [Folder] = []
     var notes: [NoteDoc] = []
+    var boards: [Whiteboard] = []
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(exportedContentType: .json) { file in
-            SentTransferredFile(try LibraryBackup(sets: file.sets, folders: file.folders, notes: file.notes).write())
+            SentTransferredFile(try LibraryBackup(sets: file.sets, folders: file.folders, notes: file.notes, boards: file.boards).write())
         }
     }
 }
@@ -113,6 +122,7 @@ extension AppStore {
         /// 本机已有、作为副本导入的题集数
         var copies = 0
         var notes = 0
+        var boards = 0
     }
 
     /// 导入备份：只新增，不覆盖本机已有的内容。
@@ -211,6 +221,22 @@ extension AppStore {
         }
         notes.insert(contentsOf: importedNotes, at: 0)
         result.notes = importedNotes.count
+
+        // 白板：本机已有同一块时作为副本导入，笔迹跟着新 id
+        var importedBoards: [Whiteboard] = []
+        for var board in backup.boards ?? [] {
+            let oldID = board.id
+            if boards.contains(where: { $0.id == board.id }) {
+                board.id = UUID()
+                board.title += L("（导入）")
+            }
+            if let data = backup.drawings[oldID.uuidString], !DrawingStore.exists(board.id) {
+                DrawingStore.save(data, for: board.id)
+            }
+            importedBoards.append(board)
+        }
+        boards.insert(contentsOf: importedBoards, at: 0)
+        result.boards = importedBoards.count
 
         sets.insert(contentsOf: imported, at: 0)
         if select, let first = imported.first(where: { $0.noteID == nil }) {

@@ -331,6 +331,8 @@ struct NoteOutlineView: View {
             case .answer:
                 items.append(Item(id: block.id.uuidString, blockID: block.id,
                                   title: block.question ?? L("提问"), level: 4, icon: "questionmark.bubble"))
+            case .canvas:
+                items.append(Item(id: block.id.uuidString, blockID: block.id, title: L("手写"), level: 3, icon: "scribble"))
             }
         }
         return items
@@ -552,11 +554,11 @@ struct NoteDocView: View {
     @ViewBuilder
     private func blockView(_ block: NoteBlock, in doc: NoteDoc) -> some View {
         switch block.kind {
-        case .text, .answer:
+        case .text, .answer, .canvas:
             NoteTextBlockView(noteID: noteID, block: block, editing: $editing,
                               streaming: store.noteJobs[noteID]?.afterBlock == block.id,
                               busy: store.noteJobs[noteID] != nil,
-                              ink: block.kind == .text && HandwritingModel.isAvailable ? ink.model(for: block.id) : nil,
+                              ink: block.kind != .answer && HandwritingModel.isAvailable ? ink.model(for: block.id) : nil,
                               comments: (doc.comments ?? []).filter { $0.blockID == block.id },
                               commentMargin: commentMargin,
                               marginOpen: marginOpen(doc),
@@ -606,10 +608,18 @@ struct NoteDocView: View {
                 Button("整理进笔记", systemImage: "text.append") { store.integrateAnswer(noteID, block.id) }
                     .disabled(busy)
             }
-            if block.kind != .exercise {
+            if block.kind == .canvas {
+                Picker(selection: Binding(get: { block.paper ?? .dots }, set: { style in store.setBlockPaper(noteID, block.id, style) })) {
+                    ForEach(PaperStyle.allCases) { Label($0.title, systemImage: $0.icon).tag($0) }
+                } label: {
+                    Label("纸", systemImage: (block.paper ?? .dots).icon)
+                }
+                .pickerStyle(.menu)
+            } else if block.kind != .exercise {
                 Button("编辑", systemImage: "pencil") { editing = block.id }
             }
             Button("在下面加笔记块", systemImage: "text.badge.plus") { addTextBlock(after: block.id) }
+            Button("在下面加手写块", systemImage: "scribble.variable") { addCanvasBlock(after: block.id) }
             Divider()
             Button("上移", systemImage: "arrow.up") { store.moveBlock(noteID, block.id, by: -1) }
                 .disabled(index == 0)
@@ -643,11 +653,27 @@ struct NoteDocView: View {
         editing = block.id
     }
 
+    /// 手写块：和笔记一样宽的一块空白纸，写到底自动加长
+    private func addCanvasBlock(after: UUID?) {
+        var block = NoteBlock(kind: .canvas)
+        block.paper = PaperStyle(rawValue: UserDefaults.standard.string(forKey: "noteCanvasPaper") ?? "") ?? .dots
+        store.insertBlock(block, in: noteID, after: after)
+    }
+
     private func addRow(_ doc: NoteDoc) -> some View {
-        Button {
-            addTextBlock(after: nil)
-        } label: {
-            Label(doc.blocks.isEmpty ? L("写第一块笔记") : L("加一块笔记"), systemImage: "plus")
+        HStack(spacing: 22) {
+            Button {
+                addTextBlock(after: nil)
+            } label: {
+                Label(doc.blocks.isEmpty ? L("写第一块笔记") : L("加一块笔记"), systemImage: "plus")
+            }
+            if HandwritingModel.isAvailable {
+                Button {
+                    addCanvasBlock(after: nil)
+                } label: {
+                    Label("加一块手写", systemImage: "scribble.variable")
+                }
+            }
         }
         .buttonStyle(InkTextButtonStyle())
     }
@@ -915,7 +941,9 @@ struct NoteTextBlockView<MenuContent: View>: View {
                 if block.kind == .answer {
                     answerHeader
                 }
-                if isEditing {
+                if block.kind == .canvas {
+                    canvasArea
+                } else if isEditing {
                     TextField("写点什么…（支持 Markdown，公式写在 $ $ 里）", text: $draft, axis: .vertical)
                         .focused($focused)
                         .lineLimit(2...)
@@ -985,6 +1013,28 @@ struct NoteTextBlockView<MenuContent: View>: View {
         .onChange(of: focused) { if !focused && isEditing { commit() } }
     }
 
+    /// 手写块：和笔记一样宽的空白纸（按纸的坐标排，跟着正文一起缩放），写到底自动加长；圈出来问照样能用
+    @ViewBuilder
+    private var canvasArea: some View {
+        if let ink {
+            VStack(alignment: .leading, spacing: 4) {
+                NoteCanvasArea(model: ink, style: block.paper ?? .dots)
+                    .overlay(alignment: .topLeading) { circledMarks }
+                    .overlay(alignment: .topLeading) { CircleAskAnchor(ink: ink, onAskChange: onAskChange) }
+                    .modifier(NotePaper(width: paperWidth, scale: paperScale))
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) { ink.addSpace() }
+                } label: {
+                    Label("加长", systemImage: "arrow.down.to.line")
+                }
+                .font(.caption)
+                .buttonStyle(.borderless)
+            }
+        } else {
+            Text("手写块需要在 iPad 上使用").font(.callout).foregroundStyle(.secondary)
+        }
+    }
+
     /// 页边批注对应的圈：收起的批注不画
     private var circledMarks: some View {
         Canvas { context, _ in
@@ -1006,6 +1056,20 @@ struct NoteTextBlockView<MenuContent: View>: View {
             store.askCircled(noteID, blockID: block.id, region: InkRegion(region), question: question, image: image)
         }
         #if os(iOS)
+        // 手写块：只有笔迹，放在白底上发过去
+        if block.kind == .canvas {
+            let image = ink.drawingImage(in: region).map { strokes in
+                let format = UIGraphicsImageRendererFormat()
+                format.scale = 2
+                return UIGraphicsImageRenderer(size: strokes.size, format: format).image { _ in
+                    UIColor.white.setFill()
+                    UIRectFill(CGRect(origin: .zero, size: strokes.size))
+                    strokes.draw(at: .zero)
+                }
+            }
+            ask(image?.jpegData(compressionQuality: 0.85).flatMap { ImageUtil.normalizedJPEG($0, maxPixel: 1280) })
+            return
+        }
         // 把圈住的那一小段（排版后的文字和公式，加上上面的笔迹）截图发给 AI
         guard let web = inkHost.view as? WKWebView else { ask(nil); return }
         let config = WKSnapshotConfiguration()
@@ -1046,6 +1110,21 @@ struct NoteTextBlockView<MenuContent: View>: View {
     private func commit() {
         store.updateBlockText(noteID, block.id, draft.trimmingCharacters(in: .whitespacesAndNewlines))
         if editing == block.id { editing = nil }
+    }
+}
+
+/// 手写块的纸和画布：高度跟着笔迹（写到底自动加长），和练习题的手写区一样
+private struct NoteCanvasArea: View {
+    @ObservedObject var model: HandwritingModel
+    let style: PaperStyle
+
+    var body: some View {
+        NotebookCanvas(model: model, tools: model.tools)
+            .frame(height: model.height)
+            .background(PaperPattern(style: style))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.2)))
+            .onChange(of: model.height) { model.redrawSoon() }
     }
 }
 

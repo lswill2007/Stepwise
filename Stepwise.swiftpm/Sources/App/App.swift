@@ -49,7 +49,9 @@ struct RootView: View {
         NavigationSplitView(columnVisibility: $store.columnVisibility) {
             SidebarView(showImport: $showImport, showNoteImport: $showNoteImport, showSettings: $showSettings)
         } content: {
-            if let noteID = store.selectedNoteID, store.note(noteID) != nil {
+            if let boardID = store.selectedBoardID, store.board(boardID) != nil {
+                BoardOutlineView(boardID: boardID)
+            } else if let noteID = store.selectedNoteID, store.note(noteID) != nil {
                 NoteOutlineView(noteID: noteID)
             } else if store.isMistakeBook {
                 MistakeBookView()
@@ -61,7 +63,10 @@ struct RootView: View {
             }
         } detail: {
             // 整个题集（或错题本）是一本笔记本，中间的题目列表当目录用
-            if let noteID = store.selectedNoteID, store.note(noteID) != nil {
+            if let boardID = store.selectedBoardID, store.board(boardID) != nil {
+                WhiteboardView(boardID: boardID)
+                    .id(boardID)
+            } else if let noteID = store.selectedNoteID, store.note(noteID) != nil {
                 NoteDocView(noteID: noteID)
                     .id(noteID)
             } else if store.isMistakeBook {

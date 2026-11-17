@@ -153,6 +153,7 @@ struct SettingsView: View {
                     let r = store.importBackup(backup, select: false)
                     var message = String(localized: "已导入 \(r.sets) 个题集，共 \(r.questions) 道题")
                     message += r.notes > 0 ? String(localized: "，以及 \(r.notes) 篇笔记，都放在左侧列表的最上面。") : L("，放在左侧题集列表的最上面。")
+                    if r.boards > 0 { message += String(localized: "另外导入了 \(r.boards) 块白板。") }
                     if r.copies > 0 { message += String(localized: "其中 \(r.copies) 个题集本机已经有了，作为副本导入（名称后面带“导入”）。") }
                     importMessage = message
                 } catch {
@@ -298,6 +299,7 @@ struct ExportView: View {
     @EnvironmentObject var store: AppStore
     @State private var selected: Set<UUID> = []
     @State private var selectedNotes: Set<UUID> = []
+    @State private var selectedBoards: Set<UUID> = []
     @State private var initialized = false
 
     var body: some View {
@@ -362,10 +364,32 @@ struct ExportView: View {
                 }
             }
 
+            if !store.boards.isEmpty {
+                Section("选择要导出的白板") {
+                    ForEach(store.boards) { board in
+                        Button {
+                            if selectedBoards.contains(board.id) { selectedBoards.remove(board.id) } else { selectedBoards.insert(board.id) }
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: selectedBoards.contains(board.id) ? "checkmark.circle.fill" : "circle")
+                                    .font(.title3)
+                                    .foregroundStyle(selectedBoards.contains(board.id) ? Color.accentColor : Color.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(board.title).foregroundStyle(.primary)
+                                    Text("\(board.notes.count) 张便签").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             Section {
+                let chosenBoards = store.boards.filter { selectedBoards.contains($0.id) }
                 let parts = [chosen.isEmpty ? nil : String(localized: "\(chosen.count) 个题集"),
-                             chosenNotes.isEmpty ? nil : String(localized: "\(chosenNotes.count) 篇笔记")].compactMap { $0 }
-                ShareLink(item: BackupFile(sets: chosen + noteSets, folders: store.folders, notes: chosenNotes),
+                             chosenNotes.isEmpty ? nil : String(localized: "\(chosenNotes.count) 篇笔记"),
+                             chosenBoards.isEmpty ? nil : String(localized: "\(chosenBoards.count) 块白板")].compactMap { $0 }
+                ShareLink(item: BackupFile(sets: chosen + noteSets, folders: store.folders, notes: chosenNotes, boards: chosenBoards),
                           preview: SharePreview("Stepwise 备份（\(parts.joined(separator: "、"))）")) {
                     Label(parts.isEmpty ? L("请先选择题集或笔记") : L("导出 ") + parts.joined(separator: L("、")),
                           systemImage: "square.and.arrow.up")
@@ -381,6 +405,7 @@ struct ExportView: View {
             if !initialized {
                 selected = Set(store.questionSets.map(\.id))
                 selectedNotes = Set(store.notes.map(\.id))
+                selectedBoards = Set(store.boards.map(\.id))
                 initialized = true
             }
         }

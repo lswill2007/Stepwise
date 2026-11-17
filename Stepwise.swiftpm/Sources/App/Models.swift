@@ -202,6 +202,7 @@ struct NoteBlock: Codable, Identifiable, Equatable {
         case text       // 笔记正文（Markdown + LaTeX），AI 生成或自己写的
         case exercise   // 练习题：题目、手写区、批改都用做题页的
         case answer     // 选中文字提问后 AI 的回答
+        case canvas     // 手写块：和笔记一样宽的一块空白纸，写到底自动加长（笔迹按块 id 存）
     }
 
     var id = UUID()
@@ -212,4 +213,71 @@ struct NoteBlock: Codable, Identifiable, Equatable {
     /// 提问时选中的文字和问题
     var quote: String?
     var question: String?
+    /// 手写块的纸：点阵、方格或空白（旧数据没有，按点阵）
+    var paper: PaperStyle?
+}
+
+/// 空白纸的样式：白板和笔记里的手写块用。纸色不变，只画点或格子
+enum PaperStyle: String, Codable, CaseIterable, Identifiable {
+    case dots, grid, blank
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .dots: return L("点阵")
+        case .grid: return L("方格")
+        case .blank: return L("空白")
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .dots: return "circle.grid.3x3"
+        case .grid: return "squareshape.split.3x3"
+        case .blank: return "square"
+        }
+    }
+
+    /// 点和格子的间距（纸的坐标）
+    static let spacing: CGFloat = 28
+}
+
+/// AI 白板：一大张可以随便写的纸。写下题目和解答，框选一部分发给 AI 检查，回复以便签浮在画布上
+struct Whiteboard: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var title: String
+    var createdAt = Date()
+    var paper: PaperStyle = .dots
+    /// AI 的回复（便签），按发出的先后
+    var notes: [BoardNote] = []
+    /// 隐藏所有便签（随时可以再显示）
+    var notesHidden = false
+}
+
+/// 白板上的一组便签：框选一处发给 AI，回复写在一张便签上，指出的问题按行号在旁边列出
+struct BoardNote: Codable, Identifiable, Equatable {
+    var id = UUID()
+    /// 框住的地方（画布坐标）
+    var region: InkRegion
+    /// 便签左上角（画布坐标），可以拖动
+    var x: Double
+    var y: Double
+    /// 自己问的问题；nil 表示“检查”
+    var question: String?
+    /// 检查的结论：correct / wrong / unsure
+    var verdict: String?
+    var text = ""
+    var comments: [BoardComment] = []
+    /// 收起成一个小图标
+    var minimized = false
+    var createdAt = Date()
+    var model: String?
+}
+
+/// 便签里指出的一处：第几行（发给 AI 的图片左边印的行号）和那一行在画布上的位置
+struct BoardComment: Codable, Equatable {
+    var line: Int
+    var note: String
+    var rect: InkRegion?
 }
