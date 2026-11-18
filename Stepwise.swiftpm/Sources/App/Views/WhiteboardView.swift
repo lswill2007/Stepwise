@@ -835,10 +835,8 @@ private struct BoardStickyView: View {
         VStack(alignment: .leading, spacing: 8) {
             header
             if note.text.isEmpty {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.mini)
-                    Text(note.isCheck ? L("正在检查…") : L("正在写…")).font(.caption).foregroundStyle(.secondary)
-                }
+                GeneratingBadge(label: note.isCheck ? L("正在检查…") : L("正在写…"), startedAt: note.createdAt,
+                                compact: true) { store.stopBoardJob(boardID) }
             } else {
                 RichText(note.text, scale: 0.86)
                     .fixedSize(horizontal: false, vertical: true)

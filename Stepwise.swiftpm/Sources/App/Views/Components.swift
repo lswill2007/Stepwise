@@ -180,3 +180,64 @@ struct InkTextButtonStyle: ButtonStyle {
             .contentShape(Rectangle())
     }
 }
+
+/// AI 正在生成时的状态：带颜色的胶囊，闪动的 ✦、加粗的文字、一道光从左扫到右，后面是已经等了几秒，可以停止。
+/// 放在刚点的按钮旁边和正在写的地方，一眼看得出 AI 在干活
+struct GeneratingBadge: View {
+    let label: String
+    var startedAt: Date?
+    var tint: Color = Ink.pen
+    /// 小号：页边批注、便签里用
+    var compact = false
+    var stop: (() -> Void)?
+    @AppStorage("showTiming") private var showTiming = true
+    @State private var sweep = false
+
+    var body: some View {
+        HStack(spacing: compact ? 6 : 8) {
+            Image(systemName: "sparkles")
+                .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
+                .symbolEffect(.pulse, options: .repeating)
+            Text(label)
+                .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
+                .lineLimit(1)
+            if let startedAt, showTiming {
+                TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                    Text("\(max(0, Int(context.date.timeIntervalSince(startedAt)))) 秒")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(tint.opacity(0.7))
+                }
+            }
+            if let stop {
+                Divider().frame(height: 14)
+                Button(action: stop) {
+                    Label("停止", systemImage: "stop.fill")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("停止")
+            }
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, compact ? 9 : 12)
+        .padding(.vertical, compact ? 4 : 7)
+        .background(tint.opacity(0.13), in: Capsule())
+        .overlay(Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 1))
+        // 一道光从左扫到右，一直在动
+        .overlay {
+            GeometryReader { geo in
+                LinearGradient(colors: [.clear, .white.opacity(0.55), .clear], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: geo.size.width * 0.35)
+                    .offset(x: sweep ? geo.size.width : -geo.size.width * 0.35)
+            }
+            .clipShape(Capsule())
+            .blendMode(.plusLighter)
+            .allowsHitTesting(false)
+        }
+        .fixedSize()
+        .onAppear {
+            withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { sweep = true }
+        }
+    }
+}

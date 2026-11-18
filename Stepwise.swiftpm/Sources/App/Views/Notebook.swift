@@ -573,11 +573,9 @@ struct QuestionBlock: View {
                 }
             }
             Spacer(minLength: 8)
-            if busy {
-                Button { store.cancelReply(qID) } label: {
-                    Text("停止").lineLimit(1).fixedSize()
-                }
-                .buttonStyle(InkTextButtonStyle(color: .secondary))
+            if let pending = store.pending[qID] {
+                GeneratingBadge(label: pending.statusLabel, startedAt: pending.startedAt) { store.cancelReply(qID) }
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
             }
         }
     }
@@ -1110,18 +1108,13 @@ struct PendingNote: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 if let correct = verdict?.correct {
+                    // 判定已经出来：先标上对错，后面还在写说明
                     PenMark(correct: correct)
+                    GeneratingBadge(label: L("还在写…"), startedAt: pending.startedAt, compact: true)
                 } else {
-                    ProgressView().controlSize(.small)
-                    Text(label).font(.subheadline).foregroundStyle(.secondary)
+                    GeneratingBadge(label: pending.statusLabel, startedAt: pending.startedAt)
                 }
-                Spacer()
-                if store.showTiming {
-                    TimelineView(.periodic(from: pending.startedAt, by: 1)) { context in
-                        Text("\(Int(context.date.timeIntervalSince(pending.startedAt))) 秒")
-                            .font(.caption).monospacedDigit().foregroundStyle(.tertiary)
-                    }
-                }
+                Spacer(minLength: 0)
             }
             if !shown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 RichText(shown, scale: 0.92)
@@ -1131,12 +1124,16 @@ struct PendingNote: View {
         .marginRule(.secondary)
     }
 
-    private var label: String {
-        switch pending.kind {
+}
+
+extension PendingReply {
+    /// 正在生成时显示的文字
+    var statusLabel: String {
+        switch kind {
         case .verdictWrong, .verdictCorrect: return L("正在一步一步检查…")
-        case .hint: return pending.label ?? L("正在写提示…")
+        case .hint: return label ?? L("正在写提示…")
         case .solution: return L("正在写答案…")
-        default: return L("正在写…")
+        default: return label ?? L("正在写…")
         }
     }
 }

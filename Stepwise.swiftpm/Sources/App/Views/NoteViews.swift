@@ -686,13 +686,7 @@ struct NoteDocView: View {
                 // 正在写的这一块，写完就变成正式的笔记块
                 RichText(job.partial).opacity(0.55)
             }
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text(job.label).font(.callout).foregroundStyle(.secondary)
-                Spacer()
-                Button("停止") { store.stopNoteJob(noteID) }
-                    .buttonStyle(InkTextButtonStyle(color: .secondary))
-            }
+            GeneratingBadge(label: job.label, startedAt: job.startedAt) { store.stopNoteJob(noteID) }
             // 生成整篇笔记时：大概进度、写好几块、用了多久
             if let progress = job.progress {
                 GenerationProgressView(progress: progress) { String(localized: "已写好 \($0) 块") }
@@ -707,13 +701,7 @@ struct NoteDocView: View {
                 // 补进笔记时正在写的解释，写完插进上面这一块里提问的地方
                 RichText(job.partial).opacity(0.55)
             }
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text(job.label).font(.callout).foregroundStyle(.secondary)
-                Spacer()
-                Button("停止") { store.stopNoteJob(noteID) }
-                    .buttonStyle(InkTextButtonStyle(color: .secondary))
-            }
+            GeneratingBadge(label: job.label, startedAt: job.startedAt) { store.stopNoteJob(noteID) }
         }
     }
 
@@ -959,9 +947,8 @@ struct NoteTextBlockView<MenuContent: View>: View {
                     }
                 } else if block.text.isEmpty {
                     if streaming {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text("正在回答…").font(.callout).foregroundStyle(.secondary)
+                        GeneratingBadge(label: L("正在回答…"), startedAt: store.noteJobs[noteID]?.startedAt, tint: Ink.blue) {
+                            store.stopNoteJob(noteID)
                         }
                     } else {
                         Button("空白笔记块，点这里开始写") { editing = block.id }
@@ -1390,10 +1377,8 @@ struct NoteCommentView: View {
                     .accessibilityLabel("收起批注")
                 }
                 if comment.answer.isEmpty {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.mini)
-                        Text("正在写…").font(.caption).foregroundStyle(.secondary)
-                    }
+                    GeneratingBadge(label: L("正在写…"), startedAt: store.noteJobs[noteID]?.startedAt, tint: Ink.blue,
+                                    compact: true) { store.stopNoteJob(noteID) }
                 } else {
                     RichText(comment.answer, scale: 0.82 * Double(fit))
                         .fixedSize(horizontal: false, vertical: true)

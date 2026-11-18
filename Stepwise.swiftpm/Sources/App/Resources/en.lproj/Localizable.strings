@@ -639,3 +639,4 @@
 "选择要导出的白板" = "Choose Whiteboards to Export";
 "另外导入了 %lld 块白板。" = " Also imported whiteboards: %lld.";
 "显示列表" = "Show List";
+"还在写…" = "Still writing…";
