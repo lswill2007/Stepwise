@@ -849,6 +849,34 @@ struct NotebookCanvas: UIViewRepresentable {
             model.strokeEnded()
         }
 
+        /// 圈选提问圈的那几笔（按写下的时间和点数认）。用代码把它从纸上拿掉以后，PencilKit 心里还记着它：
+        /// 下一笔写完时会连它一起放回来，蓝圈就一直留在纸上。认出来就再拿掉
+        private var discardedCircles: [CircleKey] = []
+
+        private struct CircleKey: Equatable {
+            let created: Date
+            let points: Int
+            init(_ stroke: PKStroke) {
+                created = stroke.path.creationDate
+                points = stroke.path.count
+            }
+        }
+
+        private func discard(_ stroke: PKStroke) {
+            discardedCircles.append(CircleKey(stroke))
+            if discardedCircles.count > 20 { discardedCircles.removeFirst() }
+        }
+
+        /// 去掉被 PencilKit 放回来的圈；没有就原样返回
+        private func withoutCircles(_ drawing: PKDrawing) -> PKDrawing {
+            // 改过 strokes 的 PKDrawing 和原来的不再相等，没有要去掉的就一定原样返回
+            guard !discardedCircles.isEmpty,
+                  drawing.strokes.contains(where: { discardedCircles.contains(CircleKey($0)) }) else { return drawing }
+            var cleaned = drawing
+            cleaned.strokes.removeAll { discardedCircles.contains(CircleKey($0)) }
+            return cleaned
+        }
+
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard let pad = canvasView as? PadCanvasView else { return }
             // 恢复的笔迹还没放进去，用户就开始写了：把恢复的笔迹和新写的合在一起
@@ -863,6 +891,7 @@ struct NotebookCanvas: UIViewRepresentable {
                 penDown = false
                 if byPen, model.tools.tool == .ask, let stroke = pad.paperDrawing.strokes.last {
                     // 圈的这一笔不留：只放回恢复的笔迹
+                    discard(stroke)
                     DispatchQueue.main.async { pad.whenIdle { pad.paperDrawing = pending } }
                     model.circled(stroke: stroke)
                 } else {
@@ -872,14 +901,33 @@ struct NotebookCanvas: UIViewRepresentable {
             }
             // 恢复、重新放入笔迹时的变化不算；把圈选的一笔撤掉时也会进来，笔迹没变就不算
             guard pad.pendingDrawing == nil, !pad.isRefreshing else { return }
-            let current = pad.paperDrawing
-            guard current != model.drawing else { return }
+            let onCanvas = pad.paperDrawing
+            // 已经拿掉的圈被 PencilKit 放回来了：不算，纸上也再拿掉
+            let current = withoutCircles(onCanvas)
+            /// 纸上换成去掉圈的笔迹（和交给 model 的是同一份，换完不会再算一次变化）
+            func dropReturnedCircle() {
+                guard current != onCanvas else { return }
+                DispatchQueue.main.async { [weak self] in
+                    pad.whenIdle { [weak self] in
+                        guard let self else { return }
+                        let shown = pad.paperDrawing
+                        if shown == onCanvas {
+                            pad.paperDrawing = current
+                        } else {
+                            let cleaned = self.withoutCircles(shown)
+                            if cleaned != shown { pad.paperDrawing = cleaned }
+                        }
+                    }
+                }
+            }
+            guard current != model.drawing else { dropReturnedCircle(); return }
             let byPen = penDown
             penDown = false
             // 圈选提问：用户刚画的这一笔只用来圈出地方，不留在纸上
             if byPen, model.tools.tool == .ask, current.strokes.count == model.drawing.strokes.count + 1,
                let stroke = current.strokes.last {
                 let saved = model.drawing
+                discard(stroke)
                 DispatchQueue.main.async { pad.whenIdle { pad.paperDrawing = saved } }
                 model.circled(stroke: stroke)
                 return
@@ -902,6 +950,7 @@ struct NotebookCanvas: UIViewRepresentable {
                 return
             }
             model.drawingChanged(current)
+            dropReturnedCircle()
         }
 
         /// 用代码换掉画布上的笔迹，PencilKit 不会记撤销，自己记：撤销回到写这一笔之前，重做再放回来
