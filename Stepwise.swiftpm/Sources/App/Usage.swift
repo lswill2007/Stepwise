@@ -303,9 +303,7 @@ final class OnlinePrices: @unchecked Sendable {
             async let a = Self.fetchAIHubMix()
             async let h = Self.fetchHuggingFace()
             let (official, ahm, hf) = await (o, a, h)
-            self.lock.lock()
-            let old = self.table
-            self.lock.unlock()
+            let old = self.lock.withLock { self.table }
             if official != nil || ahm != nil || hf != nil {
                 // 有哪一边没拿到就沿用上次的
                 var t = Table(fetched: Date())
@@ -318,9 +316,7 @@ final class OnlinePrices: @unchecked Sendable {
                 self.install(t)
                 if let url = Self.fileURL, let data = try? JSONEncoder().encode(t) { try? data.write(to: url, options: .atomic) }
             }
-            self.lock.lock()
-            self.refreshing = false
-            self.lock.unlock()
+            self.lock.withLock { self.refreshing = false }
             await MainActor.run { UsageLog.shared.objectWillChange.send() }
         }
     }
