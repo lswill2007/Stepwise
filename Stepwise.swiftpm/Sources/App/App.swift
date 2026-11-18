@@ -5,6 +5,8 @@ struct StepwiseApp: App {
     init() {
         // 公式排版用的 WebKit 和 KaTeX 最慢，一启动就在后台准备
         MathAssets.prewarm()
+        // 每次打开 App 都重新加载各家官网的模型价格（没网时用上次存的）
+        OnlinePrices.shared.refreshOnLaunch()
     }
     @StateObject private var store = AppStore()
     @StateObject private var tracker = StudyTracker()

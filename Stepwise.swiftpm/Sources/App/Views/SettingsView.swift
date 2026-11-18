@@ -1055,7 +1055,7 @@ struct UsageView: View {
             } header: {
                 Text("按模型")
             } footer: {
-                Text("token 数是服务商在每次回复后报回来的。费用按官网价格算：直连 Anthropic 用内置的官方价格（2026 年 11 月）；OpenRouter 用它报回来的实际扣费；其他模型查 AIHubMix 和 Hugging Face 公开的价格表（多数和官网一致；用 AIHubMix 时就是它的实际价格）。价格表每天更新一次。点模型可以改成自己的价格，之前没算的也会补上。")
+                Text("token 数是服务商在每次回复后报回来的。费用都按模型厂商官网的价格算，不管经哪个服务商调用：Claude 的官网价格内置，其他模型查 models.dev 整理的各家官网价格表，每次打开 App 时更新。官网价格表里查不到的模型才用 Hugging Face 上各家的中间价或 AIHubMix 的价格，会在模型下面注明。点模型可以改成自己的价格，之前没算的也会补上。")
             }
 
             Section {
@@ -1134,7 +1134,7 @@ private struct PriceEditor: View {
                 }
                 if let automatic, PriceBook.custom(provider: provider, model: model) != nil {
                     Section {
-                        Button(automatic.source == .official ? L("恢复成官方价格") : L("恢复成价格表的价格")) {
+                        Button(automatic.source.isOfficial ? L("恢复成官网价格") : L("恢复成价格表的价格")) {
                             PriceBook.setCustom(nil, provider: provider, model: model)
                             log.objectWillChange.send()
                             dismiss()

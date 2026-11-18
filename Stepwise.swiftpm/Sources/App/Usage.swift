@@ -85,26 +85,28 @@ struct ModelPrice: Codable, Equatable {
 enum PriceSource: Equatable {
     /// 自己在设置里填的
     case custom
-    /// 内置的 Anthropic 官方价格
-    case official
-    /// AIHubMix 公开的模型价格表
+    /// 模型厂商官网的价格（maker 是厂商名，如 Anthropic、OpenAI、DeepSeek）
+    case official(maker: String)
+    /// 官网价格表里查不到：用 Hugging Face 上各家推理服务商的中间价
+    case huggingFace
+    /// 官网价格表里查不到：用 AIHubMix 的价格
     case aihubmix
-    /// Hugging Face 推理服务上某一家（provider 为 nil 时取各家的中间价）
-    case huggingFace(provider: String?)
+
+    var isOfficial: Bool { if case .official = self { return true } else { return false } }
 
     var label: String {
         switch self {
         case .custom: return L("自己填的价格")
-        case .official: return L("Anthropic 官方价格")
-        case .aihubmix: return L("AIHubMix 价格表")
-        case .huggingFace(let provider):
-            return provider.map { String(format: L("Hugging Face 上 %@ 的价格"), $0) } ?? L("Hugging Face 上各家的中间价")
+        case .official(let maker): return String(format: L("%@ 官网价格"), maker)
+        case .huggingFace: return L("Hugging Face 上各家的中间价（官网查不到）")
+        case .aihubmix: return L("AIHubMix 价格（官网查不到）")
         }
     }
 }
 
-/// 模型价格：Anthropic 官方的 Claude 价格内置；其他模型查 AIHubMix 和 Hugging Face 公开的价格表；
-/// 用户也可以在设置里自己填（优先用自己填的）
+/// 模型价格：所有模型都按厂商官网价格算（不管经哪个服务商调用）。
+/// Claude 的官网价格内置（没网也能算）；其他模型查 models.dev 整理的各家官网价格表，每次打开 App 时更新；
+/// 官网价格表里查不到的才用 Hugging Face / AIHubMix 的价格。用户在设置里自己填的价格优先
 enum PriceBook {
     /// Anthropic 官方 API 价格（美元 / 百万 token，2026-11-03）
     static let anthropic: [String: ModelPrice] = [
@@ -142,18 +144,17 @@ enum PriceBook {
         if let data = try? JSONEncoder().encode(all) { UserDefaults.standard.set(data, forKey: pricesKey) }
     }
 
-    /// 内置价格：只用于直连 Anthropic 官方接口
+    /// 内置的 Claude 官网价格（经任何服务商调用 Claude 都按它算）
     static func builtIn(provider: String, model: String) -> ModelPrice? {
-        guard provider == "anthropic" else { return nil }
-        let name = ModelInfo.baseName(model)
+        let name = ModelInfo.baseName(model).replacingOccurrences(of: ".", with: "-")
         if let p = anthropic[name] { return p }
         // 带日期后缀的旧写法：claude-xxx-20250101
         return anthropic.first { name.hasPrefix($0.key + "-") }?.value
     }
 
-    /// 不算自己填的：内置官方价格，或者价格表里查到的
+    /// 不算自己填的：内置的 Claude 官网价格，或者价格表里查到的
     static func automatic(provider: String, model: String) -> (price: ModelPrice, source: PriceSource)? {
-        if let p = builtIn(provider: provider, model: model) { return (p, .official) }
+        if let p = builtIn(provider: provider, model: model) { return (p, .official(maker: "Anthropic")) }
         return OnlinePrices.shared.lookup(provider: provider, model: model)
     }
 
@@ -168,20 +169,31 @@ enum PriceBook {
 }
 
 /// 网上公开的模型价格表（都是美元 / 百万 token，不用 API Key）：
-/// - AIHubMix：八百多个模型，多数和各家官网价格一致，用 AIHubMix 时就是实际扣费
-/// - Hugging Face 推理服务：开源模型在各家推理服务商的价格（硅基流动等）
-/// 一天最多更新一次，存在缓存文件夹里
+/// - models.dev：整理好的各家厂商官网价格（Anthropic、OpenAI、Google、DeepSeek、通义、智谱、Kimi、xAI……），
+///   还记着各个聚合平台上的模型名对应哪个官方模型，所以经 AIHubMix 等调用时也能查到官网价格
+/// - Hugging Face 推理服务：开源模型在各家推理服务商的价格（官网价格表里没有时用中间价）
+/// - AIHubMix：官网价格表和 Hugging Face 都查不到时最后用它
+/// 每次打开 App 时更新一次（之后超过一天也会再更新），存在缓存文件夹里，没网时用上次的
 final class OnlinePrices: @unchecked Sendable {
     static let shared = OnlinePrices()
 
     struct Table: Codable {
         var fetched: Date
-        /// 小写的模型名 → 价格
+        /// 「厂商/模型」（小写）→ 官网价格
+        var official: [String: ModelPrice] = [:]
+        /// 模型名（小写，不带「组织/」）→「厂商/模型」
+        var officialAlias: [String: String] = [:]
+        /// 厂商 ID → 显示的名字（如 deepseek → DeepSeek）
+        var makers: [String: String] = [:]
+        /// 小写的模型名 → AIHubMix 价格
         var aihubmix: [String: ModelPrice] = [:]
         /// 小写的模型 ID（如 deepseek-ai/deepseek-v3）→ 推理服务商 → 价格
         var huggingFace: [String: [String: ModelPrice]] = [:]
+        /// Hugging Face 上模型作者自己提供的服务商（它的价格就是官网价格）：模型 ID → (服务商, 显示名)
+        var huggingFaceAuthor: [String: [String]] = [:]
     }
 
+    static let modelsDevURL = URL(string: "https://models.dev/api.json")!
     static let aihubmixURL = URL(string: "https://aihubmix.com/api/v1/models")!
     static let huggingFaceURL = URL(string: "https://router.huggingface.co/v1/models")!
 
@@ -193,7 +205,7 @@ final class OnlinePrices: @unchecked Sendable {
 
     private static var fileURL: URL? {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("model-prices.json")
+            .appendingPathComponent("model-prices-v2.json")
     }
 
     private init() {
@@ -223,37 +235,59 @@ final class OnlinePrices: @unchecked Sendable {
         return refreshing
     }
 
+    /// 同一个模型在各处的写法不同：claude-haiku-4.5 / claude-haiku-4-5、带不带「组织/」
+    private static func nameVariants(_ model: String) -> [String] {
+        let base = ModelInfo.baseName(model)
+        var names = [base, base.replacingOccurrences(of: ".", with: "-")]
+        if base.hasSuffix(":free") { names.append(String(base.dropLast(5))) }
+        return names
+    }
+
     func lookup(provider: String, model: String) -> (price: ModelPrice, source: PriceSource)? {
         lock.lock()
         let t = table, byBase = hfByBase
         lock.unlock()
         guard let t else { return nil }
         let full = model.lowercased()
-        let base = ModelInfo.baseName(model)
+        let names = Self.nameVariants(model)
 
-        func fromAIHubMix() -> (ModelPrice, PriceSource)? {
-            (t.aihubmix[full] ?? t.aihubmix[base]).map { ($0, .aihubmix) }
+        // 1. 官网价格
+        var officialKeys: [String] = []
+        if full.contains("/") { officialKeys.append(full) }
+        for name in names {
+            if let key = t.officialAlias[name] { officialKeys.append(key) }
         }
-        func fromHuggingFace() -> (ModelPrice, PriceSource)? {
-            guard let id = t.huggingFace[full] != nil ? full : byBase[base],
-                  let offers = t.huggingFace[id], !offers.isEmpty else { return nil }
-            // 正好是这个服务商在 Hugging Face 上的价格（如硅基流动）
-            if let own = offers[provider] { return (own, .huggingFace(provider: provider)) }
-            // 否则取各家的中间价（不算免费的）
+        for key in officialKeys {
+            if let p = t.official[key] {
+                let maker = String(key.split(separator: "/").first ?? "")
+                return (p, .official(maker: t.makers[maker] ?? maker))
+            }
+        }
+
+        // 2. Hugging Face：模型作者自己的服务就是官网价格，否则取各家的中间价（不算免费的）
+        if let id = t.huggingFace[full] != nil ? full : names.lazy.compactMap({ byBase[$0] }).first,
+           let offers = t.huggingFace[id], !offers.isEmpty {
+            if let author = t.huggingFaceAuthor[id], author.count == 2, let p = offers[author[0]] {
+                return (p, .official(maker: author[1]))
+            }
             let paid = offers.values.filter { $0.input > 0 || $0.output > 0 }
-            guard !paid.isEmpty else { return (ModelPrice(input: 0, output: 0), .huggingFace(provider: nil)) }
+            if paid.isEmpty { return (ModelPrice(input: 0, output: 0), .huggingFace) }
             func median(_ v: [Double]) -> Double {
                 let s = v.sorted()
                 return s.count % 2 == 1 ? s[s.count / 2] : (s[s.count / 2 - 1] + s[s.count / 2]) / 2
             }
-            return (ModelPrice(input: median(paid.map(\.input)), output: median(paid.map(\.output))), .huggingFace(provider: nil))
+            return (ModelPrice(input: median(paid.map(\.input)), output: median(paid.map(\.output))), .huggingFace)
         }
 
-        // 用 AIHubMix 时它的价格表就是实际扣费；带「组织/」的开源模型 ID 先查 Hugging Face
-        if provider == "aihubmix" { return fromAIHubMix() ?? fromHuggingFace() }
-        if full.contains("/") { return fromHuggingFace() ?? fromAIHubMix() }
-        return fromAIHubMix() ?? fromHuggingFace()
+        // 3. AIHubMix
+        if let p = t.aihubmix[full] ?? names.lazy.compactMap({ t.aihubmix[$0] }).first {
+            return (p, .aihubmix)
+        }
+        return nil
     }
+
+    /// 打开 App 时调用一次：不管多久前更新过都重新拿
+    func refreshOnLaunch() { refreshIfNeeded(force: true) }
 
     /// 超过一天没更新就去网上拿新的；拿到后通知用量页面重新算
     func refreshIfNeeded(force: Bool = false) {
@@ -265,15 +299,22 @@ final class OnlinePrices: @unchecked Sendable {
         guard start else { return }
         Task { @MainActor in UsageLog.shared.objectWillChange.send() }
         Task.detached(priority: .utility) {
+            async let o = Self.fetchModelsDev()
             async let a = Self.fetchAIHubMix()
             async let h = Self.fetchHuggingFace()
-            let (ahm, hf) = await (a, h)
+            let (official, ahm, hf) = await (o, a, h)
             self.lock.lock()
             let old = self.table
             self.lock.unlock()
-            if ahm != nil || hf != nil {
-                // 有一边没拿到就沿用上次的
-                let t = Table(fetched: Date(), aihubmix: ahm ?? old?.aihubmix ?? [:], huggingFace: hf ?? old?.huggingFace ?? [:])
+            if official != nil || ahm != nil || hf != nil {
+                // 有哪一边没拿到就沿用上次的
+                var t = Table(fetched: Date())
+                t.official = official?.prices ?? old?.official ?? [:]
+                t.officialAlias = official?.alias ?? old?.officialAlias ?? [:]
+                t.makers = official?.makers ?? old?.makers ?? [:]
+                t.aihubmix = ahm ?? old?.aihubmix ?? [:]
+                t.huggingFace = hf?.offers ?? old?.huggingFace ?? [:]
+                t.huggingFaceAuthor = hf?.authors ?? old?.huggingFaceAuthor ?? [:]
                 self.install(t)
                 if let url = Self.fileURL, let data = try? JSONEncoder().encode(t) { try? data.write(to: url, options: .atomic) }
             }
@@ -294,43 +335,90 @@ final class OnlinePrices: @unchecked Sendable {
 
     private static func number(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue }
 
-    static func fetchAIHubMix() async -> [String: ModelPrice]? {
-        guard let json = await get(aihubmixURL) as? [String: Any], let list = json["data"] as? [[String: Any]] else { return nil }
-        return parseAIHubMix(list)
+    /// models.dev / AIHubMix 的价格写法相同：input、output、cache_read、cache_write、按上下文分档的 tiers
+    static func parsePrice(_ p: [String: Any]) -> ModelPrice? {
+        guard let input = number(p["input"]), let output = number(p["output"]) else { return nil }
+        let tiers: [ModelPrice.Tier] = (p["tiers"] as? [[String: Any]] ?? []).compactMap { t in
+            guard let tier = t["tier"] as? [String: Any], (tier["type"] as? String) == "context",
+                  let size = number(tier["size"]), let i = number(t["input"]), let o = number(t["output"]) else { return nil }
+            return ModelPrice.Tier(above: Int(size), input: i, output: o,
+                                   cacheRead: number(t["cache_read"]), cacheWrite: number(t["cache_write"]))
+        }
+        return ModelPrice(input: input, output: output,
+                          cacheRead: number(p["cache_read"]), cacheWrite: number(p["cache_write"]),
+                          tiers: tiers.isEmpty ? nil : tiers)
     }
 
-    static func parseAIHubMix(_ list: [[String: Any]]) -> [String: ModelPrice] {
+    /// 豆包没有被别处标成官方模型，单独当作厂商
+    private static let extraMakers: Set<String> = ["volcengine"]
+
+    static func fetchModelsDev() async -> (prices: [String: ModelPrice], alias: [String: String], makers: [String: String])? {
+        guard let json = await get(modelsDevURL) as? [String: [String: Any]] else { return nil }
+        // 别处标的「官方模型」（canonical_model_id，如 anthropic/claude-haiku-4-5）的前缀就是厂商
+        var canonicalVotes: [String: [String: Int]] = [:]
+        var makerIDs = extraMakers
+        for (_, provider) in json {
+            for (id, m) in provider["models"] as? [String: [String: Any]] ?? [:] {
+                guard let canonical = (m["canonical_model_id"] as? String)?.lowercased(), canonical.contains("/") else { continue }
+                makerIDs.insert(String(canonical.split(separator: "/")[0]))
+                for name in nameVariants(id) { canonicalVotes[name, default: [:]][canonical, default: 0] += 1 }
+            }
+        }
+        var prices: [String: ModelPrice] = [:]
+        var alias: [String: String] = [:]
+        var makers: [String: String] = [:]
+        for maker in makerIDs {
+            guard let provider = json[maker], let models = provider["models"] as? [String: [String: Any]] else { continue }
+            makers[maker] = provider["name"] as? String ?? maker
+            for (id, m) in models {
+                guard let cost = m["cost"] as? [String: Any], let price = parsePrice(cost) else { continue }
+                let key = maker + "/" + id.lowercased()
+                prices[key] = price
+            }
+        }
+        // 模型名 → 官方模型：大多数地方标的那个（且官网价格表里有）；
+        // 没人标过的，用厂商自己价格表里同名的模型
+        var own: [String: [String]] = [:]
+        for key in prices.keys.sorted() {
+            let id = String(key.split(separator: "/", maxSplits: 1)[1])
+            for name in nameVariants(id) { own[name, default: []].append(key) }
+        }
+        for name in Set(canonicalVotes.keys).union(own.keys) {
+            let voted = (canonicalVotes[name] ?? [:]).filter { prices[$0.key] != nil }
+                .max { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key }?.key
+            if let key = voted ?? own[name]?.first { alias[name] = key }
+        }
+        return prices.isEmpty ? nil : (prices, alias, makers)
+    }
+
+    static func fetchAIHubMix() async -> [String: ModelPrice]? {
+        guard let json = await get(aihubmixURL) as? [String: Any], let list = json["data"] as? [[String: Any]] else { return nil }
         var result: [String: ModelPrice] = [:]
         for m in list {
-            guard let id = m["model_id"] as? String, let p = m["pricing"] as? [String: Any],
-                  let input = number(p["input"]), let output = number(p["output"]) else { continue }
-            let tiers: [ModelPrice.Tier] = (p["tiers"] as? [[String: Any]] ?? []).compactMap { t in
-                guard let tier = t["tier"] as? [String: Any], (tier["type"] as? String) == "context",
-                      let size = number(tier["size"]), let i = number(t["input"]), let o = number(t["output"]) else { return nil }
-                return ModelPrice.Tier(above: Int(size), input: i, output: o,
-                                       cacheRead: number(t["cache_read"]), cacheWrite: number(t["cache_write"]))
-            }
-            result[id.lowercased()] = ModelPrice(input: input, output: output,
-                                                 cacheRead: number(p["cache_read"]), cacheWrite: number(p["cache_write"]),
-                                                 tiers: tiers.isEmpty ? nil : tiers)
+            guard let id = m["model_id"] as? String, let p = m["pricing"] as? [String: Any], let price = parsePrice(p) else { continue }
+            result[id.lowercased()] = price
         }
         return result
     }
 
-    static func fetchHuggingFace() async -> [String: [String: ModelPrice]]? {
+    static func fetchHuggingFace() async -> (offers: [String: [String: ModelPrice]], authors: [String: [String]])? {
         guard let json = await get(huggingFaceURL) as? [String: Any], let list = json["data"] as? [[String: Any]] else { return nil }
-        var result: [String: [String: ModelPrice]] = [:]
+        var offers: [String: [String: ModelPrice]] = [:]
+        var authors: [String: [String]] = [:]
         for m in list {
-            guard let id = m["id"] as? String, let providers = m["providers"] as? [[String: Any]] else { continue }
-            var offers: [String: ModelPrice] = [:]
+            guard let id = (m["id"] as? String)?.lowercased(), let providers = m["providers"] as? [[String: Any]] else { continue }
+            var list: [String: ModelPrice] = [:]
             for p in providers {
                 guard let name = p["provider"] as? String, let pricing = p["pricing"] as? [String: Any],
                       let i = number(pricing["input"]), let o = number(pricing["output"]) else { continue }
-                offers[name] = ModelPrice(input: i, output: o)
+                list[name] = ModelPrice(input: i, output: o)
+                if (p["is_model_author"] as? Bool) == true {
+                    authors[id] = [name, p["provider_name"] as? String ?? name]
+                }
             }
-            if !offers.isEmpty { result[id.lowercased()] = offers }
+            if !list.isEmpty { offers[id] = list }
         }
-        return result
+        return (offers, authors)
     }
 }
 
@@ -345,6 +433,8 @@ struct UsageTotals: Codable, Equatable {
     var cost: [String: Double] = [:]
     /// 记的时候还不知道价格的 token：之后填了价格再按现在的价格算
     var unpriced = UnpricedTokens()
+    /// 费用是按官网价格算的（旧版本记的费用可能是聚合平台的价格，读出来时改成按官网价格重算）
+    var officialPricing: Bool?
 
     struct UnpricedTokens: Codable, Equatable {
         var input = 0
@@ -356,6 +446,7 @@ struct UsageTotals: Codable, Equatable {
     }
 
     mutating func add(_ other: UsageTotals) {
+        if other.officialPricing == true && (requests == 0 || officialPricing == true) { officialPricing = true }
         requests += other.requests
         input += other.input
         output += other.output
@@ -390,6 +481,32 @@ final class UsageLog: ObservableObject {
             return
         }
         days = saved
+        repriceOldRecords()
+    }
+
+    private func model(of key: String) -> String {
+        let parts = key.split(separator: "|", maxSplits: 1)
+        return parts.count > 1 ? String(parts[1]) : ""
+    }
+
+    /// 旧版本按聚合平台的价格记下的费用：清掉，把 token 改成「待算」，显示时按现在的官网价格算
+    private func repriceOldRecords() {
+        var changed = false
+        for (day, models) in days {
+            for (key, t) in models where t.officialPricing != true {
+                var n = t
+                n.officialPricing = true
+                // OpenRouter 报回来的实际扣费没有 token 以外的信息可重算，只在查不到官网价格时保留
+                let provider = key.split(separator: "|", maxSplits: 1).first.map(String.init) ?? ""
+                if provider != "openrouter" || PriceBook.price(provider: provider, model: model(of: key)) != nil {
+                    n.cost = [:]
+                    n.unpriced = .init(input: t.input, output: t.output, cacheRead: t.cacheRead, cacheWrite: t.cacheWrite)
+                }
+                days[day]?[key] = n
+                changed = true
+            }
+        }
+        if changed { save() }
     }
 
     private func save() {
@@ -413,10 +530,12 @@ final class UsageLog: ObservableObject {
         t.output = usage.output
         t.cacheRead = usage.cacheRead
         t.cacheWrite = usage.cacheWrite
-        if let reported = usage.reportedCostUSD {
-            t.cost["USD"] = reported
-        } else if let price = PriceBook.price(provider: provider, model: model) {
+        t.officialPricing = true
+        // 按官网价格算；查不到时才用 OpenRouter 报回来的实际扣费
+        if let price = PriceBook.price(provider: provider, model: model) {
             t.cost[price.currency] = price.cost(usage)
+        } else if let reported = usage.reportedCostUSD {
+            t.cost["USD"] = reported
         } else {
             t.unpriced = .init(input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite)
             // 价格表可能还没拿到或者过期了：拿到后这些 token 会按价格表补算
