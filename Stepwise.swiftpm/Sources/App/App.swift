@@ -61,9 +61,19 @@ struct RootView: View {
             // 白板只要左栏和画布两栏，书写的地方大一些；纸的样式在右上角选
             NavigationSplitView(columnVisibility: $store.columnVisibility) {
                 sidebar
+                    // 向左拽：收起左栏，整个屏幕都是白板
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 24).onEnded { value in
+                            if isLeftSwipe(value) { store.setFullScreen(true) }
+                        }
+                    )
             } detail: {
                 WhiteboardView(boardID: boardID)
                     .id(boardID)
+                    // 左栏收起后，从最左边向右拽拉回来
+                    .overlay(alignment: .leading) {
+                        if store.isFullScreen { edgePull { store.setFullScreen(false) } }
+                    }
             }
         } else if store.listHidden && hasList {
             // 中间的白色栏拽到左边收起来了：只留左栏和页面
@@ -90,8 +100,7 @@ struct RootView: View {
                     // 向左拽：收起这一栏，页面变宽
                     .simultaneousGesture(
                         DragGesture(minimumDistance: 24).onEnded { value in
-                            let t = value.translation
-                            if hasList, t.width < -70, abs(t.width) > abs(t.height) * 1.5 { setListHidden(true) }
+                            if hasList, isLeftSwipe(value) { setListHidden(true) }
                         }
                     )
             } detail: {
@@ -108,15 +117,26 @@ struct RootView: View {
     @ViewBuilder
     private var showListEdge: some View {
         if store.columnVisibility != .detailOnly {
-            Color.clear
-                .frame(width: 16)
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 12).onEnded { value in
-                        if value.translation.width > 50 { setListHidden(false) }
-                    }
-                )
+            edgePull { setListHidden(false) }
         }
+    }
+
+    /// 横着向左拽了一段
+    private func isLeftSwipe(_ value: DragGesture.Value) -> Bool {
+        let t = value.translation
+        return t.width < -70 && abs(t.width) > abs(t.height) * 1.5
+    }
+
+    /// 页面最左边一窄条：向右拽一段就执行 action（把收起的栏拉回来）
+    private func edgePull(_ action: @escaping () -> Void) -> some View {
+        Color.clear
+            .frame(width: 16)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 12).onEnded { value in
+                    if value.translation.width > 50 { action() }
+                }
+            )
     }
 
     /// 中间一栏：题目列表、错题本或笔记目录
