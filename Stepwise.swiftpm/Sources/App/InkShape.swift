@@ -12,8 +12,12 @@ enum InkShape {
     }
 
     /// 笔尖的角度（扁平笔尖斜着拿，像书法笔、钢笔）：屏幕坐标 y 向下，
-    /// -45° 是往右上，所以“/”方向的笔画最细，“\”方向的最粗
-    static let nibAngle: CGFloat = -.pi / 4
+    /// -30° 是笔尖边往右上斜：横画偏细、竖画粗，“/”最细、“\”最粗
+    static let nibAngle: CGFloat = -.pi / 6
+
+    /// PencilKit 的笔（.pen / .monoline）画出来的粗细 ≈ 2 ×（点的 size − 2）：size 3 只有 2pt，size 2 几乎看不见。
+    /// 所以粗细都在“看得到的粗细”（size − 2）上调，再换回 size，不然稍微调细一点笔画就细成一根线
+    static let sizeOffset: CGFloat = 2
 
     /// 默认参数：不需要重新整理
     static func isDefault(pressure: Double, flatness: Double, stability: Double) -> Bool {
@@ -39,41 +43,62 @@ enum InkShape {
         return result
     }
 
-    /// 每个点的粗细：压力灵敏度和笔尖扁平度
+    /// 每个点的粗细（返回 PKStrokePoint 的 size）：压力灵敏度、笔尖扁平度，以及钢笔自带的笔锋
     /// - pressure：0 完全不随压力变化，0.5 系统默认，1 压力影响很大
     /// - flatness：0 圆笔尖，1 很扁：顺着笔尖方向写很细，垂直方向写很粗
-    /// - variation：笔型本身的粗细变化保留多少，1 不变，越小越接近统一粗细（钢笔用来收窄 PencilKit 自带的粗细变化）
-    static func widths(_ points: [Point], pressure: Double, flatness: Double, variation: CGFloat = 1) -> [CGFloat] {
+    /// - nib：钢笔自带的粗细变化，0 没有；0.6 时最细的方向是最粗的四成。各个方向平均下来粗细不变，
+    ///   只是横细竖粗，写的时候看到多粗，写完大体还是多粗
+    static func widths(_ points: [Point], pressure: Double, flatness: Double, nib: Double = 0) -> [CGFloat] {
         guard !points.isEmpty else { return [] }
-        let sizes = points.map(\.size)
-        let median = sizes.sorted()[sizes.count / 2]
+        // 看得到的粗细
+        var visible = points.map { max($0.size - sizeOffset, 0.2) }
+        let median = visible.sorted()[visible.count / 2]
         let maxForce = max(points.map(\.force).max() ?? 1, 0.01)
-        return points.indices.map { i in
-            var w = sizes[i]
+        for i in visible.indices {
             if pressure < 0.5 {
                 // 越低越接近统一粗细
                 let t = CGFloat(pressure / 0.5)
-                w = median + (w - median) * t
+                visible[i] = median + (visible[i] - median) * t
             } else if pressure > 0.5 {
                 let t = CGFloat((pressure - 0.5) / 0.5)
                 let nf = points[i].force / maxForce
-                w *= 1 + t * (0.3 + 1.4 * nf - 1)
+                visible[i] *= 1 + t * (0.3 + 1.4 * nf - 1)
             }
-            if variation < 1 {
-                w = median + (w - median) * variation
+        }
+        if (flatness > 0 || nib > 0), points.count > 2 {
+            let across = smoothed(acrossNib(points))
+            if nib > 0 {
+                // 钢笔：按方向分粗细，再整体放大，让各个方向平均下来和写的时候一样粗。
+                // 按所有方向的平均算，不按这一笔自己的平均：不然一笔直线怎么写都一样粗，分不出横细竖粗
+                let thin = CGFloat(1 - nib)
+                let mean = thin + (1 - thin) * 2 / .pi
+                for i in visible.indices { visible[i] *= (thin + (1 - thin) * across[i]) / mean }
             }
-            if flatness > 0, points.count > 1 {
-                let a = points[max(i - 1, 0)].location
-                let b = points[min(i + 1, points.count - 1)].location
-                let dx = b.x - a.x, dy = b.y - a.y
-                if dx * dx + dy * dy > 0.01 {
-                    // 顺着笔尖方向（夹角 0）最细
-                    let angle = atan2(dy, dx) - nibAngle
-                    let across = abs(sin(angle))
-                    w *= 1 - CGFloat(flatness) * 0.75 * (1 - across)
-                }
+            if flatness > 0 {
+                for i in visible.indices { visible[i] *= 1 - CGFloat(flatness) * 0.75 * (1 - across[i]) }
             }
-            return max(w, 0.8)
+        }
+        return visible.map { max($0, 0.4) + sizeOffset }
+    }
+
+    /// 每个点的笔画方向和笔尖方向差多少：0 顺着笔尖（最细），1 垂直（最粗）。
+    /// 用前后各隔两个点的方向，太短分不出方向的点当作中间值
+    private static func acrossNib(_ points: [Point]) -> [CGFloat] {
+        points.indices.map { i in
+            let a = points[max(i - 2, 0)].location
+            let b = points[min(i + 2, points.count - 1)].location
+            let dx = b.x - a.x, dy = b.y - a.y
+            guard dx * dx + dy * dy > 0.25 else { return 0.7 }
+            return abs(sin(atan2(dy, dx) - nibAngle))
+        }
+    }
+
+    /// 粗细沿着笔画平滑过渡，不会一个点粗一个点细
+    private static func smoothed(_ values: [CGFloat], radius: Int = 3) -> [CGFloat] {
+        guard values.count > 2 else { return values }
+        return values.indices.map { i in
+            let lo = max(i - radius, 0), hi = min(i + radius, values.count - 1)
+            return values[lo...hi].reduce(0, +) / CGFloat(hi - lo + 1)
         }
     }
 }
