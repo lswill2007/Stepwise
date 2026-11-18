@@ -33,6 +33,9 @@ struct StepwiseApp: App {
 struct RootView: View {
     @EnvironmentObject var store: AppStore
     @AppStorage("clockEnabled") private var clockEnabled = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    /// 手指向左拽中间栏时它跟着走的距离（≤ 0）
+    @State private var listDrag: CGFloat = 0
     @State private var showImport = false
     @State private var showNoteImport = false
     @State private var showSettings = false
@@ -75,50 +78,95 @@ struct RootView: View {
                         if store.isFullScreen { edgePull { store.setFullScreen(false) } }
                     }
             }
-        } else if store.listHidden && hasList {
-            // 中间的白色栏拽到左边收起来了：只留左栏和页面
-            NavigationSplitView(columnVisibility: $store.columnVisibility) {
-                sidebar
-            } detail: {
-                detail
-                    .overlay(alignment: .leading) { showListEdge }
-                    .toolbar {
-                        ToolbarItem(placement: .navigation) {
-                            Button {
-                                setListHidden(false)
-                            } label: {
-                                Label("显示列表", systemImage: "list.bullet.indent")
-                            }
-                        }
-                    }
-            }
-        } else {
+        } else if sizeClass == .compact {
+            // 窄屏（分屏多任务）：用系统的三栏，会自动叠成一层层推进去
             NavigationSplitView(columnVisibility: $store.columnVisibility) {
                 sidebar
             } content: {
                 list
-                    // 向左拽：收起这一栏，页面变宽
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 24).onEnded { value in
-                            if hasList, isLeftSwipe(value) { setListHidden(true) }
-                        }
-                    )
             } detail: {
                 detail
+            }
+        } else {
+            // 中间栏和页面放在同一栏里：收起 / 拉回只是把中间栏滑走 / 滑回来，
+            // 页面一直是同一个，不会因为换布局整页重建（以前就是这样卡住、还跳回第一题）
+            NavigationSplitView(columnVisibility: $store.columnVisibility) {
+                sidebar
+                    .navigationSplitViewColumnWidth(280)
+            } detail: {
+                listAndPage
             }
         }
     }
 
-    private func setListHidden(_ hidden: Bool) {
-        withAnimation(.easeInOut(duration: 0.25)) { store.listHidden = hidden }
+    /// 中间栏的宽度
+    private let listWidth: CGFloat = 340
+
+    /// 中间栏这会儿露在外面（全屏做题时和左栏一起藏起来）
+    private var listShown: Bool { hasList && !store.listHidden && !store.isFullScreen }
+
+    private var listAndPage: some View {
+        ZStack(alignment: .leading) {
+            detail
+                .padding(.leading, listShown ? listWidth : 0)
+                // 收起后，从页面最左边向右拽拉回来
+                .overlay(alignment: .leading) {
+                    if hasList && store.listHidden && !store.isFullScreen { edgePull { setListHidden(false) } }
+                }
+            if listShown {
+                list
+                    // 和原来系统中间栏一样：白底、选中是圆角灰条
+                    .listStyle(.sidebar)
+                    .scrollContentBackground(.hidden)
+                    .frame(width: listWidth)
+                    .background(Color(.systemBackground))
+                    .overlay(alignment: .trailing) {
+                        Rectangle().fill(Color(.separator)).frame(width: 0.5)
+                    }
+                    .offset(x: listDrag)
+                    // 向左拽：栏跟着手指走，松手拽够了就收起，不够就弹回去
+                    .simultaneousGesture(listSwipe)
+                    .transition(.move(edge: .leading))
+            }
+        }
+        // 栏被手指拽开时，露出来的是纸色，不是一条灰缝
+        .background(Ink.paper)
+        .toolbar {
+            if hasList && store.listHidden && !store.isFullScreen {
+                ToolbarItem(placement: .navigation) {
+                    Button {
+                        setListHidden(false)
+                    } label: {
+                        Label("显示列表", systemImage: "list.bullet.indent")
+                    }
+                }
+            }
+        }
     }
 
-    /// 收起中间一栏后，页面最左边一窄条：向右拽把它拉回来（全屏时不管）
-    @ViewBuilder
-    private var showListEdge: some View {
-        if store.columnVisibility != .detailOnly {
-            edgePull { setListHidden(false) }
-        }
+    private var listSwipe: some Gesture {
+        DragGesture(minimumDistance: 16)
+            .onChanged { value in
+                let t = value.translation
+                // 只认横着往左拽；上下滑是在翻列表
+                if listDrag != 0 || (t.width < 0 && abs(t.width) > abs(t.height) * 1.5) {
+                    listDrag = min(0, t.width)
+                }
+            }
+            .onEnded { value in
+                guard listDrag != 0 else { return }
+                let flung = value.predictedEndTranslation.width < -listWidth / 2
+                if listDrag < -listWidth / 3 || flung {
+                    setListHidden(true)
+                } else {
+                    withAnimation(.snappy(duration: 0.25)) { listDrag = 0 }
+                }
+            }
+    }
+
+    private func setListHidden(_ hidden: Bool) {
+        if !hidden { listDrag = 0 }
+        withAnimation(.snappy(duration: 0.28)) { store.listHidden = hidden }
     }
 
     /// 横着向左拽了一段
