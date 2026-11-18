@@ -417,6 +417,57 @@ final class TouchPathObserver: UIGestureRecognizer {
     }
 }
 
+/// 手指从窗口最左边向右划：只认手指（笔从最左边落下照样写字）。
+/// 不是从最左边落下的手指马上失败，不耽误滚动画布
+final class LeftEdgeSwipe: UIGestureRecognizer {
+    /// 落在离窗口左边多近的地方才算
+    static let edgeWidth: CGFloat = 24
+    private var start: CGPoint?
+
+    override init(target: Any?, action: Selector?) {
+        super.init(target: target, action: action)
+        allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+    }
+
+    // 书写手势认出来了也不挤掉它：笔不归它管，手指只有在“手指书写”关着时才会来（那时手指不写字）
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard start == nil, touches.count == 1, let touch = touches.first,
+              touch.location(in: nil).x <= Self.edgeWidth else {
+            state = .failed
+            return
+        }
+        start = touch.location(in: nil)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let start, let touch = touches.first else { return }
+        let p = touch.location(in: nil)
+        let dx = p.x - start.x, dy = abs(p.y - start.y)
+        if dx < -8 || (dy > 40 && dy > dx) {
+            state = .failed
+        } else if dx > 50 && dx > dy * 1.5 {
+            state = .ended
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        if state == .possible { state = .failed }
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        if state == .possible { state = .failed }
+    }
+
+    override func reset() {
+        start = nil
+    }
+}
+
 /// 画布外面包一层：纸在下面，画布在上面。
 ///
 /// 画布的大小固定不变：一个边长等于屏幕长边的方块，贴在左上角，看不见的部分被这一层裁掉，
@@ -462,6 +513,8 @@ struct BoardCanvas: UIViewRepresentable {
     @ObservedObject var tools: InkTools
     let state: BoardState
     let paper: PaperStyle
+    /// 全屏时从屏幕最左边用手指向右拽：拉回左栏。为 nil 时不响应
+    var onEdgePull: (() -> Void)?
 
     func makeUIView(context: Context) -> BoardContainerView {
         let container = BoardContainerView()
@@ -469,13 +522,18 @@ struct BoardCanvas: UIViewRepresentable {
         container.clipsToBounds = true
         container.state = state
 
+        // 只认手指的屏幕边缘手势：笔从最左边落下照样写字
+        let edge = LeftEdgeSwipe(target: context.coordinator, action: #selector(Coordinator.edgePan(_:)))
+        edge.delegate = context.coordinator
+        container.addGestureRecognizer(edge)
+        context.coordinator.edgeGesture = edge
+
         let pattern = BoardPatternView(frame: container.bounds)
         pattern.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         pattern.style = paper
 
         // 大小固定，由 BoardContainerView 定，不跟着白板变
         let canvas = PadCanvasView(frame: .zero)
-        canvas.redrawsAfterRestore = false
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
         canvas.overrideUserInterfaceStyle = .light
@@ -485,6 +543,8 @@ struct BoardCanvas: UIViewRepresentable {
         canvas.maximumZoomScale = 3
         canvas.bouncesZoom = true
         canvas.delegate = context.coordinator
+        // 手指从最左边向右拽是拉回左栏，不是滚动画布（不在边上落下的手指，边缘手势马上就失败，不耽误滚动）
+        canvas.panGestureRecognizer.require(toFail: edge)
         let pencil = UIPencilInteraction()
         pencil.delegate = context.coordinator
         canvas.addInteraction(pencil)
@@ -514,6 +574,8 @@ struct BoardCanvas: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: BoardContainerView, context: Context) {
+        context.coordinator.onEdgePull = onEdgePull
+        context.coordinator.edgeGesture?.isEnabled = onEdgePull != nil
         if let canvas = state.canvas {
             if model.canvas !== canvas { model.attach(canvas) } else { model.applyTools() }
         }
@@ -529,10 +591,25 @@ struct BoardCanvas: UIViewRepresentable {
     final class Coordinator: NotebookCanvas.Coordinator, UIGestureRecognizerDelegate {
         let state: BoardState
         private var previous: BoardSelection?
+        var onEdgePull: (() -> Void)?
+        weak var edgeGesture: LeftEdgeSwipe?
 
         init(model: HandwritingModel, state: BoardState) {
             self.state = state
             super.init(model: model)
+        }
+
+        /// 从最左边向右拽了一段：拉回左栏
+        @objc func edgePan(_ gesture: LeftEdgeSwipe) {
+            if gesture.state == .ended { onEdgePull?() }
+        }
+
+        /// 笔正在写的时候手掌碰到最左边、打开了手指书写（手指是来写字的）时，都不算拉左栏。
+        /// 手指书写时不去取消已经开始的一笔：关掉再打开书写手势会让 PencilKit 有一块纸不再重画
+        @objc func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard gestureRecognizer === edgeGesture else { return true }
+            guard let canvas = state.canvas else { return false }
+            return !canvas.isPencilDown && canvas.drawingPolicy != .anyInput
         }
 
         @objc func scrollViewDidScroll(_ scrollView: UIScrollView) { state.syncViewport() }
@@ -588,7 +665,8 @@ struct WhiteboardView: View {
         if let board = store.board(boardID) {
             let model = ink.model(for: boardID)
             ZStack(alignment: .topLeading) {
-                BoardCanvas(model: model, tools: ink.tools, state: state, paper: board.paper)
+                BoardCanvas(model: model, tools: ink.tools, state: state, paper: board.paper,
+                            onEdgePull: store.isFullScreen ? { store.setFullScreen(false) } : nil)
                 BoardOverlay(boardID: boardID, board: board, state: state, viewport: state.viewport)
             }
             .background(Ink.paper)

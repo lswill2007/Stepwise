@@ -73,12 +73,10 @@ struct RootView: View {
                         }
                     )
             } detail: {
+                // 左栏收起后从最左边向右拽拉回来：白板自己用只认手指的边缘手势做（见 BoardCanvas），
+                // 不在上面盖一条透明的条，否则笔从最左边落下会被挡住
                 WhiteboardView(boardID: boardID)
                     .id(boardID)
-                    // 左栏收起后，从最左边向右拽拉回来
-                    .overlay(alignment: .leading) {
-                        if store.isFullScreen { edgePull { store.setFullScreen(false) } }
-                    }
             }
         } else if sizeClass == .compact {
             // 窄屏（分屏多任务）：用系统的三栏，会自动叠成一层层推进去

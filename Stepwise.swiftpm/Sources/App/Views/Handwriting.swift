@@ -33,8 +33,6 @@ final class PadCanvasView: PKCanvasView {
     var pendingDrawing: PKDrawing?
     /// 正在重新放入笔迹（不是用户在写），这时的变化不算
     private(set) var isRefreshing = false
-    /// 放入恢复的笔迹后再逼 PencilKit 重画一次（画布大小会变的地方要）
-    var redrawsAfterRestore = true
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -60,12 +58,17 @@ final class PadCanvasView: PKCanvasView {
         return state == .began || state == .changed || touchWatcher.isDown
     }
 
+    /// 有笔落在纸上
+    var isPencilDown: Bool { touchWatcher.pencilDown }
+
     /// 看着落在纸上的笔和手指（只看不拦）
     private lazy var touchWatcher: InkTouchWatcher = {
         let watcher = InkTouchWatcher()
         // 手指只有在能写字（打开了手指书写）时才算；手掌、滑动页面的手指不算
         watcher.canDraw = { [weak self] touch in touch.type == .pencil || self?.drawingPolicy == .anyInput }
         watcher.onPencilDown = { [weak self] in self?.pencilTouchedDown() }
+        // 一落笔（或手指）就拿掉重画时的截图，不挡住正在写的
+        watcher.onTouchDown = { [weak self] in self?.removeRedrawCover() }
         watcher.onAllLifted = { [weak self] in
             guard let self, !self.deferredWork.isEmpty else { return }
             self.scheduleFlush()
@@ -139,15 +142,47 @@ final class PadCanvasView: PKCanvasView {
     }
 
     /// 清空再放回去，逼 PencilKit 把现有的笔迹重画一遍（尺寸、缩放变了它常常不重画）。写字时等抬笔再做
+    ///
+    /// 清空的那一下会空一帧，字就闪一下：先拍一张现在的样子盖在上面，PencilKit 重画完（或者笔、手指一落下）再拿掉
     func refreshRendering() {
         whenIdle { [weak self] in
             guard let self, self.pendingDrawing == nil, !self.drawing.strokes.isEmpty else { return }
+            self.coverWhileRedrawing()
             let current = self.drawing
             self.isRefreshing = true
             self.drawing = PKDrawing()
             self.drawing = current
             self.isRefreshing = false
         }
+    }
+
+    /// 重画时盖在画布上的截图
+    private weak var redrawCover: UIView?
+    private var coverDeadline: DispatchWorkItem?
+
+    private func coverWhileRedrawing() {
+        guard redrawCover == nil, window != nil, let cover = snapshotView(afterScreenUpdates: false) else { return }
+        cover.frame = frame
+        cover.isUserInteractionEnabled = false
+        superview?.insertSubview(cover, aboveSubview: self)
+        redrawCover = cover
+        // PencilKit 没报告画完也不一直盖着
+        let deadline = DispatchWorkItem { [weak self] in self?.removeRedrawCover() }
+        coverDeadline = deadline
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: deadline)
+    }
+
+    /// PencilKit 画完了：再等一帧拿掉截图，免得刚画完的那一帧还没上屏
+    func renderingFinished() {
+        guard redrawCover != nil else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.034) { [weak self] in self?.removeRedrawCover() }
+    }
+
+    private func removeRedrawCover() {
+        coverDeadline?.cancel()
+        coverDeadline = nil
+        redrawCover?.removeFromSuperview()
+        redrawCover = nil
     }
 
     /// 画布在屏幕上且有了实际尺寸后再放入恢复的笔迹
@@ -163,9 +198,8 @@ final class PadCanvasView: PKCanvasView {
                 self.isRefreshing = true
                 self.paperDrawing = drawing
                 self.isRefreshing = false
-                // 布局动画结束后再刷新一次：PencilKit 在尺寸变化过程中放入的笔迹可能不会被绘制。
-                // 白板的画布大小固定不变，不用刷新（刷新要清空再放回，字会闪一下）
-                guard self.redrawsAfterRestore else { return }
+                // 布局动画结束后再刷新一次：PencilKit 刚放入的笔迹有时有一块不画（白板上也见过），
+                // 刷新时盖着截图，不会闪
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.refreshRendering() }
             }
         }
@@ -245,6 +279,7 @@ final class PadCanvasView: PKCanvasView {
 final class InkTouchWatcher: UIGestureRecognizer, UIGestureRecognizerDelegate {
     var canDraw: (UITouch) -> Bool = { $0.type == .pencil }
     var onPencilDown: () -> Void = {}
+    var onTouchDown: () -> Void = {}
     var onAllLifted: () -> Void = {}
     private var drawing = Set<ObjectIdentifier>()
     private var pencils = Set<ObjectIdentifier>()
@@ -277,6 +312,7 @@ final class InkTouchWatcher: UIGestureRecognizer, UIGestureRecognizerDelegate {
             if canDraw(touch) { drawing.insert(id) }
             if touch.type == .pencil { pencils.insert(id); pencil = true }
         }
+        onTouchDown()
         if pencil { onPencilDown() }
     }
 
@@ -875,6 +911,10 @@ struct NotebookCanvas: UIViewRepresentable {
             var cleaned = drawing
             cleaned.strokes.removeAll { discardedCircles.contains(CircleKey($0)) }
             return cleaned
+        }
+
+        func canvasViewDidFinishRendering(_ canvasView: PKCanvasView) {
+            (canvasView as? PadCanvasView)?.renderingFinished()
         }
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
