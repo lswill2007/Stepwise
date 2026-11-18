@@ -355,7 +355,7 @@ final class InkTools: ObservableObject {
     @Published var allowFinger: Bool {
         didSet { UserDefaults.standard.set(allowFinger, forKey: "handwritingAllowFinger") }
     }
-    /// 两支笔（默认黑、蓝），各记各的颜色，方便用不同颜色记笔记；笔型、粗细等两支共用
+    /// 两支笔（默认黑、蓝），各记各的颜色和粗细，方便用不同颜色记笔记；笔型、压力等两支共用
     @Published var penSlotColors: [String] {
         didSet {
             UserDefaults.standard.set(penSlotColors[0], forKey: "inkPenColor")
@@ -364,13 +364,23 @@ final class InkTools: ObservableObject {
     }
     /// 正在用第几支笔（0 / 1）
     @Published var penSlot: Int { didSet { UserDefaults.standard.set(penSlot, forKey: "inkPenSlot") } }
+    @Published var penSlotWidths: [Double] {
+        didSet {
+            UserDefaults.standard.set(penSlotWidths[0], forKey: "inkPenWidth")
+            UserDefaults.standard.set(penSlotWidths[1], forKey: "inkPen2Width")
+        }
+    }
     /// 当前这支笔的颜色（十六进制）
     var penColor: String {
         get { penSlotColors[penSlot] }
         set { penSlotColors[penSlot] = newValue }
     }
-    /// 笔和荧光笔的粗细，记住上次的选择
-    @Published var penWidth: Double { didSet { UserDefaults.standard.set(penWidth, forKey: "inkPenWidth") } }
+    /// 当前这支笔的粗细
+    var penWidth: Double {
+        get { penSlotWidths[penSlot] }
+        set { penSlotWidths[penSlot] = newValue }
+    }
+    /// 荧光笔的颜色、粗细，记住上次的选择
     @Published var markerColor: String { didSet { UserDefaults.standard.set(markerColor, forKey: "inkMarkerColor") } }
     @Published var markerWidth: Double { didSet { UserDefaults.standard.set(markerWidth, forKey: "inkMarkerWidth") } }
     /// 荧光笔的不透明度（0.15–1），1 就是荧光笔本来的样子
@@ -432,7 +442,8 @@ final class InkTools: ObservableObject {
         penSlotColors = [d.string(forKey: "inkPenColor") ?? Self.penColors[0],
                          d.string(forKey: "inkPen2Color") ?? Self.penColors[1]]
         penSlot = min(max(d.integer(forKey: "inkPenSlot"), 0), 1)
-        penWidth = d.object(forKey: "inkPenWidth") as? Double ?? 3
+        penSlotWidths = [d.object(forKey: "inkPenWidth") as? Double ?? 3,
+                         d.object(forKey: "inkPen2Width") as? Double ?? 3]
         markerColor = d.string(forKey: "inkMarkerColor") ?? Self.markerColors[0]
         markerWidth = d.object(forKey: "inkMarkerWidth") as? Double ?? 16
         markerOpacity = d.object(forKey: "inkMarkerOpacity") as? Double ?? 1
@@ -1390,41 +1401,29 @@ struct InkPalette: View {
         }
     }
 
-    /// 收起：贴在底边中间的小标签。两支笔都在上面，点一下直接换笔（不展开）；
-    /// 用着别的工具时它也显示出来；点其余地方展开
+    /// 收起：贴在底边中间的小标签，所有功能都在上面（只有图标）。点工具直接换（不展开）；
+    /// 再点已选中的工具或调节按钮，展开并打开它的参数；点向上箭头展开
     private var collapsedBar: some View {
         let tab = UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14)
-        let expand = {
-            collapsed = false
-            shrunk = false
-        }
-        return HStack(spacing: 4) {
-            collapsedPen(0)
-            collapsedPen(1)
-            if tools.tool != .pen {
-                Button(action: expand) {
-                    HStack(spacing: 6) {
-                        Image(systemName: icon(tools.tool)).font(.title3)
-                        if let color = currentColor {
-                            Circle().fill(color).frame(width: 12, height: 12)
-                        }
-                    }
-                    .foregroundStyle(Color.accentColor)
-                    .padding(.horizontal, 10).frame(height: 34)
-                    .background(Color.accentColor.opacity(0.13), in: RoundedRectangle(cornerRadius: 10))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("展开工具栏")
-            }
-            Button(action: expand) {
-                Image(systemName: "chevron.up").font(.caption.weight(.bold)).foregroundStyle(.secondary)
-                    .frame(width: 34, height: 34)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("展开工具栏")
+        let row = HStack(spacing: 2) {
+            compactPen(0)
+            compactPen(1)
+            compactTool(.marker, title: L("荧光笔"))
+            compactTool(.eraser, title: L("橡皮"))
+            compactTool(.lasso, title: L("框选"))
+            compactTool(.ask, title: L("圈出来问"))
+            Divider().frame(height: 24).padding(.horizontal, 4)
+            compactIcon("arrow.uturn.backward", L("撤销")) { tools.undo() }
+            compactIcon("arrow.uturn.forward", L("重做")) { tools.redo() }
+            compactIcon("slider.horizontal.3", L("调节")) { expand(options: true) }
+            compactIcon("chevron.up", L("展开工具栏")) { expand(options: false) }
         }
         .padding(.horizontal, 10).padding(.top, 5).padding(.bottom, 2)
+        // 页面太窄放不下时可以左右滑
+        return ViewThatFits(in: .horizontal) {
+            row
+            ScrollView(.horizontal, showsIndicators: false) { row }
+        }
         .background {
             tab.fill(.regularMaterial)
                 .shadow(color: .black.opacity(0.1), radius: 6, y: -2)
@@ -1432,25 +1431,55 @@ struct InkPalette: View {
         }
     }
 
-    /// 收起的小标签上的一支笔：笔尖图标 + 颜色圆点，选中的有底色
-    private func collapsedPen(_ slot: Int) -> some View {
-        let selected = tools.tool == .pen && tools.penSlot == slot
-        return Button {
-            tools.selectPen(slot)
+    private func expand(options: Bool) {
+        collapsed = false
+        shrunk = false
+        showOptions = options && tools.tool != .lasso
+    }
+
+    private func compactPen(_ slot: Int) -> some View {
+        compactTool(.pen, title: penTitle(slot), selected: tools.tool == .pen && tools.penSlot == slot,
+                    color: tools.penSlotColors[slot]) { tools.selectPen(slot) }
+    }
+
+    private func compactTool(_ tool: InkTools.Tool, title: String) -> some View {
+        compactTool(tool, title: title, selected: tools.tool == tool,
+                    color: tool == .marker ? tools.markerColor : nil) { tools.select(tool) }
+    }
+
+    /// 收起的小标签上的一个工具：图标 + 颜色圆点，选中的有底色
+    private func compactTool(_ tool: InkTools.Tool, title: String, selected: Bool,
+                             color: String?, choose: @escaping () -> Void) -> some View {
+        Button {
+            if selected && tool != .lasso { expand(options: true) } else { choose() }
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "pencil.tip").font(.title3)
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: icon(tool)).font(.title3)
                     .foregroundStyle(selected ? Color.accentColor : Color.primary)
-                Circle().fill(Color(UIColor(hex: tools.penSlotColors[slot]))).frame(width: 14, height: 14)
-                    .overlay(Circle().stroke(Color.secondary.opacity(0.3), lineWidth: 0.5))
+                if let color {
+                    Circle().fill(Color(UIColor(hex: color)))
+                        .frame(width: 8, height: 8)
+                        .overlay(Circle().stroke(Color.white, lineWidth: 1))
+                        .offset(x: 3, y: 2)
+                }
             }
-            .padding(.horizontal, 10).frame(height: 34)
+            .frame(width: 38, height: 34)
             .background(selected ? Color.accentColor.opacity(0.13) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(penTitle(slot))
+        .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func compactIcon(_ name: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: name).font(.body.weight(.medium)).foregroundStyle(.secondary)
+                .frame(width: 34, height: 34)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
     private func penTitle(_ slot: Int) -> String { slot == 0 ? L("笔 1") : L("笔 2") }
@@ -1478,14 +1507,6 @@ struct InkPalette: View {
         }
         .buttonStyle(.borderless)
         .padding(.horizontal, labels ? 12 : 8)
-    }
-
-    private var currentColor: Color? {
-        switch tools.tool {
-        case .pen: return Color(UIColor(hex: tools.penColor))
-        case .marker: return Color(UIColor(hex: tools.markerColor))
-        default: return nil
-        }
     }
 
     private func icon(_ tool: InkTools.Tool) -> String {
