@@ -144,6 +144,15 @@ enum Ink {
     /// 笔记本的纸色
     static let paper = adaptive(light: (0.984, 0.977, 0.958), dark: (0.105, 0.105, 0.115))
 
+    /// 系统的底色、分隔线颜色（Mac 上只用于编译检查，换成对应的 AppKit 颜色）
+    #if os(iOS)
+    static let systemBackground = Color(uiColor: .systemBackground)
+    static let separator = Color(uiColor: .separator)
+    #else
+    static let systemBackground = Color(nsColor: .windowBackgroundColor)
+    static let separator = Color(nsColor: .separatorColor)
+    #endif
+
     private static func adaptive(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
         #if os(iOS)
         Color(UIColor { traits in

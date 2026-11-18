@@ -121,9 +121,9 @@ struct RootView: View {
                     .listStyle(.sidebar)
                     .scrollContentBackground(.hidden)
                     .frame(width: listWidth)
-                    .background(Color(.systemBackground))
+                    .background(Ink.systemBackground)
                     .overlay(alignment: .trailing) {
-                        Rectangle().fill(Color(.separator)).frame(width: 0.5)
+                        Rectangle().fill(Ink.separator).frame(width: 0.5)
                     }
                     .offset(x: listDrag)
                     // 向左拽：栏跟着手指走，松手拽够了就收起，不够就弹回去

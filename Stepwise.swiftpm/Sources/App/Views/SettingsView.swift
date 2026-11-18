@@ -1257,7 +1257,7 @@ private struct PriceEditor: View {
 /// 设置有左侧分类栏，用大一点的弹窗放得下两栏（iOS 18 起；iOS 17 用默认大小，窄时分栏自动收成一列）
 private struct LargeSheetSizing: ViewModifier {
     func body(content: Content) -> some View {
-        if #available(iOS 18.0, *) {
+        if #available(iOS 18.0, macOS 15.0, *) {
             content.presentationSizing(.page)
         } else {
             content
