@@ -413,6 +413,9 @@ enum Tutor {
         var s = text
         s = s.replacingOccurrences(of: "\\\\(begin|end)\\{[^}]*\\}", with: " ", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\\\", with: "；")
+        // 集合、数列的花括号 \{ \} 要留着（先换成占位符，免得和分组用的 {} 一起被去掉）；\% \_ 这些只去掉反斜杠
+        s = s.replacingOccurrences(of: "\\{", with: "\u{1}").replacingOccurrences(of: "\\}", with: "\u{2}")
+        s = s.replacingOccurrences(of: "\\\\([%_#&$ ])", with: "$1", options: .regularExpression)
         let replacements: [(String, String)] = [
             ("^\\circ", "°"), ("^{\\circ}", "°"), ("^2", "²"), ("^{2}", "²"), ("^3", "³"), ("^{3}", "³"),
             ("\\left", ""), ("\\right", ""), ("\\cdot", "·"), ("\\times", "×"), ("\\div", "÷"),
@@ -431,6 +434,8 @@ enum Tutor {
         s = s.replacingOccurrences(of: "[{}]", with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\*\\*", with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: "&", with: " ")
+        s = s.replacingOccurrences(of: "\u{1}", with: "{").replacingOccurrences(of: "\u{2}", with: "}")
+        s = s.replacingOccurrences(of: "\\", with: "")
         return s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
     }
 

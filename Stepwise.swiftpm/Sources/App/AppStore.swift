@@ -36,20 +36,20 @@ final class AppStore: ObservableObject {
     /// 左侧的分级文件夹，单独存在 folders.json
     @Published var folders: [Folder] = [] { didSet { saveFolders() } }
     /// 选了题集（或错题本）、笔记就不再显示白板
-    @Published var selectedSetID: UUID? { didSet { if selectedSetID != nil, selectedBoardID != nil { selectedBoardID = nil } } }
-    @Published var selectedQuestionID: UUID?
+    @Published var selectedSetID: UUID? { didSet { if selectedSetID != nil, selectedBoardID != nil { selectedBoardID = nil }; rememberOpened() } }
+    @Published var selectedQuestionID: UUID? { didSet { rememberOpened() } }
     /// 错题复习结果提示
     @Published var reviewOutcomes: [UUID: ReviewOutcome] = [:]
 
     // MARK: 笔记
     /// 笔记模式的文档，单独存在 notes.json
     @Published var notes: [NoteDoc] = [] { didSet { scheduleNotesSave() } }
-    @Published var selectedNoteID: UUID? { didSet { if selectedNoteID != nil, selectedBoardID != nil { selectedBoardID = nil } } }
+    @Published var selectedNoteID: UUID? { didSet { if selectedNoteID != nil, selectedBoardID != nil { selectedBoardID = nil }; rememberOpened() } }
 
     // MARK: 白板
     /// AI 白板，单独存在 boards.json
     @Published var boards: [Whiteboard] = [] { didSet { scheduleBoardsSave() } }
-    @Published var selectedBoardID: UUID?
+    @Published var selectedBoardID: UUID? { didSet { rememberOpened() } }
     /// 正在回复的便签（白板 id → 便签 id）；每块白板同时只问一处
     @Published var boardJobs: [UUID: UUID] = [:]
     var boardTasks: [UUID: Task<Void, Never>] = [:]
@@ -233,8 +233,49 @@ final class AppStore: ObservableObject {
         if let problem = DataLocation.launchProblem { errorMessage = problem }
     }
 
-    /// 打开 App 时直接回到最近的题集，停在第一道还没完成的题
+    private static let lastOpenedKey = "lastOpened"
+
+    /// 记下现在打开的是哪块白板、哪篇笔记，或哪个题集的哪道题，下次打开 App 回到这里
+    private func rememberOpened() {
+        guard isLoaded else { return }
+        var value: [String: String]
+        if let id = selectedBoardID {
+            value = ["kind": "board", "id": id.uuidString]
+        } else if let id = selectedNoteID {
+            value = ["kind": "note", "id": id.uuidString]
+        } else if let id = selectedSetID {
+            value = ["kind": "set", "id": id.uuidString]
+            if let qID = selectedQuestionID { value["question"] = qID.uuidString }
+        } else {
+            return
+        }
+        UserDefaults.standard.set(value, forKey: Self.lastOpenedKey)
+    }
+
+    /// 打开 App 时回到上次打开的白板、笔记或题集（停在上次那道题）；
+    /// 没有记录、或者那一份已经删了，就回到最近的题集，停在第一道还没完成的题
     private func selectRecent() {
+        if let last = UserDefaults.standard.dictionary(forKey: Self.lastOpenedKey) as? [String: String],
+           let id = last["id"].flatMap({ UUID(uuidString: $0) }) {
+            switch last["kind"] {
+            case "board" where board(id) != nil:
+                selectBoard(id)
+                return
+            case "note" where note(id) != nil:
+                selectNote(id)
+                return
+            case "set":
+                if let set = questionSets.first(where: { $0.id == id }) {
+                    let qID = last["question"].flatMap { UUID(uuidString: $0) }
+                    selectedSetID = id
+                    selectedQuestionID = set.questions.first(where: { $0.id == qID })?.id
+                        ?? set.questions.first(where: { !$0.status.isDone })?.id ?? set.questions.first?.id
+                    return
+                }
+            default:
+                break
+            }
+        }
         if let recent = questionSets.first {
             selectedSetID = recent.id
             selectedQuestionID = recent.questions.first(where: { !$0.status.isDone })?.id ?? recent.questions.first?.id

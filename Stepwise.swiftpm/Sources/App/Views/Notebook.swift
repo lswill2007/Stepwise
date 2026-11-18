@@ -46,6 +46,9 @@ struct NotebookView: View {
         var quietUntil = Date.distantPast
         /// 导航栏的高度
         var topInset: CGFloat = 0
+        /// 刚打开时先翻到选中的那道题，翻完才开始报。
+        /// 否则页面一排出来（第一题在最上面）就把“第一题”报上去，盖掉了要翻到的题，页面就停在第一题
+        var ready = false
     }
 
     @StateObject private var ink = NotebookInk()
@@ -94,7 +97,10 @@ struct NotebookView: View {
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { tracker.topInset = $0 }
             .onAppear {
                 // 等页面排好版再翻到选中的题
-                DispatchQueue.main.async { scroll(proxy, to: store.selectedQuestionID, animated: false) }
+                DispatchQueue.main.async {
+                    scroll(proxy, to: store.selectedQuestionID, animated: false)
+                    tracker.ready = true
+                }
             }
             // 左边目录点了哪道题，就翻到哪道题（翻页时自己报上去的不算）
             .onChange(of: store.selectedQuestionID) {
@@ -166,7 +172,7 @@ struct NotebookView: View {
 
     /// 翻到哪道题，左边目录就跟着选中哪道题：页面顶上那一条线落在哪道题里就是哪道
     private func reportScrolledQuestion() {
-        guard Date() >= tracker.quietUntil else { return }
+        guard tracker.ready, Date() >= tracker.quietUntil else { return }
         // 翻到某道题时题目顶端正好在导航栏下沿，线再往下一点，免得算成上一道
         let line = tracker.topInset + 80
         let frames = tracker.frames
@@ -276,16 +282,6 @@ struct QuestionBlock: View {
             }
             .sheet(isPresented: $editing) { EditQuestionView(setID: setID, qID: qID) }
             .sheet(isPresented: $showHistory) { QuestionHistoryView(setID: setID, qID: qID) }
-            .confirmationDialog("清空这道题的作答、检查记录和手写，重新开始？", isPresented: $confirmReset, titleVisibility: .visible) {
-                Button("清空并重做", role: .destructive) {
-                    store.resetQuestion(setID, qID)
-                    draft = ""
-                    model.clear()
-                }
-            }
-            .confirmationDialog("擦掉这道题的全部手写？", isPresented: $confirmClearInk, titleVisibility: .visible) {
-                Button("全部擦掉", role: .destructive) { clearAll() }
-            }
         }
     }
 
@@ -345,6 +341,14 @@ struct QuestionBlock: View {
             }
             .accessibilityLabel("这道题的更多操作")
             .popover(isPresented: $showAsk) { askPopover }
+            // 确认框挂在按钮上：iPad 上它是从挂着的那个视图弹出来的，挂在整道题上会弹到很远的地方
+            .confirmationDialog("清空这道题的作答、检查记录和手写，重新开始？", isPresented: $confirmReset, titleVisibility: .visible) {
+                Button("清空并重做", role: .destructive) {
+                    store.resetQuestion(setID, qID)
+                    draft = ""
+                    model.clear()
+                }
+            }
         }
     }
 
@@ -399,6 +403,9 @@ struct QuestionBlock: View {
                     Spacer()
                     Button(role: .destructive) { confirmClearInk = true } label: { Label("擦掉全部", systemImage: "trash") }
                         .disabled(model.isEmpty)
+                        .confirmationDialog("擦掉这道题的全部手写？", isPresented: $confirmClearInk, titleVisibility: .visible) {
+                            Button("全部擦掉", role: .destructive) { clearAll() }
+                        }
                 }
                 .font(.caption)
                 .buttonStyle(.borderless)
