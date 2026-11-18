@@ -128,6 +128,8 @@ final class BoardState: ObservableObject {
     var notesBottom: CGFloat = 0
     /// 量到的每张便签的高度（屏幕上的点）：放新便签时避开它们
     var stickyHeights: [UUID: CGFloat] = [:]
+    /// 正在拖（或刚拖过）的便签放在最上面
+    @Published var raisedNote: UUID?
 
     func syncViewport() {
         guard let canvas else { return }
@@ -648,8 +650,11 @@ private struct BoardOverlay: View {
                 marks
                 ForEach(Array(board.notes.enumerated()), id: \.element.id) { i, note in
                     let spot = viewport.screen(CGPoint(x: note.x, y: note.y))
-                    BoardStickyView(boardID: boardID, note: note, number: i + 1, zoom: viewport.zoom)
+                    BoardStickyView(boardID: boardID, note: note, number: i + 1, zoom: viewport.zoom) {
+                        if state.raisedNote != note.id { state.raisedNote = note.id }
+                    }
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { state.stickyHeights[note.id] = $0 }
+                        .zIndex(state.raisedNote == note.id ? 1 : 0)
                         .offset(x: spot.x, y: spot.y)
                 }
             }
@@ -803,6 +808,8 @@ private struct BoardStickyView: View {
     let note: BoardNote
     let number: Int
     let zoom: CGFloat
+    /// 开始拖：放到最上面
+    var onRaise: () -> Void = {}
     @State private var drag: CGSize = .zero
     @State private var enlarged = false
 
@@ -912,16 +919,25 @@ private struct BoardStickyView: View {
         }
     }
 
+    /// 拖动便签：按屏幕坐标量拖了多远。按便签自己的坐标量的话，便签一动，量的起点也跟着动，会来回抖
     private var moveGesture: some Gesture {
-        DragGesture(minimumDistance: 4)
-            .onChanged { drag = $0.translation }
+        DragGesture(minimumDistance: 4, coordinateSpace: .global)
+            .onChanged { value in
+                if drag == .zero { onRaise() }
+                drag = value.translation
+            }
             .onEnded { value in
                 let z = max(zoom, 0.01)
-                store.mutateBoardNote(boardID, note.id) { n in
-                    n.x = max(0, n.x + value.translation.width / z)
-                    n.y = max(0, n.y + value.translation.height / z)
+                // 放下时位置和偏移同时换，不加动画，免得闪一下
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    store.mutateBoardNote(boardID, note.id) { n in
+                        n.x = max(0, n.x + value.translation.width / z)
+                        n.y = max(0, n.y + value.translation.height / z)
+                    }
+                    drag = .zero
                 }
-                drag = .zero
             }
     }
 
