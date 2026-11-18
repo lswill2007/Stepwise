@@ -181,7 +181,7 @@ struct InkTextButtonStyle: ButtonStyle {
     }
 }
 
-/// AI 正在生成时的状态：带颜色的胶囊，闪动的 ✦、加粗的文字、一道光从左扫到右，后面是已经等了几秒，可以停止。
+/// AI 正在生成时的状态：带颜色的胶囊，闪动的 ✦、加粗的文字、一圈光沿边框转，后面是已经等了几秒，可以停止。
 /// 放在刚点的按钮旁边和正在写的地方，一眼看得出 AI 在干活
 struct GeneratingBadge: View {
     let label: String
@@ -191,7 +191,7 @@ struct GeneratingBadge: View {
     var compact = false
     var stop: (() -> Void)?
     @AppStorage("showTiming") private var showTiming = true
-    @State private var sweep = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: compact ? 6 : 8) {
@@ -223,21 +223,47 @@ struct GeneratingBadge: View {
         .padding(.horizontal, compact ? 9 : 12)
         .padding(.vertical, compact ? 4 : 7)
         .background(tint.opacity(0.16), in: Capsule())
-        .overlay(Capsule().strokeBorder(tint.opacity(0.5), lineWidth: 1))
-        // 一道光从左扫到右，一直在动
+        .overlay(Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 1))
+        // 一圈光沿着胶囊边框转，底色轻轻呼吸。按当前时间算位置，不靠 @State 动画，
+        // 文字流式刷新、秒数变化时都不会被打断重来，所以不会一卡一卡
         .overlay {
-            GeometryReader { geo in
-                LinearGradient(colors: [.clear, .white.opacity(0.35), .clear], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: geo.size.width * 0.35)
-                    .offset(x: sweep ? geo.size.width : -geo.size.width * 0.35)
+            TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                let turn = t.truncatingRemainder(dividingBy: 2.2) / 2.2
+                let breath = (sin(t * 2 * .pi / 2.4) + 1) / 2
+                let width: CGFloat = compact ? 1.5 : 2
+                ZStack {
+                    Capsule().fill(tint.opacity(0.10 * breath))
+                    // 按边框长度取一段（trim 按长度算），所以长边、圆头上走得一样快；两段光对着转
+                    ForEach(Array(Self.arcs(at: turn).enumerated()), id: \.offset) { _, arc in
+                        Capsule().inset(by: width / 2)
+                            .trim(from: arc.0, to: arc.1)
+                            .stroke(tint.opacity(0.45), style: StrokeStyle(lineWidth: width * 2.5, lineCap: .round))
+                            .blur(radius: 2)
+                        Capsule().inset(by: width / 2)
+                            .trim(from: arc.0, to: arc.1)
+                            .stroke(tint, style: StrokeStyle(lineWidth: width, lineCap: .round))
+                    }
+                }
             }
-            .clipShape(Capsule())
-            .blendMode(.plusLighter)
             .allowsHitTesting(false)
         }
         .fixedSize()
-        .onAppear {
-            withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { sweep = true }
+    }
+
+    /// 两段各占边框 18% 的光，起点相差半圈；跨过路径终点的那段拆成两截
+    private static func arcs(at turn: Double) -> [(CGFloat, CGFloat)] {
+        let length = 0.18
+        var result: [(CGFloat, CGFloat)] = []
+        for start in [turn, (turn + 0.5).truncatingRemainder(dividingBy: 1)] {
+            let end = start + length
+            if end <= 1 {
+                result.append((start, end))
+            } else {
+                result.append((start, 1))
+                result.append((0, end - 1))
+            }
         }
+        return result
     }
 }
