@@ -9,34 +9,46 @@ extension Whiteboard {
     /// 便签的宽度（屏幕上的点，不随缩放变）
     static let stickyWidth: CGFloat = 280
 
-    /// 框住一处后，便签放在哪里：右边放得下放右边，放不下放左边，再放不下放下面；
-    /// 和已有的便签叠在一起时往下挪
-    static func stickySpot(for region: CGRect, avoiding notes: [BoardNote] = []) -> CGPoint {
-        let gap: CGFloat = 28
+    /// 框住一处后，便签放在哪里：右边放得下放右边，放不下放左边，再放不下放下面；和已有的便签叠在一起时往下挪。
+    /// 便签按屏幕大小画，不随缩放变：zoom 是现在的缩放，heights 是量到的每张便签的高度（屏幕上的点）
+    static func stickySpot(for region: CGRect, avoiding notes: [BoardNote] = [], zoom: CGFloat = 1,
+                           heights: [UUID: CGFloat] = [:]) -> CGPoint {
+        let z = max(zoom, 0.05)
+        let gap: CGFloat = 28 / z
+        let width = stickyWidth / z
         var spot: CGPoint
-        if region.maxX + gap + stickyWidth <= canvasWidth {
+        if region.maxX + gap + width <= canvasWidth {
             spot = CGPoint(x: region.maxX + gap, y: region.minY)
-        } else if region.minX - gap - stickyWidth >= 0 {
-            spot = CGPoint(x: region.minX - gap - stickyWidth, y: region.minY)
+        } else if region.minX - gap - width >= 0 {
+            spot = CGPoint(x: region.minX - gap - width, y: region.minY)
         } else {
             spot = CGPoint(x: max(0, region.minX), y: region.maxY + gap)
         }
-        let others = notes.filter { !$0.minimized }.map {
-            CGRect(x: $0.x, y: $0.y, width: Double(stickyWidth), height: Double(estimatedHeight($0)))
+        // 收起的便签只是一个小标签
+        let others = notes.map { note in
+            let h = note.minimized ? 34 : (heights[note.id] ?? estimatedHeight(note))
+            let w = note.minimized ? 70 : stickyWidth
+            return CGRect(x: note.x, y: note.y, width: Double(w / z), height: Double(h / z))
         }
-        for _ in 0..<20 {
-            let mine = CGRect(x: spot.x, y: spot.y, width: stickyWidth, height: 160)
+        for _ in 0..<30 {
+            let mine = CGRect(x: spot.x, y: spot.y, width: width, height: 160 / z)
             guard let hit = others.first(where: { $0.intersects(mine) }) else { break }
-            spot.y = hit.maxY + 16
+            spot.y = hit.maxY + 16 / z
         }
         return spot
     }
 
-    /// 便签大概多高（画布坐标，按不缩放算）：一行大约 15 个字
+    /// 没量到时估一下便签有多高（屏幕上的点）：每段按一行 16 个字折行，段与段之间留空
     static func estimatedHeight(_ note: BoardNote) -> CGFloat {
-        let lines = max(2, (note.text.count + 14) / 15)
-        let comments = note.comments.reduce(0) { $0 + max(1, ($1.note.count + 13) / 14) }
-        return CGFloat(64 + lines * 21 + comments * 20 + note.comments.count * 10)
+        func height(_ text: String, perLine: Int, lineHeight: CGFloat) -> CGFloat {
+            text.components(separatedBy: "\n").reduce(0) { sum, line in
+                let n = line.trimmingCharacters(in: .whitespaces).count
+                return sum + (n == 0 ? 6 : CGFloat((n + perLine - 1) / perLine) * lineHeight + 8)
+            }
+        }
+        let body = height(note.text, perLine: 16, lineHeight: 23)
+        let comments = note.comments.reduce(0) { $0 + height($1.note, perLine: 17, lineHeight: 20) + 6 }
+        return 60 + max(body, 46) + comments
     }
 }
 
@@ -113,7 +125,8 @@ extension AppStore {
 
     /// 框选一处发给 AI。image：框住的笔迹，左边印了行号；lines：每一行在画布上的位置（行号从 1 开始）；
     /// question 为 nil 时是检查。回复写在一张便签上，指出的问题按行号列在下面
-    func askBoard(_ boardID: UUID, region: CGRect, lines: [CGRect], image: Data, question: String?) {
+    func askBoard(_ boardID: UUID, region: CGRect, lines: [CGRect], image: Data, question: String?,
+                  zoom: CGFloat = 1, stickyHeights: [UUID: CGFloat] = [:]) {
         guard boardTasks[boardID] == nil, board(boardID) != nil else { return }
         let purpose: RequestPurpose = question == nil ? .check : .chat
         let client: LLMClient
@@ -121,7 +134,7 @@ extension AppStore {
             if !(error is ConsentRequired) { errorMessage = error.localizedDescription }
             return
         }
-        let spot = Whiteboard.stickySpot(for: region, avoiding: board(boardID)?.notes ?? [])
+        let spot = Whiteboard.stickySpot(for: region, avoiding: board(boardID)?.notes ?? [], zoom: zoom, heights: stickyHeights)
         let note = BoardNote(region: InkRegion(region), x: spot.x, y: spot.y,
                              question: question?.trimmingCharacters(in: .whitespacesAndNewlines))
         mutateBoard(boardID) { board in

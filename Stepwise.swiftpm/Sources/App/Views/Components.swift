@@ -222,12 +222,12 @@ struct GeneratingBadge: View {
         .foregroundStyle(tint)
         .padding(.horizontal, compact ? 9 : 12)
         .padding(.vertical, compact ? 4 : 7)
-        .background(tint.opacity(0.13), in: Capsule())
-        .overlay(Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 1))
+        .background(tint.opacity(0.16), in: Capsule())
+        .overlay(Capsule().strokeBorder(tint.opacity(0.5), lineWidth: 1))
         // 一道光从左扫到右，一直在动
         .overlay {
             GeometryReader { geo in
-                LinearGradient(colors: [.clear, .white.opacity(0.55), .clear], startPoint: .leading, endPoint: .trailing)
+                LinearGradient(colors: [.clear, .white.opacity(0.35), .clear], startPoint: .leading, endPoint: .trailing)
                     .frame(width: geo.size.width * 0.35)
                     .offset(x: sweep ? geo.size.width : -geo.size.width * 0.35)
             }

@@ -126,6 +126,8 @@ final class BoardState: ObservableObject {
     weak var model: HandwritingModel?
     /// 便签最低写到哪里（画布坐标）：画布至少要这么高，才滚得到
     var notesBottom: CGFloat = 0
+    /// 量到的每张便签的高度（屏幕上的点）：放新便签时避开它们
+    var stickyHeights: [UUID: CGFloat] = [:]
 
     func syncViewport() {
         guard let canvas else { return }
@@ -647,6 +649,7 @@ private struct BoardOverlay: View {
                 ForEach(Array(board.notes.enumerated()), id: \.element.id) { i, note in
                     let spot = viewport.screen(CGPoint(x: note.x, y: note.y))
                     BoardStickyView(boardID: boardID, note: note, number: i + 1, zoom: viewport.zoom)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { state.stickyHeights[note.id] = $0 }
                         .offset(x: spot.x, y: spot.y)
                 }
             }
@@ -708,7 +711,8 @@ private struct BoardOverlay: View {
 
     private func send(_ selection: BoardSelection, question: String?) {
         guard let export = BoardExport.make(selection.strokes) else { return }
-        store.askBoard(boardID, region: selection.bounds, lines: export.lines, image: export.image, question: question)
+        store.askBoard(boardID, region: selection.bounds, lines: export.lines, image: export.image, question: question,
+                       zoom: viewport.zoom, stickyHeights: state.stickyHeights)
         state.selection = nil
     }
 }
@@ -834,10 +838,7 @@ private struct BoardStickyView: View {
     private var card: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
-            if note.text.isEmpty {
-                GeneratingBadge(label: note.isCheck ? L("正在检查…") : L("正在写…"), startedAt: note.createdAt,
-                                compact: true) { store.stopBoardJob(boardID) }
-            } else {
+            if !note.text.isEmpty {
                 RichText(note.text, scale: 0.86)
                     .fixedSize(horizontal: false, vertical: true)
                     // 文字在网页视图里，点击会被它吃掉：盖一层透明的来接双击
@@ -847,6 +848,11 @@ private struct BoardStickyView: View {
             }
             ForEach(Array(note.comments.enumerated()), id: \.offset) { k, comment in
                 commentRow(k + 1, comment)
+            }
+            // 一直到写完都显示在最下面：还没出字时是“正在检查…”，出字以后是“还在写…”，都可以停止
+            if streaming {
+                GeneratingBadge(label: note.text.isEmpty ? (note.isCheck ? L("正在检查…") : L("正在写…")) : L("还在写…"),
+                                startedAt: note.createdAt, compact: true) { store.stopBoardJob(boardID) }
             }
         }
         .padding(12)
@@ -872,11 +878,8 @@ private struct BoardStickyView: View {
                 .foregroundStyle(note.isCheck ? BoardVerdictIcon.color(note) : Color.primary)
                 .lineLimit(2)
             Spacer(minLength: 4)
-            if streaming {
-                Button("停止") { store.stopBoardJob(boardID) }
-                    .font(.caption)
-                    .buttonStyle(InkTextButtonStyle(color: .secondary))
-            } else {
+            // 正在写时，停止按钮在下面的状态胶囊里
+            if !streaming {
                 Menu {
                     Button("放大查看", systemImage: "arrow.up.left.and.arrow.down.right") { enlarged = true }
                     Button("删除便签", systemImage: "trash", role: .destructive) { store.deleteBoardNote(boardID, note.id) }
