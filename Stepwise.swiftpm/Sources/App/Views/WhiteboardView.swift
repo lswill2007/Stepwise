@@ -671,6 +671,7 @@ struct WhiteboardView: View {
             }
             .background(Ink.paper)
             .overlay(alignment: .top) { BoardEmptyHint(model: model, hasNotes: !board.notes.isEmpty) }
+            .overlay { InkOptionsDismissLayer(tools: ink.tools) }
             .overlay(alignment: .bottom) { InkPalette(tools: ink.tools) }
             .navigationTitle(board.title)
             .navigationBarTitleDisplayMode(.inline)

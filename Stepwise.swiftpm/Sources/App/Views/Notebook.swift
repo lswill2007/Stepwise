@@ -111,6 +111,7 @@ struct NotebookView: View {
         .scrollDismissesKeyboard(.interactively)
         .background(Ink.paper)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .overlay { InkOptionsDismissLayer(tools: ink.tools) }
         .overlay(alignment: .bottom) {
             if HandwritingModel.isAvailable && !items.isEmpty {
                 InkPalette(tools: ink.tools)

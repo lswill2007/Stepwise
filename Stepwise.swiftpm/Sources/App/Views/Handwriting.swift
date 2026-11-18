@@ -426,6 +426,9 @@ final class InkTools: ObservableObject {
     static let markerWidthRange: ClosedRange<Double> = 4...40
     static let markerOpacityRange: ClosedRange<Double> = 0.15...1
 
+    /// 工具栏上方的参数面板开着没有。开着时页面上盖一层（InkOptionsDismissLayer），点别处先关面板
+    @Published var optionsShown = false
+
     /// 当前是不是“按住侧边”的临时橡皮擦
     @Published private(set) var isTemporaryEraser = false
 
@@ -1351,7 +1354,6 @@ struct InkPalette: View {
     /// 手动收起（记住）；shrunk 是开始书写时自动缩小（临时的，下次打开还是展开）
     @AppStorage("inkPaletteCollapsed") private var collapsed = false
     @State private var shrunk = false
-    @State private var showOptions = false
 
     private var isSmall: Bool { collapsed || shrunk }
 
@@ -1363,7 +1365,7 @@ struct InkPalette: View {
                     .padding(.horizontal, 12).padding(.vertical, 5)
                     .background(.regularMaterial, in: Capsule())
             }
-            if showOptions && !isSmall {
+            if tools.optionsShown && !isSmall {
                 InkOptionsPanel(tools: tools)
                     .padding(.horizontal, 12)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -1388,18 +1390,20 @@ struct InkPalette: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(.spring(duration: 0.25), value: showOptions)
+        .animation(.spring(duration: 0.25), value: tools.optionsShown)
         .animation(.spring(duration: 0.25), value: isSmall)
         // 开始书写：缩成底边的小标签，把纸面让出来；点一下再展开
         .onReceive(tools.writingBegan) {
             guard !isSmall else { return }
-            showOptions = false
+            tools.optionsShown = false
             shrunk = true
         }
         // 换工具时，参数面板跟着换；选了没有参数的工具就收起来
         .onChange(of: tools.tool) {
-            if tools.tool == .lasso { showOptions = false }
+            if tools.tool == .lasso { tools.optionsShown = false }
         }
+        // 换到别的页面，面板不跟过去
+        .onDisappear { tools.optionsShown = false }
     }
 
     /// 收起：贴在底边中间的小标签，所有功能都在上面（只有图标）。点工具直接换（不展开）；
@@ -1435,7 +1439,7 @@ struct InkPalette: View {
     private func expand(options: Bool) {
         collapsed = false
         shrunk = false
-        showOptions = options && tools.tool != .lasso
+        tools.optionsShown = options && tools.tool != .lasso
     }
 
     private func compactPen(_ slot: Int) -> some View {
@@ -1498,11 +1502,11 @@ struct InkPalette: View {
 
             iconButton("arrow.uturn.backward", L("撤销")) { tools.undo() }
             iconButton("arrow.uturn.forward", L("重做")) { tools.redo() }
-            iconButton(showOptions ? "slider.horizontal.below.square.filled.and.square" : "slider.horizontal.3", L("调节")) {
-                showOptions.toggle()
+            iconButton(tools.optionsShown ? "slider.horizontal.below.square.filled.and.square" : "slider.horizontal.3", L("调节")) {
+                tools.optionsShown.toggle()
             }
             iconButton("chevron.down", L("收起工具栏")) {
-                showOptions = false
+                tools.optionsShown = false
                 collapsed = true
             }
         }
@@ -1541,7 +1545,7 @@ struct InkPalette: View {
         Button {
             // 再点一次已选中的工具：展开或收起它的参数
             if selected && tool != .lasso {
-                showOptions.toggle()
+                tools.optionsShown.toggle()
             } else {
                 choose()
             }
@@ -1577,6 +1581,24 @@ struct InkPalette: View {
             Image(systemName: name).font(.title3).frame(width: 44, height: 44)
         }
         .accessibilityLabel(label)
+    }
+}
+
+/// 参数面板开着时盖在页面上（工具栏下面）的透明层：笔或手指点一下别处就关掉面板，
+/// 这一下被这层接住，不会在纸上写出一点
+struct InkOptionsDismissLayer: View {
+    @ObservedObject var tools: InkTools
+
+    var body: some View {
+        if tools.optionsShown {
+            Color.clear
+                .contentShape(Rectangle())
+                // 一碰到就关，不等抬起；这一笔剩下的部分也还是这层的，不会传到画布上
+                .gesture(DragGesture(minimumDistance: 0).onChanged { _ in
+                    if tools.optionsShown { tools.optionsShown = false }
+                })
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -1762,6 +1784,11 @@ struct NotebookCanvas: View {
 }
 
 struct InkPalette: View {
+    @ObservedObject var tools: InkTools
+    var body: some View { EmptyView() }
+}
+
+struct InkOptionsDismissLayer: View {
     @ObservedObject var tools: InkTools
     var body: some View { EmptyView() }
 }

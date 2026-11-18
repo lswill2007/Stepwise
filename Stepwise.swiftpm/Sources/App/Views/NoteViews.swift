@@ -437,6 +437,7 @@ struct NoteDocView: View {
             // 页面变宽变窄（缩放比例跟着变）、删掉一块：空白处的笔迹也要重新对上
             .onChange(of: width) { pageInk.scheduleSettle { settlePageInk() } }
             .onChange(of: doc.blocks.map(\.id)) { pageInk.scheduleSettle { settlePageInk() } }
+            .overlay { InkOptionsDismissLayer(tools: ink.tools) }
             .overlay(alignment: .bottom) { bottomBar(doc, busy: job != nil) }
             .navigationTitle(doc.title)
             #if os(iOS)
