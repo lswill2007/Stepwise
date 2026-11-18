@@ -75,6 +75,8 @@
 "正在用橡皮擦 · 松开笔身侧边恢复书写" = "Erasing · release the side of the pencil to keep writing";
 "用笔圈住想问的地方，圈的这一笔不会留下，圈完弹出输入框。" = "Circle the part you want to ask about. The circle won't stay on the page, and a question box appears.";
 "画笔稳定性" = "Stroke Stability";
+"笔 1" = "Pen 1";
+"笔 2" = "Pen 2";
 "笔" = "Pen";
 "笔型" = "Pen Type";
 "笔尖扁平度" = "Nib Flatness";

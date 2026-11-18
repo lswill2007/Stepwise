@@ -355,8 +355,21 @@ final class InkTools: ObservableObject {
     @Published var allowFinger: Bool {
         didSet { UserDefaults.standard.set(allowFinger, forKey: "handwritingAllowFinger") }
     }
-    /// 笔和荧光笔的颜色（十六进制）、粗细，记住上次的选择
-    @Published var penColor: String { didSet { UserDefaults.standard.set(penColor, forKey: "inkPenColor") } }
+    /// 两支笔（默认黑、蓝），各记各的颜色，方便用不同颜色记笔记；笔型、粗细等两支共用
+    @Published var penSlotColors: [String] {
+        didSet {
+            UserDefaults.standard.set(penSlotColors[0], forKey: "inkPenColor")
+            UserDefaults.standard.set(penSlotColors[1], forKey: "inkPen2Color")
+        }
+    }
+    /// 正在用第几支笔（0 / 1）
+    @Published var penSlot: Int { didSet { UserDefaults.standard.set(penSlot, forKey: "inkPenSlot") } }
+    /// 当前这支笔的颜色（十六进制）
+    var penColor: String {
+        get { penSlotColors[penSlot] }
+        set { penSlotColors[penSlot] = newValue }
+    }
+    /// 笔和荧光笔的粗细，记住上次的选择
     @Published var penWidth: Double { didSet { UserDefaults.standard.set(penWidth, forKey: "inkPenWidth") } }
     @Published var markerColor: String { didSet { UserDefaults.standard.set(markerColor, forKey: "inkMarkerColor") } }
     @Published var markerWidth: Double { didSet { UserDefaults.standard.set(markerWidth, forKey: "inkMarkerWidth") } }
@@ -416,7 +429,9 @@ final class InkTools: ObservableObject {
         eraserKind = EraserKind(rawValue: UserDefaults.standard.string(forKey: "handwritingEraserKind") ?? "") ?? .area
         allowFinger = UserDefaults.standard.bool(forKey: "handwritingAllowFinger")
         let d = UserDefaults.standard
-        penColor = d.string(forKey: "inkPenColor") ?? Self.penColors[0]
+        penSlotColors = [d.string(forKey: "inkPenColor") ?? Self.penColors[0],
+                         d.string(forKey: "inkPen2Color") ?? Self.penColors[1]]
+        penSlot = min(max(d.integer(forKey: "inkPenSlot"), 0), 1)
         penWidth = d.object(forKey: "inkPenWidth") as? Double ?? 3
         markerColor = d.string(forKey: "inkMarkerColor") ?? Self.markerColors[0]
         markerWidth = d.object(forKey: "inkMarkerWidth") as? Double ?? 16
@@ -451,6 +466,12 @@ final class InkTools: ObservableObject {
 
     /// 圈选提问之前的工具，圈完一次就切回去
     private var toolBeforeAsk: Tool = .pen
+
+    /// 选第几支笔
+    func selectPen(_ slot: Int) {
+        penSlot = slot
+        select(.pen)
+    }
 
     func select(_ newTool: Tool) {
         if newTool == .eraser && tool != .eraser { toolBeforeEraser = tool }
@@ -1369,35 +1390,75 @@ struct InkPalette: View {
         }
     }
 
-    /// 收起：贴在底边中间的小标签，只剩当前工具和颜色，点一下展开
+    /// 收起：贴在底边中间的小标签。两支笔都在上面，点一下直接换笔（不展开）；
+    /// 用着别的工具时它也显示出来；点其余地方展开
     private var collapsedBar: some View {
         let tab = UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14)
-        return Button {
+        let expand = {
             collapsed = false
             shrunk = false
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: icon(tools.tool)).font(.title3)
-                if let color = currentColor {
-                    Circle().fill(color).frame(width: 16, height: 16)
+        }
+        return HStack(spacing: 4) {
+            collapsedPen(0)
+            collapsedPen(1)
+            if tools.tool != .pen {
+                Button(action: expand) {
+                    HStack(spacing: 6) {
+                        Image(systemName: icon(tools.tool)).font(.title3)
+                        if let color = currentColor {
+                            Circle().fill(color).frame(width: 12, height: 12)
+                        }
+                    }
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 10).frame(height: 34)
+                    .background(Color.accentColor.opacity(0.13), in: RoundedRectangle(cornerRadius: 10))
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("展开工具栏")
+            }
+            Button(action: expand) {
                 Image(systemName: "chevron.up").font(.caption.weight(.bold)).foregroundStyle(.secondary)
+                    .frame(width: 34, height: 34)
+                    .contentShape(Rectangle())
             }
-            .padding(.horizontal, 20).padding(.top, 9).padding(.bottom, 4)
+            .buttonStyle(.plain)
+            .accessibilityLabel("展开工具栏")
+        }
+        .padding(.horizontal, 10).padding(.top, 5).padding(.bottom, 2)
+        .background {
+            tab.fill(.regularMaterial)
+                .shadow(color: .black.opacity(0.1), radius: 6, y: -2)
+                .ignoresSafeArea(edges: .bottom)
+        }
+    }
+
+    /// 收起的小标签上的一支笔：笔尖图标 + 颜色圆点，选中的有底色
+    private func collapsedPen(_ slot: Int) -> some View {
+        let selected = tools.tool == .pen && tools.penSlot == slot
+        return Button {
+            tools.selectPen(slot)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "pencil.tip").font(.title3)
+                    .foregroundStyle(selected ? Color.accentColor : Color.primary)
+                Circle().fill(Color(UIColor(hex: tools.penSlotColors[slot]))).frame(width: 14, height: 14)
+                    .overlay(Circle().stroke(Color.secondary.opacity(0.3), lineWidth: 0.5))
+            }
+            .padding(.horizontal, 10).frame(height: 34)
+            .background(selected ? Color.accentColor.opacity(0.13) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
             .contentShape(Rectangle())
-            .background {
-                tab.fill(.regularMaterial)
-                    .shadow(color: .black.opacity(0.1), radius: 6, y: -2)
-                    .ignoresSafeArea(edges: .bottom)
-            }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("展开工具栏")
+        .accessibilityLabel(penTitle(slot))
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
+
+    private func penTitle(_ slot: Int) -> String { slot == 0 ? L("笔 1") : L("笔 2") }
 
     private func fullBar(labels: Bool) -> some View {
         HStack(spacing: labels ? 6 : 2) {
-            toolButton(.pen, title: L("笔"), label: labels)
+            penButton(0, label: labels)
+            penButton(1, label: labels)
             toolButton(.marker, title: L("荧光笔"), label: labels)
             toolButton(.eraser, title: L("橡皮"), label: labels)
             toolButton(.lasso, title: L("框选"), label: labels)
@@ -1437,14 +1498,30 @@ struct InkPalette: View {
         }
     }
 
+    /// 两支笔各一个按钮；再点一次正在用的这支：展开或收起它的参数
+    private func penButton(_ slot: Int, label: Bool) -> some View {
+        toolButton(.pen, title: penTitle(slot), label: label,
+                   selected: tools.tool == .pen && tools.penSlot == slot,
+                   color: tools.penSlotColors[slot]) {
+            tools.selectPen(slot)
+        }
+    }
+
     private func toolButton(_ tool: InkTools.Tool, title: String, label: Bool) -> some View {
-        let selected = tools.tool == tool
-        return Button {
+        toolButton(tool, title: title, label: label, selected: tools.tool == tool,
+                   color: tool == .marker ? tools.markerColor : nil) {
+            tools.select(tool)
+        }
+    }
+
+    private func toolButton(_ tool: InkTools.Tool, title: String, label: Bool, selected: Bool,
+                            color: String?, choose: @escaping () -> Void) -> some View {
+        Button {
             // 再点一次已选中的工具：展开或收起它的参数
             if selected && tool != .lasso {
                 showOptions.toggle()
             } else {
-                tools.select(tool)
+                choose()
             }
         } label: {
             VStack(spacing: 2) {
@@ -1452,10 +1529,10 @@ struct InkPalette: View {
                     Image(systemName: icon(tool))
                         .font(.title2)
                         .foregroundStyle(selected ? Color.accentColor : Color.primary)
-                    if tool == .pen || tool == .marker {
-                        // 小圆点是当前颜色
+                    if let color {
+                        // 小圆点是这支笔的颜色
                         Circle()
-                            .fill(Color(UIColor(hex: tool == .pen ? tools.penColor : tools.markerColor)))
+                            .fill(Color(UIColor(hex: color)))
                             .frame(width: 9, height: 9)
                             .overlay(Circle().stroke(Color.white, lineWidth: 1))
                             .offset(x: 4, y: 2)
