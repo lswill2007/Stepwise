@@ -152,7 +152,8 @@ final class BoardState: ObservableObject {
         let height = max(2400, bottom + 1200, notesBottom + 800, canvas.bounds.height / zoom)
         let size = CGSize(width: Whiteboard.canvasWidth * zoom, height: height * zoom)
         if abs(canvas.contentSize.width - size.width) > 0.5 || abs(canvas.contentSize.height - size.height) > 0.5 {
-            canvas.contentSize = size
+            // 写字时改画布大小也可能打断这一笔：等抬笔
+            canvas.whenIdle { [weak canvas] in canvas?.contentSize = size }
         }
     }
 
@@ -167,10 +168,7 @@ final class BoardState: ObservableObject {
         if canvas.bounds.size != lastSize {
             lastSize = canvas.bounds.size
             pendingRedraw?.cancel()
-            let work = DispatchWorkItem { [weak canvas] in
-                guard let canvas, canvas.pendingDrawing == nil, !canvas.drawing.strokes.isEmpty else { return }
-                canvas.replaceDrawing(canvas.drawing)
-            }
+            let work = DispatchWorkItem { [weak canvas] in canvas?.refreshRendering() }
             pendingRedraw = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
         }

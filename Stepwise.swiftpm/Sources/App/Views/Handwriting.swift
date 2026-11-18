@@ -34,6 +34,72 @@ final class PadCanvasView: PKCanvasView {
     /// 正在重新放入笔迹（不是用户在写），这时的变化不算
     private(set) var isRefreshing = false
 
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        // 每一笔写完时，把写的时候推迟的换笔迹补上
+        drawingGestureRecognizer.addTarget(self, action: #selector(strokeGestureChanged(_:)))
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        drawingGestureRecognizer.addTarget(self, action: #selector(strokeGestureChanged(_:)))
+    }
+
+    // MARK: 写字时不换笔迹
+    //
+    // 正在写的一笔还没落下时，用代码给 drawing 赋值（放回恢复的笔迹、清空再放回逼 PencilKit 重画、换成整理后的笔画……），
+    // PencilKit 会把这一笔取消，只留下最后一个点：写字时纸上冒出来的小点、偶尔整笔不见，都是这么来的。
+    // 所以所有用代码换笔迹的地方都走 whenIdle：没在写就马上做，正在写就等这一笔抬起来再做
+
+    /// 笔（或手指）正落在纸上写着
+    var isStroking: Bool {
+        let state = drawingGestureRecognizer.state
+        return state == .began || state == .changed
+    }
+
+    private var deferredWork: [() -> Void] = []
+    private var flushScheduled = false
+
+    /// 没在写就马上做；正在写就等这一笔写完再做（到时候再读当时的笔迹，不会把刚写的一笔弄丢）
+    func whenIdle(_ work: @escaping () -> Void) {
+        if isStroking || !deferredWork.isEmpty {
+            deferredWork.append(work)
+            scheduleFlush()
+        } else {
+            work()
+        }
+    }
+
+    @objc private func strokeGestureChanged(_ gesture: UIGestureRecognizer) {
+        if [.ended, .cancelled, .failed].contains(gesture.state), !deferredWork.isEmpty { scheduleFlush() }
+    }
+
+    /// 稍等一下再做：PencilKit 要先把刚抬笔的这一笔放进笔迹；那时又开始写下一笔了就接着等
+    private func scheduleFlush() {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            guard let self else { return }
+            self.flushScheduled = false
+            guard !self.isStroking else { return }  // 抬笔时还会再排
+            let work = self.deferredWork
+            self.deferredWork = []
+            work.forEach { $0() }
+        }
+    }
+
+    /// 清空再放回去，逼 PencilKit 把现有的笔迹重画一遍（尺寸、缩放变了它常常不重画）。写字时等抬笔再做
+    func refreshRendering() {
+        whenIdle { [weak self] in
+            guard let self, self.pendingDrawing == nil, !self.drawing.strokes.isEmpty else { return }
+            let current = self.drawing
+            self.isRefreshing = true
+            self.drawing = PKDrawing()
+            self.drawing = current
+            self.isRefreshing = false
+        }
+    }
+
     /// 画布在屏幕上且有了实际尺寸后再放入恢复的笔迹
     override func layoutSubviews() {
         // 画布大出文字的那一圈也要画得出来：PencilKit 只画内容范围里的笔迹
@@ -41,34 +107,29 @@ final class PadCanvasView: PKCanvasView {
         super.layoutSubviews()
         guard pendingDrawing != nil, window != nil, bounds.width > 1, bounds.height > 1 else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, let drawing = self.pendingDrawing else { return }
-            self.pendingDrawing = nil
-            self.isRefreshing = true
-            self.paperDrawing = drawing
-            self.isRefreshing = false
-            // 布局动画结束后再刷新一次：PencilKit 在尺寸变化过程中放入的笔迹可能不会被绘制
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                guard let self else { return }
-                let current = self.drawing
+            self?.whenIdle { [weak self] in
+                guard let self, let drawing = self.pendingDrawing else { return }
+                self.pendingDrawing = nil
                 self.isRefreshing = true
-                self.drawing = PKDrawing()
-                self.drawing = current
+                self.paperDrawing = drawing
                 self.isRefreshing = false
+                // 布局动画结束后再刷新一次：PencilKit 在尺寸变化过程中放入的笔迹可能不会被绘制
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.refreshRendering() }
             }
         }
     }
-    /// 用代码换掉笔迹（不算用户写的）。缩放变化时 PencilKit 常常不重画，清空再放回去逼它重画
+
+    /// 用代码换掉笔迹（不算用户写的），再逼 PencilKit 重画一遍。写字时等抬笔再换
     func replaceDrawing(_ newDrawing: PKDrawing) {
-        isRefreshing = true
-        paperDrawing = newDrawing
-        isRefreshing = false
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.paperDrawing == newDrawing else { return }
-            let current = self.drawing
+        whenIdle { [weak self] in
+            guard let self else { return }
             self.isRefreshing = true
-            self.drawing = PKDrawing()
-            self.drawing = current
+            self.paperDrawing = newDrawing
             self.isRefreshing = false
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.paperDrawing == newDrawing else { return }
+                self.refreshRendering()
+            }
         }
     }
 
@@ -416,9 +477,7 @@ final class HandwritingModel: ObservableObject {
     /// 画布变高以后 PencilKit 有时不重画已有的笔迹（笔记里的手写块是缩放过的）：停一下放回一次逼它重画
     func redrawSoon() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            guard let self, let canvas = self.canvas, canvas.pendingDrawing == nil,
-                  !self.strokeInProgress, !canvas.drawing.strokes.isEmpty else { return }
-            canvas.replaceDrawing(canvas.paperDrawing)
+            self?.canvas?.refreshRendering()
         }
     }
 
@@ -475,7 +534,14 @@ final class HandwritingModel: ObservableObject {
         drawing = shifted
         if let canvas {
             // 恢复的笔迹还没放上画布：换成挪过的；已经在画布上：直接换（和模型一致，不算用户改的）
-            if canvas.pendingDrawing != nil { canvas.pendingDrawing = shifted } else { canvas.paperDrawing = shifted }
+            if canvas.pendingDrawing != nil {
+                canvas.pendingDrawing = shifted
+            } else {
+                canvas.whenIdle { [weak canvas, weak self] in
+                    guard let canvas, let self else { return }
+                    canvas.paperDrawing = self.drawing
+                }
+            }
         }
         saveNow()
     }
@@ -675,13 +741,13 @@ struct NotebookCanvas: UIViewRepresentable {
                 var merged = pending
                 merged.strokes.append(contentsOf: pad.paperDrawing.strokes)
                 DispatchQueue.main.async {
-                    if pad.paperDrawing != merged { pad.paperDrawing = merged }
+                    pad.whenIdle { if pad.paperDrawing != merged { pad.paperDrawing = merged } }
                 }
                 let byPen = penDown
                 penDown = false
                 if byPen, model.tools.tool == .ask, let stroke = pad.paperDrawing.strokes.last {
                     // 圈的这一笔不留：只放回恢复的笔迹
-                    DispatchQueue.main.async { pad.paperDrawing = pending }
+                    DispatchQueue.main.async { pad.whenIdle { pad.paperDrawing = pending } }
                     model.circled(stroke: stroke)
                 } else {
                     model.drawingChanged(merged)
@@ -698,7 +764,7 @@ struct NotebookCanvas: UIViewRepresentable {
             if byPen, model.tools.tool == .ask, current.strokes.count == model.drawing.strokes.count + 1,
                let stroke = current.strokes.last {
                 let saved = model.drawing
-                DispatchQueue.main.async { pad.paperDrawing = saved }
+                DispatchQueue.main.async { pad.whenIdle { pad.paperDrawing = saved } }
                 model.circled(stroke: stroke)
                 return
             }
@@ -709,12 +775,14 @@ struct NotebookCanvas: UIViewRepresentable {
                 let before = model.drawing
                 model.drawingChanged(shaped)
                 DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    // PencilKit 已经记下“加了原来那一笔”：先撤掉，撤销记录里只留下面换成整理后笔画的这一步
-                    if let undoManager = canvasView.undoManager, undoManager.canUndo {
-                        undoManager.undo()
+                    pad.whenIdle { [weak self] in
+                        guard let self else { return }
+                        // PencilKit 已经记下“加了原来那一笔”：先撤掉，撤销记录里只留下面换成整理后笔画的这一步
+                        if let undoManager = canvasView.undoManager, undoManager.canUndo {
+                            undoManager.undo()
+                        }
+                        self.replace(pad, with: shaped, undoTo: before)
                     }
-                    self.replace(pad, with: shaped, undoTo: before)
                 }
                 return
             }
@@ -924,9 +992,7 @@ final class PageInkLayout {
             canvas.maximumZoomScale = max(canvas.maximumZoomScale, scale)
             canvas.zoomScale = scale
             // 缩放变了 PencilKit 不一定重画：放回一次笔迹逼它重画
-            if canvas.pendingDrawing == nil, !canvas.drawing.strokes.isEmpty {
-                canvas.replaceDrawing(canvas.paperDrawing)
-            }
+            canvas.refreshRendering()
         }
         // 页面内容的原点在画布上的位置
         let origin = container.convert(CGPoint.zero, from: host)
