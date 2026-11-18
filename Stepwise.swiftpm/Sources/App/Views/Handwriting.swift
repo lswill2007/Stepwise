@@ -33,6 +33,8 @@ final class PadCanvasView: PKCanvasView {
     var pendingDrawing: PKDrawing?
     /// 正在重新放入笔迹（不是用户在写），这时的变化不算
     private(set) var isRefreshing = false
+    /// 放入恢复的笔迹后再逼 PencilKit 重画一次（画布大小会变的地方要）
+    var redrawsAfterRestore = true
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -51,10 +53,57 @@ final class PadCanvasView: PKCanvasView {
     // PencilKit 会把这一笔取消，只留下最后一个点：写字时纸上冒出来的小点、偶尔整笔不见，都是这么来的。
     // 所以所有用代码换笔迹的地方都走 whenIdle：没在写就马上做，正在写就等这一笔抬起来再做
 
-    /// 笔（或手指）正落在纸上写着
+    /// 笔（或手指）正落在纸上写着。笔一碰到纸就算，不等书写手势开始：
+    /// 刚落笔、书写手势还没开始的那一下换笔迹，这一笔也会被取消
     var isStroking: Bool {
         let state = drawingGestureRecognizer.state
-        return state == .began || state == .changed
+        return state == .began || state == .changed || touchWatcher.isDown
+    }
+
+    /// 看着落在纸上的笔和手指（只看不拦）
+    private lazy var touchWatcher: InkTouchWatcher = {
+        let watcher = InkTouchWatcher()
+        // 手指只有在能写字（打开了手指书写）时才算；手掌、滑动页面的手指不算
+        watcher.canDraw = { [weak self] touch in touch.type == .pencil || self?.drawingPolicy == .anyInput }
+        watcher.onPencilDown = { [weak self] in self?.pencilTouchedDown() }
+        watcher.onAllLifted = { [weak self] in
+            guard let self, !self.deferredWork.isEmpty else { return }
+            self.scheduleFlush()
+        }
+        return watcher
+    }()
+
+    /// 书写手势挂在哪个视图上（笔记的涂鸦层挂在下面的文字上），看触摸的也挂在那里
+    private func syncTouchWatcher() {
+        guard let target = drawingGestureRecognizer.view, touchWatcher.view !== target else { return }
+        target.addGestureRecognizer(touchWatcher)
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        syncTouchWatcher()
+    }
+
+    // MARK: 写字时手掌、别的手指不滚动、不缩放画布
+    //
+    // 白板的画布自己就能滚动、缩放。笔在写的时候手掌碰到屏幕、拖动了一点，画布就滚起来（或者两点一捏就缩放），
+    // PencilKit 会把正在写的这一笔取消：这就是写着写着“断触”。笔落在纸上时不让画布开始滚动、缩放；
+    // 笔落下时画布已经在被手掌拖着滚，就把这次拖动停掉，让笔接着写
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if touchWatcher.pencilDown, gestureRecognizer === panGestureRecognizer || gestureRecognizer === pinchGestureRecognizer {
+            return false
+        }
+        return super.gestureRecognizerShouldBegin(gestureRecognizer)
+    }
+
+    private func pencilTouchedDown() {
+        for gesture in [panGestureRecognizer, pinchGestureRecognizer].compactMap({ $0 })
+        where gesture.state == .began || gesture.state == .changed {
+            // 关掉再打开会取消正在进行的手势
+            gesture.isEnabled = false
+            gesture.isEnabled = true
+        }
     }
 
     private var deferredWork: [() -> Void] = []
@@ -62,6 +111,7 @@ final class PadCanvasView: PKCanvasView {
 
     /// 没在写就马上做；正在写就等这一笔写完再做（到时候再读当时的笔迹，不会把刚写的一笔弄丢）
     func whenIdle(_ work: @escaping () -> Void) {
+        syncTouchWatcher()
         if isStroking || !deferredWork.isEmpty {
             deferredWork.append(work)
             scheduleFlush()
@@ -81,7 +131,7 @@ final class PadCanvasView: PKCanvasView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
             guard let self else { return }
             self.flushScheduled = false
-            guard !self.isStroking else { return }  // 抬笔时还会再排
+            guard !self.isStroking else { return }  // 抬笔（手）时还会再排
             let work = self.deferredWork
             self.deferredWork = []
             work.forEach { $0() }
@@ -113,7 +163,9 @@ final class PadCanvasView: PKCanvasView {
                 self.isRefreshing = true
                 self.paperDrawing = drawing
                 self.isRefreshing = false
-                // 布局动画结束后再刷新一次：PencilKit 在尺寸变化过程中放入的笔迹可能不会被绘制
+                // 布局动画结束后再刷新一次：PencilKit 在尺寸变化过程中放入的笔迹可能不会被绘制。
+                // 白板的画布大小固定不变，不用刷新（刷新要清空再放回，字会闪一下）
+                guard self.redrawsAfterRestore else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.refreshRendering() }
             }
         }
@@ -186,6 +238,70 @@ final class PadCanvasView: PKCanvasView {
         inputAssistantItem.leadingBarButtonGroups = []
         inputAssistantItem.trailingBarButtonGroups = []
         return result
+    }
+}
+
+/// 只看不拦：记下现在有几支笔、几根能写字的手指落在纸上。自己从不生效，不影响别的手势
+final class InkTouchWatcher: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    var canDraw: (UITouch) -> Bool = { $0.type == .pencil }
+    var onPencilDown: () -> Void = {}
+    var onAllLifted: () -> Void = {}
+    private var drawing = Set<ObjectIdentifier>()
+    private var pencils = Set<ObjectIdentifier>()
+    private var all = Set<ObjectIdentifier>()
+
+    /// 有能写字的笔或手指落在纸上
+    var isDown: Bool { !drawing.isEmpty }
+    /// 有笔落在纸上
+    var pencilDown: Bool { !pencils.isEmpty }
+
+    init() {
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+        delegate = self
+    }
+
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        var pencil = false
+        for touch in touches {
+            let id = ObjectIdentifier(touch)
+            all.insert(id)
+            if canDraw(touch) { drawing.insert(id) }
+            if touch.type == .pencil { pencils.insert(id); pencil = true }
+        }
+        if pencil { onPencilDown() }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { lift(touches) }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { lift(touches) }
+
+    private func lift(_ touches: Set<UITouch>) {
+        let wasDown = isDown
+        for touch in touches {
+            let id = ObjectIdentifier(touch)
+            all.remove(id)
+            drawing.remove(id)
+            pencils.remove(id)
+        }
+        if wasDown && !isDown { onAllLifted() }
+        // 所有触摸都离开了：这一轮结束（只在这时失败，之前一直看着）
+        if all.isEmpty { state = .failed }
+    }
+
+    override func reset() {
+        let wasDown = isDown
+        all = []
+        drawing = []
+        pencils = []
+        if wasDown { onAllLifted() }
     }
 }
 
@@ -777,11 +893,10 @@ struct NotebookCanvas: UIViewRepresentable {
                 DispatchQueue.main.async { [weak self] in
                     pad.whenIdle { [weak self] in
                         guard let self else { return }
-                        // PencilKit 已经记下“加了原来那一笔”：先撤掉，撤销记录里只留下面换成整理后笔画的这一步
-                        if let undoManager = canvasView.undoManager, undoManager.canUndo {
-                            undoManager.undo()
-                        }
-                        self.replace(pad, with: shaped, undoTo: before)
+                        // 先换成整理后的笔画，再把 PencilKit 记下的“加了原来那一笔”拿掉：
+                        // 以前先撤销再放回，中间有一两帧这一笔不见了，写完一笔字就闪一下。
+                        // 原来那一笔已经不在纸上，撤销它什么也不会改，只是从撤销记录里拿掉
+                        self.replace(pad, with: shaped, undoTo: before, droppingPencilKitUndo: true)
                     }
                 }
                 return
@@ -790,9 +905,11 @@ struct NotebookCanvas: UIViewRepresentable {
         }
 
         /// 用代码换掉画布上的笔迹，PencilKit 不会记撤销，自己记：撤销回到写这一笔之前，重做再放回来
-        private func replace(_ canvasView: PadCanvasView, with drawing: PKDrawing, undoTo previous: PKDrawing) {
+        private func replace(_ canvasView: PadCanvasView, with drawing: PKDrawing, undoTo previous: PKDrawing,
+                             droppingPencilKitUndo: Bool = false) {
             let undoManager = canvasView.undoManager
             canvasView.paperDrawing = drawing
+            if droppingPencilKitUndo, let undoManager, undoManager.canUndo { undoManager.undo() }
             model.drawingChanged(drawing)
             undoManager?.registerUndo(withTarget: self) { coordinator in
                 coordinator.replace(canvasView, with: previous, undoTo: drawing)

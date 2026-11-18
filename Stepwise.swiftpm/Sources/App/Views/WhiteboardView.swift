@@ -143,13 +143,20 @@ final class BoardState: ObservableObject {
         }
     }
 
+    /// 屏幕上看得见的白板有多大。画布本身固定是一个大方块（见 BoardContainerView），比看得见的大，多出来的被裁掉
+    var visibleSize: CGSize = .zero
+
+    /// 画布每次加长这么多（纸的坐标）：一次加一大截，不会每写一行就改一次大小
+    private static let growStep: CGFloat = 1200
+
     /// 画布的大小跟着写的内容加长；PencilKit 的 contentSize 是缩放后的大小
     func updateContentSize() {
         guard let canvas, let model else { return }
         let zoom = max(canvas.zoomScale, 0.01)
         let drawing = model.drawing
         let bottom = drawing.strokes.isEmpty ? 0 : drawing.bounds.maxY
-        let height = max(2400, bottom + 1200, notesBottom + 800, canvas.bounds.height / zoom)
+        let needed = max(2400, bottom + 1200, notesBottom + 800, visibleSize.height / zoom)
+        let height = (needed / Self.growStep).rounded(.up) * Self.growStep
         let size = CGSize(width: Whiteboard.canvasWidth * zoom, height: height * zoom)
         if abs(canvas.contentSize.width - size.width) > 0.5 || abs(canvas.contentSize.height - size.height) > 0.5 {
             // 写字时改画布大小也可能打断这一笔：等抬笔
@@ -157,22 +164,10 @@ final class BoardState: ObservableObject {
         }
     }
 
-    /// 上次排版时画布的大小，和等着重画的任务
-    private var lastSize: CGSize = .zero
-    private var pendingRedraw: DispatchWorkItem?
-
-    /// 画布有了尺寸：最小缩放到能看见整个宽度
+    /// 白板有了尺寸（或变了大小）：最小缩放到能看见整个宽度
     func layout() {
-        guard let canvas, canvas.bounds.width > 1 else { return }
-        // 画布变大变小（全屏、分屏、转屏）后 PencilKit 常常不重画已有的笔迹：停下来以后放回一次逼它重画
-        if canvas.bounds.size != lastSize {
-            lastSize = canvas.bounds.size
-            pendingRedraw?.cancel()
-            let work = DispatchWorkItem { [weak canvas] in canvas?.refreshRendering() }
-            pendingRedraw = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
-        }
-        let minZoom = max(0.25, min(1, canvas.bounds.width / Whiteboard.canvasWidth))
+        guard let canvas, visibleSize.width > 1 else { return }
+        let minZoom = max(0.25, min(1, visibleSize.width / Whiteboard.canvasWidth))
         if abs(canvas.minimumZoomScale - minZoom) > 0.001 { canvas.minimumZoomScale = minZoom }
         if canvas.maximumZoomScale != 3 { canvas.maximumZoomScale = 3 }
         updateContentSize()
@@ -181,10 +176,19 @@ final class BoardState: ObservableObject {
 
     /// 让画布上这一块露出来（便签按屏幕大小算，宽度不随缩放变）；已经看得见就不动
     func reveal(_ rect: CGRect) {
-        guard let canvas, canvas.bounds.width > 1 else { return }
+        guard let canvas, visibleSize.width > 1 else { return }
         let z = canvas.zoomScale
-        let shown = CGRect(x: rect.minX * z, y: rect.minY * z, width: rect.width, height: rect.height).insetBy(dx: -20, dy: -20)
-        canvas.scrollRectToVisible(shown, animated: true)
+        let target = CGRect(x: rect.minX * z, y: rect.minY * z, width: rect.width, height: rect.height).insetBy(dx: -20, dy: -20)
+        // 画布比看得见的大，scrollRectToVisible 会把裁掉的那块也当成看得见：按看得见的大小自己算
+        var offset = canvas.contentOffset
+        let visible = CGRect(origin: offset, size: visibleSize)
+        if target.maxX > visible.maxX { offset.x = target.maxX - visibleSize.width }
+        if target.minX < offset.x { offset.x = target.minX }
+        if target.maxY > visible.maxY { offset.y = target.maxY - visibleSize.height }
+        if target.minY < offset.y { offset.y = target.minY }
+        offset.x = min(max(0, offset.x), max(0, canvas.contentSize.width - visibleSize.width))
+        offset.y = min(max(0, offset.y), max(0, canvas.contentSize.height - visibleSize.height))
+        if offset != canvas.contentOffset { canvas.setContentOffset(offset, animated: true) }
     }
 
     /// 笔迹变了（写了、擦了、拖动了选中的笔迹）：框选作废，画布可能要加长
@@ -413,11 +417,41 @@ final class TouchPathObserver: UIGestureRecognizer {
     }
 }
 
-/// 画布外面包一层：纸在下面，画布在上面
+/// 画布外面包一层：纸在下面，画布在上面。
+///
+/// 画布的大小固定不变：一个边长等于屏幕长边的方块，贴在左上角，看不见的部分被这一层裁掉，
+/// 白板变大变小（全屏、收起左栏、分屏、转屏、弹出键盘）只改画布的 contentInset。
+/// PencilKit 的画布一改大小常常不重画已有的笔迹，以前只能清空再放回逼它重画，字就会闪一下；
+/// 画布大小不变，就不用再重画
 final class BoardContainerView: UIView {
     weak var state: BoardState?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        setNeedsLayout()
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
+        guard let canvas = state?.canvas, let window, bounds.width > 1, bounds.height > 1 else { return }
+        let screen = window.screen.bounds.size
+        let side = max(screen.width, screen.height, bounds.width, bounds.height).rounded(.up)
+        if canvas.frame.size.width < side || canvas.frame.origin != .zero {
+            let first = canvas.frame.width < 1
+            canvas.frame = CGRect(x: 0, y: 0, width: side, height: side)
+            // 只会在接上更大的屏幕时发生：这时才需要逼它重画
+            if !first { canvas.refreshRendering() }
+        }
+        // 多出来、被裁掉的部分算作内边距：滚得到内容的最右边、最下边，滚动条也在看得见的边上
+        let insets = UIEdgeInsets(top: 0, left: 0,
+                                  bottom: max(0, canvas.bounds.height - bounds.height),
+                                  right: max(0, canvas.bounds.width - bounds.width))
+        if canvas.contentInset != insets {
+            canvas.contentInset = insets
+            canvas.verticalScrollIndicatorInsets = insets
+            canvas.horizontalScrollIndicatorInsets = insets
+        }
+        state?.visibleSize = bounds.size
         state?.layout()
     }
 }
@@ -439,8 +473,9 @@ struct BoardCanvas: UIViewRepresentable {
         pattern.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         pattern.style = paper
 
-        let canvas = PadCanvasView(frame: container.bounds)
-        canvas.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // 大小固定，由 BoardContainerView 定，不跟着白板变
+        let canvas = PadCanvasView(frame: .zero)
+        canvas.redrawsAfterRestore = false
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
         canvas.overrideUserInterfaceStyle = .light
