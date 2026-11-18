@@ -528,8 +528,26 @@ final class InkTools: ObservableObject {
     /// 笔（或手指）落到画布上开始写：工具栏自动缩小。不用 @Published，免得每一笔都刷新整个页面
     let writingBegan = PassthroughSubject<Void, Never>()
 
-    func undo() { active?.canvas?.undoManager?.undo() }
-    func redo() { active?.canvas?.undoManager?.redo() }
+    /// PencilKit 记“加了一笔”的撤销项叫什么（跟系统语言走，写字时从撤销记录里认出来）
+    var pencilKitStrokeUndoName: String?
+
+    func undo() { step(undo: true) }
+    func redo() { step(undo: false) }
+
+    /// 撤销 / 重做一步。被取消的一笔（手掌把页面带动了之类）PencilKit 也会记一条“加了一笔”，
+    /// 撤销它纸上什么也不变，看起来就是按了没反应、最后一笔撤不掉：这种空的一步跳过，接着做下一步。
+    /// 只跳过 PencilKit 自己的“加了一笔”，别的（比如输入框里的撤销）照常一次一步
+    private func step(undo: Bool) {
+        guard let canvas = active?.canvas, let manager = canvas.undoManager else { return }
+        for _ in 0..<8 {
+            guard undo ? manager.canUndo : manager.canRedo else { return }
+            let name = undo ? manager.undoActionName : manager.redoActionName
+            let before = canvas.drawing
+            if undo { manager.undo() } else { manager.redo() }
+            let wasEmptyStroke = canvas.drawing == before && !name.isEmpty && name == pencilKitStrokeUndoName
+            if !wasEmptyStroke { return }
+        }
+    }
 }
 
 /// 一道题的手写区。笔迹（PKDrawing）保存在这里，画布视图可以随页面滚动被回收、重建
@@ -875,6 +893,8 @@ struct NotebookCanvas: UIViewRepresentable {
         let model: HandwritingModel
         /// 用户正在用笔（或手指）写，下一次笔迹变化是用户写的
         private var penDown = false
+        /// 正在用代码换画布上的笔迹（replace），这时的变化不是用户写的
+        private var applying = false
         init(model: HandwritingModel) { self.model = model }
 
         /// 写字时锁住的页面：手掌碰到屏幕把页面滚动了，笔下的纸跟着动，会画出一条笔直的长线
@@ -955,6 +975,8 @@ struct NotebookCanvas: UIViewRepresentable {
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard let pad = canvasView as? PadCanvasView else { return }
+            // 我们自己用代码换笔迹（整理后的笔画、撤销 / 重做）：model 已经在 replace 里更新了，不当成用户写的
+            guard !applying else { return }
             // 恢复的笔迹还没放进去，用户就开始写了：把恢复的笔迹和新写的合在一起
             if let pending = pad.pendingDrawing, penDown {
                 pad.pendingDrawing = nil
@@ -999,6 +1021,11 @@ struct NotebookCanvas: UIViewRepresentable {
             guard current != model.drawing else { dropReturnedCircle(); return }
             let byPen = penDown
             penDown = false
+            // 刚写下一笔：这时撤销记录最上面是 PencilKit 的“加了一笔”，记下它叫什么，撤销时好认出空的一步
+            if byPen, current.strokes.count > model.drawing.strokes.count,
+               let name = pad.undoManager?.undoActionName, !name.isEmpty {
+                model.tools.pencilKitStrokeUndoName = name
+            }
             // 圈选提问：用户刚画的这一笔只用来圈出地方，不留在纸上
             if byPen, model.tools.tool == .ask, current.strokes.count == model.drawing.strokes.count + 1,
                let stroke = current.strokes.last {
@@ -1033,8 +1060,13 @@ struct NotebookCanvas: UIViewRepresentable {
         private func replace(_ canvasView: PadCanvasView, with drawing: PKDrawing, undoTo previous: PKDrawing,
                              droppingPencilKitUndo: Bool = false) {
             let undoManager = canvasView.undoManager
+            applying = true
             canvasView.paperDrawing = drawing
-            if droppingPencilKitUndo, let undoManager, undoManager.canUndo { undoManager.undo() }
+            if droppingPencilKitUndo, let undoManager, undoManager.canUndo {
+                if let name = undoManager.undoActionName.nilIfEmpty { model.tools.pencilKitStrokeUndoName = name }
+                undoManager.undo()
+            }
+            applying = false
             model.drawingChanged(drawing)
             undoManager?.registerUndo(withTarget: self) { coordinator in
                 coordinator.replace(canvasView, with: previous, undoTo: drawing)
@@ -1827,3 +1859,7 @@ extension UIColor {
     }
 }
 #endif
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
