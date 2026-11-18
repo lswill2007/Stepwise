@@ -422,7 +422,7 @@
 "App 内已经有一份数据" = "There's Already Data in the App";
 "App 内有%@，可能是选文件夹之前的旧数据。改回后显示的是那份数据，不会被覆盖。“%@”里现在的%@保留不动，之后再选这个文件夹就能看到。" = "The app has %1$@ — possibly older data from before you chose a folder. After switching back you'll see that data; it won't be overwritten. The current %3$@ in “%2$@” stays as is; choose that folder again to see it.";
 "Stepwise 备份（%@）" = "Stepwise Backup (%@)";
-"token 数是服务商在每次回复后报回来的。直连 Anthropic 时按官方价格计算（2026 年 11 月）；OpenRouter 用它报回来的实际扣费；其他服务商的价格各不相同，点模型填上每百万 token 的价格就会算出费用（之前没算的也会补上）。" = "Token counts are reported by the provider after each reply. With Anthropic directly, cost uses the official prices (November 2026); OpenRouter reports the actual charge; other providers' prices vary — tap a model and enter its price per million tokens to calculate the cost (earlier usage is included too).";
+"token 数是服务商在每次回复后报回来的。费用按官网价格算：直连 Anthropic 用内置的官方价格（2026 年 11 月）；OpenRouter 用它报回来的实际扣费；其他模型查 AIHubMix 和 Hugging Face 公开的价格表（多数和官网一致；用 AIHubMix 时就是它的实际价格）。价格表每天更新一次。点模型可以改成自己的价格，之前没算的也会补上。" = "Token counts are reported by the provider after each reply. Cost follows official pricing: Anthropic direct uses the built-in official prices (November 2026); OpenRouter reports the actual charge; other models are looked up in the public AIHubMix and Hugging Face price lists (mostly the same as the official sites; with AIHubMix it is the actual price). The price lists update once a day. Tap a model to use your own price — earlier usage is included too.";
 "token 用量和费用" = "Token Usage and Cost";
 "“%@”里已经有 Stepwise 数据" = "“%@” Already Has Stepwise Data";
 "“%@”里有%@。为了不弄乱你的文件，Stepwise 只存在空文件夹里：请在选择时新建一个文件夹（例如“Stepwise 数据”），再选它。" = "“%@” contains %@. To avoid mixing up your files, Stepwise only uses empty folders: create a new folder while choosing (e.g. “Stepwise Data”) and choose that.";
@@ -498,7 +498,7 @@
 "时钟浮在页面上，液态玻璃效果，颜色跟随系统深浅色；可以拖到任何位置，双指缩放。" = "The clock floats over every page with a Liquid Glass look and follows light and dark mode. Drag it anywhere and pinch to resize.";
 "时间" = "Period";
 "显示用时" = "Show Response Time";
-"有的模型还没填价格，费用里没算它们" = "Some models have no price yet, so they aren't included in the cost";
+"有的模型在价格表里查不到，费用里没算它们；点那个模型可以自己填价格" = "Some models aren't in the price lists, so they aren't included in the cost — tap one to enter its price";
 "服务商" = "Provider";
 "服务商没有返回模型列表，请手动填写模型名称。" = "The provider returned no model list. Please type the model name.";
 "未同意" = "Not Agreed";
@@ -640,3 +640,16 @@
 "另外导入了 %lld 块白板。" = " Also imported whiteboards: %lld.";
 "显示列表" = "Show List";
 "还在写…" = "Still writing…";
+
+/* 模型价格表 */
+"自己填的价格" = "your own price";
+"Anthropic 官方价格" = "Anthropic official price";
+"AIHubMix 价格表" = "AIHubMix price list";
+"Hugging Face 上 %@ 的价格" = "%@ price on Hugging Face";
+"Hugging Face 上各家的中间价" = "median price on Hugging Face";
+"OpenRouter 报回来的实际扣费" = "Actual charge reported by OpenRouter";
+"%@%@ / %@%@ 每百万 token（输入 / 输出）· %@" = "%@%@ / %@%@ per million tokens (input / output) · %@";
+"更新价格表" = "Update Price Lists";
+"还没拿到" = "Not yet loaded";
+"单位：每百万 token。现在用的是%@，可以按服务商后台或官网标的价格改。不填缓存价时按输入价的十分之一算。" = "Per million tokens. Currently using the %@; you can change it to the price shown in the provider's dashboard or website. If no cache price is given, one tenth of the input price is used.";
+"恢复成价格表的价格" = "Restore Price List Price";

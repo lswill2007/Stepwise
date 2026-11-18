@@ -947,6 +947,7 @@ private struct UsageSummaryRow: View {
             Text("今天 \(UsageView.summary(today))　本月 \(UsageView.summary(month))")
                 .font(.caption).foregroundStyle(.secondary)
         }
+        .task { if !log.days.isEmpty { OnlinePrices.shared.refreshIfNeeded() } }
     }
 }
 
@@ -1010,7 +1011,7 @@ struct UsageView: View {
                     Text(UsageLog.format(cost.amounts)).monospacedDigit()
                 }
                 if cost.missing {
-                    Label("有的模型还没填价格，费用里没算它们", systemImage: "exclamationmark.circle")
+                    Label("有的模型在价格表里查不到，费用里没算它们；点那个模型可以自己填价格", systemImage: "exclamationmark.circle")
                         .font(.caption).foregroundStyle(.orange)
                 }
             }
@@ -1024,7 +1025,7 @@ struct UsageView: View {
                     let provider = parts.first ?? ""
                     let model = parts.count > 1 ? parts[1] : ""
                     let rowCost = UsageLog.cost(of: [key: t])
-                    let price = PriceBook.price(provider: provider, model: model)
+                    let found = PriceBook.lookup(provider: provider, model: model)
                     Button {
                         editing = PriceTarget(provider: provider, model: model)
                     } label: {
@@ -1039,8 +1040,12 @@ struct UsageView: View {
                             }
                             Text("\(providerName(provider)) · \(t.requests) 次 · 输入 \(UsageLog.formatTokens(t.input + t.cacheRead + t.cacheWrite)) · 输出 \(UsageLog.formatTokens(t.output))")
                                 .font(.caption).foregroundStyle(.secondary)
-                            if let price {
-                                Text("\(price.symbol)\(Self.number(price.input)) / \(price.symbol)\(Self.number(price.output)) 每百万 token（输入 / 输出）")
+                            if provider == "openrouter" && found == nil && rowCost.amounts.values.contains(where: { $0 > 0 }) {
+                                Text("OpenRouter 报回来的实际扣费")
+                                    .font(.caption2).foregroundStyle(.tertiary)
+                            } else if let found {
+                                let price = found.price
+                                Text("\(price.symbol)\(Self.number(price.input)) / \(price.symbol)\(Self.number(price.output)) 每百万 token（输入 / 输出）· \(found.source.label)")
                                     .font(.caption2).foregroundStyle(.tertiary)
                             }
                         }
@@ -1050,7 +1055,27 @@ struct UsageView: View {
             } header: {
                 Text("按模型")
             } footer: {
-                Text("token 数是服务商在每次回复后报回来的。直连 Anthropic 时按官方价格计算（2026 年 11 月）；OpenRouter 用它报回来的实际扣费；其他服务商的价格各不相同，点模型填上每百万 token 的价格就会算出费用（之前没算的也会补上）。")
+                Text("token 数是服务商在每次回复后报回来的。费用按官网价格算：直连 Anthropic 用内置的官方价格（2026 年 11 月）；OpenRouter 用它报回来的实际扣费；其他模型查 AIHubMix 和 Hugging Face 公开的价格表（多数和官网一致；用 AIHubMix 时就是它的实际价格）。价格表每天更新一次。点模型可以改成自己的价格，之前没算的也会补上。")
+            }
+
+            Section {
+                Button {
+                    OnlinePrices.shared.refreshIfNeeded(force: true)
+                } label: {
+                    HStack {
+                        Label("更新价格表", systemImage: "arrow.clockwise")
+                        Spacer()
+                        if OnlinePrices.shared.isRefreshing {
+                            ProgressView()
+                        } else if let date = OnlinePrices.shared.fetchedAt {
+                            Text(date, format: .dateTime.month().day().hour().minute())
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text("还没拿到").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .disabled(OnlinePrices.shared.isRefreshing)
             }
 
             Section {
@@ -1058,6 +1083,7 @@ struct UsageView: View {
             }
         }
         .navigationTitle("用量和费用")
+        .task { OnlinePrices.shared.refreshIfNeeded() }
         .confirmationDialog("清空所有用量记录？", isPresented: $confirmClear, titleVisibility: .visible) {
             Button("清空", role: .destructive) { log.clear() }
         } message: {
@@ -1084,7 +1110,7 @@ private struct PriceEditor: View {
     @State private var cacheRead = ""
     @State private var currency = "USD"
 
-    private var builtIn: ModelPrice? { PriceBook.builtIn(provider: provider, model: model) }
+    private var automatic: (price: ModelPrice, source: PriceSource)? { PriceBook.automatic(provider: provider, model: model) }
 
     var body: some View {
         NavigationStack {
@@ -1100,11 +1126,15 @@ private struct PriceEditor: View {
                 } header: {
                     Text(model)
                 } footer: {
-                    Text("单位：每百万 token。按服务商后台或官网标的价格填写。不填缓存价时按输入价的十分之一算。")
+                    if let automatic, PriceBook.custom(provider: provider, model: model) == nil {
+                        Text("单位：每百万 token。现在用的是\(automatic.source.label)，可以按服务商后台或官网标的价格改。不填缓存价时按输入价的十分之一算。")
+                    } else {
+                        Text("单位：每百万 token。按服务商后台或官网标的价格填写。不填缓存价时按输入价的十分之一算。")
+                    }
                 }
-                if builtIn != nil {
+                if let automatic, PriceBook.custom(provider: provider, model: model) != nil {
                     Section {
-                        Button("恢复成官方价格") {
+                        Button(automatic.source == .official ? L("恢复成官方价格") : L("恢复成价格表的价格")) {
                             PriceBook.setCustom(nil, provider: provider, model: model)
                             log.objectWillChange.send()
                             dismiss()
@@ -1155,8 +1185,14 @@ private struct PriceEditor: View {
 
     private func save() {
         guard let i = Double(input), let o = Double(output) else { return }
-        PriceBook.setCustom(ModelPrice(input: i, output: o, cacheRead: Double(cacheRead), currency: currency),
-                            provider: provider, model: model)
+        // 没改动价格表里的价格就不另存（价格表的价格还会跟着更新，也保留分档价格）
+        if let auto = automatic?.price, UsageView.number(auto.input) == input, UsageView.number(auto.output) == output,
+           (auto.cacheRead.map(UsageView.number) ?? "") == cacheRead, auto.currency == currency {
+            PriceBook.setCustom(nil, provider: provider, model: model)
+        } else {
+            PriceBook.setCustom(ModelPrice(input: i, output: o, cacheRead: Double(cacheRead), currency: currency),
+                                provider: provider, model: model)
+        }
         // 让列表重新算费用
         log.objectWillChange.send()
         dismiss()

@@ -23,39 +23,88 @@ struct ModelPrice: Codable, Equatable {
     var output: Double
     /// 命中缓存的输入；为 nil 时按输入价的十分之一
     var cacheRead: Double?
+    /// 写入缓存的输入；为 nil 时按输入价的 1.25 倍（Claude 的算法）
+    var cacheWrite: Double?
     /// "USD" 或 "CNY"
     var currency: String
     /// 输入超过这么多 token 时用长上下文价格（Claude Haiku 5.5）
     var longThreshold: Int?
     var longInput: Double?
     var longOutput: Double?
+    /// 按上下文长度分档的价格（价格表里的模型，可能有好几档）
+    var tiers: [Tier]?
 
-    init(input: Double, output: Double, cacheRead: Double? = nil, currency: String = "USD",
-         longThreshold: Int? = nil, longInput: Double? = nil, longOutput: Double? = nil) {
+    /// 输入超过 above 个 token 时用的价格
+    struct Tier: Codable, Equatable {
+        var above: Int
+        var input: Double
+        var output: Double
+        var cacheRead: Double?
+        var cacheWrite: Double?
+    }
+
+    init(input: Double, output: Double, cacheRead: Double? = nil, cacheWrite: Double? = nil, currency: String = "USD",
+         longThreshold: Int? = nil, longInput: Double? = nil, longOutput: Double? = nil, tiers: [Tier]? = nil) {
         self.input = input
         self.output = output
         self.cacheRead = cacheRead
+        self.cacheWrite = cacheWrite
         self.currency = currency
         self.longThreshold = longThreshold
         self.longInput = longInput
         self.longOutput = longOutput
+        self.tiers = tiers
     }
 
     func cost(_ u: LLMUsage) -> Double {
         let promptTokens = u.input + u.cacheRead + u.cacheWrite
-        let long = longThreshold.map { promptTokens > $0 } ?? false
-        let inPrice = long ? (longInput ?? input) : input
-        let outPrice = long ? (longOutput ?? output) : output
-        let readPrice = cacheRead ?? inPrice / 10
+        var inPrice = input, outPrice = output, readPrice = cacheRead, writePrice = cacheWrite
+        if let threshold = longThreshold, promptTokens > threshold {
+            inPrice = longInput ?? input
+            outPrice = longOutput ?? output
+            readPrice = nil
+            writePrice = nil
+        }
+        // 用输入长度够得着的最高一档
+        if let tier = (tiers ?? []).filter({ promptTokens > $0.above }).max(by: { $0.above < $1.above }) {
+            inPrice = tier.input
+            outPrice = tier.output
+            readPrice = tier.cacheRead
+            writePrice = tier.cacheWrite
+        }
         let total = Double(u.input) * inPrice + Double(u.output) * outPrice
-            + Double(u.cacheRead) * readPrice + Double(u.cacheWrite) * inPrice * 1.25
+            + Double(u.cacheRead) * (readPrice ?? inPrice / 10)
+            + Double(u.cacheWrite) * (writePrice ?? inPrice * 1.25)
         return total / 1_000_000
     }
 
     var symbol: String { currency == "CNY" ? "¥" : "$" }
 }
 
-/// 模型价格：Anthropic 官方的 Claude 价格内置；其他服务商的价格各家不同、经常变，由用户在设置里填
+/// 价格是从哪来的
+enum PriceSource: Equatable {
+    /// 自己在设置里填的
+    case custom
+    /// 内置的 Anthropic 官方价格
+    case official
+    /// AIHubMix 公开的模型价格表
+    case aihubmix
+    /// Hugging Face 推理服务上某一家（provider 为 nil 时取各家的中间价）
+    case huggingFace(provider: String?)
+
+    var label: String {
+        switch self {
+        case .custom: return L("自己填的价格")
+        case .official: return L("Anthropic 官方价格")
+        case .aihubmix: return L("AIHubMix 价格表")
+        case .huggingFace(let provider):
+            return provider.map { String(format: L("Hugging Face 上 %@ 的价格"), $0) } ?? L("Hugging Face 上各家的中间价")
+        }
+    }
+}
+
+/// 模型价格：Anthropic 官方的 Claude 价格内置；其他模型查 AIHubMix 和 Hugging Face 公开的价格表；
+/// 用户也可以在设置里自己填（优先用自己填的）
 enum PriceBook {
     /// Anthropic 官方 API 价格（美元 / 百万 token，2026-11-03）
     static let anthropic: [String: ModelPrice] = [
@@ -93,7 +142,7 @@ enum PriceBook {
         if let data = try? JSONEncoder().encode(all) { UserDefaults.standard.set(data, forKey: pricesKey) }
     }
 
-    /// 内置价格：只用于直连 Anthropic 官方接口（聚合平台、中转的价格各不相同）
+    /// 内置价格：只用于直连 Anthropic 官方接口
     static func builtIn(provider: String, model: String) -> ModelPrice? {
         guard provider == "anthropic" else { return nil }
         let name = ModelInfo.baseName(model)
@@ -102,8 +151,186 @@ enum PriceBook {
         return anthropic.first { name.hasPrefix($0.key + "-") }?.value
     }
 
+    /// 不算自己填的：内置官方价格，或者价格表里查到的
+    static func automatic(provider: String, model: String) -> (price: ModelPrice, source: PriceSource)? {
+        if let p = builtIn(provider: provider, model: model) { return (p, .official) }
+        return OnlinePrices.shared.lookup(provider: provider, model: model)
+    }
+
+    static func lookup(provider: String, model: String) -> (price: ModelPrice, source: PriceSource)? {
+        if let p = custom(provider: provider, model: model) { return (p, .custom) }
+        return automatic(provider: provider, model: model)
+    }
+
     static func price(provider: String, model: String) -> ModelPrice? {
-        custom(provider: provider, model: model) ?? builtIn(provider: provider, model: model)
+        lookup(provider: provider, model: model)?.price
+    }
+}
+
+/// 网上公开的模型价格表（都是美元 / 百万 token，不用 API Key）：
+/// - AIHubMix：八百多个模型，多数和各家官网价格一致，用 AIHubMix 时就是实际扣费
+/// - Hugging Face 推理服务：开源模型在各家推理服务商的价格（硅基流动等）
+/// 一天最多更新一次，存在缓存文件夹里
+final class OnlinePrices: @unchecked Sendable {
+    static let shared = OnlinePrices()
+
+    struct Table: Codable {
+        var fetched: Date
+        /// 小写的模型名 → 价格
+        var aihubmix: [String: ModelPrice] = [:]
+        /// 小写的模型 ID（如 deepseek-ai/deepseek-v3）→ 推理服务商 → 价格
+        var huggingFace: [String: [String: ModelPrice]] = [:]
+    }
+
+    static let aihubmixURL = URL(string: "https://aihubmix.com/api/v1/models")!
+    static let huggingFaceURL = URL(string: "https://router.huggingface.co/v1/models")!
+
+    private let lock = NSLock()
+    private var table: Table?
+    /// Hugging Face 模型名的最后一段 → 完整 ID（用户只写了 DeepSeek-V3 这种时也能查到）
+    private var hfByBase: [String: String] = [:]
+    private var refreshing = false
+
+    private static var fileURL: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("model-prices.json")
+    }
+
+    private init() {
+        if let url = Self.fileURL, let data = try? Data(contentsOf: url),
+           let saved = try? JSONDecoder().decode(Table.self, from: data) {
+            install(saved)
+        }
+    }
+
+    private func install(_ t: Table) {
+        var byBase: [String: String] = [:]
+        for id in t.huggingFace.keys { byBase[ModelInfo.baseName(id)] = id }
+        lock.lock()
+        table = t
+        hfByBase = byBase
+        lock.unlock()
+    }
+
+    /// 价格表更新的时间；还没拿到过为 nil
+    var fetchedAt: Date? {
+        lock.lock(); defer { lock.unlock() }
+        return table?.fetched
+    }
+
+    var isRefreshing: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return refreshing
+    }
+
+    func lookup(provider: String, model: String) -> (price: ModelPrice, source: PriceSource)? {
+        lock.lock()
+        let t = table, byBase = hfByBase
+        lock.unlock()
+        guard let t else { return nil }
+        let full = model.lowercased()
+        let base = ModelInfo.baseName(model)
+
+        func fromAIHubMix() -> (ModelPrice, PriceSource)? {
+            (t.aihubmix[full] ?? t.aihubmix[base]).map { ($0, .aihubmix) }
+        }
+        func fromHuggingFace() -> (ModelPrice, PriceSource)? {
+            guard let id = t.huggingFace[full] != nil ? full : byBase[base],
+                  let offers = t.huggingFace[id], !offers.isEmpty else { return nil }
+            // 正好是这个服务商在 Hugging Face 上的价格（如硅基流动）
+            if let own = offers[provider] { return (own, .huggingFace(provider: provider)) }
+            // 否则取各家的中间价（不算免费的）
+            let paid = offers.values.filter { $0.input > 0 || $0.output > 0 }
+            guard !paid.isEmpty else { return (ModelPrice(input: 0, output: 0), .huggingFace(provider: nil)) }
+            func median(_ v: [Double]) -> Double {
+                let s = v.sorted()
+                return s.count % 2 == 1 ? s[s.count / 2] : (s[s.count / 2 - 1] + s[s.count / 2]) / 2
+            }
+            return (ModelPrice(input: median(paid.map(\.input)), output: median(paid.map(\.output))), .huggingFace(provider: nil))
+        }
+
+        // 用 AIHubMix 时它的价格表就是实际扣费；带「组织/」的开源模型 ID 先查 Hugging Face
+        if provider == "aihubmix" { return fromAIHubMix() ?? fromHuggingFace() }
+        if full.contains("/") { return fromHuggingFace() ?? fromAIHubMix() }
+        return fromAIHubMix() ?? fromHuggingFace()
+    }
+
+    /// 超过一天没更新就去网上拿新的；拿到后通知用量页面重新算
+    func refreshIfNeeded(force: Bool = false) {
+        lock.lock()
+        let stale = force || (table?.fetched).map { Date().timeIntervalSince($0) > 24 * 3600 } ?? true
+        let start = stale && !refreshing
+        if start { refreshing = true }
+        lock.unlock()
+        guard start else { return }
+        Task { @MainActor in UsageLog.shared.objectWillChange.send() }
+        Task.detached(priority: .utility) {
+            async let a = Self.fetchAIHubMix()
+            async let h = Self.fetchHuggingFace()
+            let (ahm, hf) = await (a, h)
+            self.lock.lock()
+            let old = self.table
+            self.lock.unlock()
+            if ahm != nil || hf != nil {
+                // 有一边没拿到就沿用上次的
+                let t = Table(fetched: Date(), aihubmix: ahm ?? old?.aihubmix ?? [:], huggingFace: hf ?? old?.huggingFace ?? [:])
+                self.install(t)
+                if let url = Self.fileURL, let data = try? JSONEncoder().encode(t) { try? data.write(to: url, options: .atomic) }
+            }
+            self.lock.lock()
+            self.refreshing = false
+            self.lock.unlock()
+            await MainActor.run { UsageLog.shared.objectWillChange.send() }
+        }
+    }
+
+    private static func get(_ url: URL) async -> Any? {
+        var request = URLRequest(url: url, timeoutInterval: 30)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    private static func number(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue }
+
+    static func fetchAIHubMix() async -> [String: ModelPrice]? {
+        guard let json = await get(aihubmixURL) as? [String: Any], let list = json["data"] as? [[String: Any]] else { return nil }
+        return parseAIHubMix(list)
+    }
+
+    static func parseAIHubMix(_ list: [[String: Any]]) -> [String: ModelPrice] {
+        var result: [String: ModelPrice] = [:]
+        for m in list {
+            guard let id = m["model_id"] as? String, let p = m["pricing"] as? [String: Any],
+                  let input = number(p["input"]), let output = number(p["output"]) else { continue }
+            let tiers: [ModelPrice.Tier] = (p["tiers"] as? [[String: Any]] ?? []).compactMap { t in
+                guard let tier = t["tier"] as? [String: Any], (tier["type"] as? String) == "context",
+                      let size = number(tier["size"]), let i = number(t["input"]), let o = number(t["output"]) else { return nil }
+                return ModelPrice.Tier(above: Int(size), input: i, output: o,
+                                       cacheRead: number(t["cache_read"]), cacheWrite: number(t["cache_write"]))
+            }
+            result[id.lowercased()] = ModelPrice(input: input, output: output,
+                                                 cacheRead: number(p["cache_read"]), cacheWrite: number(p["cache_write"]),
+                                                 tiers: tiers.isEmpty ? nil : tiers)
+        }
+        return result
+    }
+
+    static func fetchHuggingFace() async -> [String: [String: ModelPrice]]? {
+        guard let json = await get(huggingFaceURL) as? [String: Any], let list = json["data"] as? [[String: Any]] else { return nil }
+        var result: [String: [String: ModelPrice]] = [:]
+        for m in list {
+            guard let id = m["id"] as? String, let providers = m["providers"] as? [[String: Any]] else { continue }
+            var offers: [String: ModelPrice] = [:]
+            for p in providers {
+                guard let name = p["provider"] as? String, let pricing = p["pricing"] as? [String: Any],
+                      let i = number(pricing["input"]), let o = number(pricing["output"]) else { continue }
+                offers[name] = ModelPrice(input: i, output: o)
+            }
+            if !offers.isEmpty { result[id.lowercased()] = offers }
+        }
+        return result
     }
 }
 
@@ -192,6 +419,8 @@ final class UsageLog: ObservableObject {
             t.cost[price.currency] = price.cost(usage)
         } else {
             t.unpriced = .init(input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite)
+            // 价格表可能还没拿到或者过期了：拿到后这些 token 会按价格表补算
+            OnlinePrices.shared.refreshIfNeeded()
         }
         let day = Self.dayKey(Date())
         days[day, default: [:]][PriceBook.key(provider: provider, model: model), default: UsageTotals()].add(t)
