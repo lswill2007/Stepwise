@@ -181,7 +181,7 @@ struct InkTextButtonStyle: ButtonStyle {
     }
 }
 
-/// AI 正在生成时的状态：带颜色的胶囊，闪动的 ✦、加粗的文字、一圈光沿边框转，后面是已经等了几秒，可以停止。
+/// AI 正在生成时的状态：淡色细边胶囊，文字上有一道同色的光划过，后面是已经等了几秒，可以停止。
 /// 放在刚点的按钮旁边和正在写的地方，一眼看得出 AI 在干活
 struct GeneratingBadge: View {
     let label: String
@@ -194,76 +194,54 @@ struct GeneratingBadge: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: compact ? 6 : 8) {
-            Image(systemName: "sparkles")
-                .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
-                .symbolEffect(.pulse, options: .repeating)
-            Text(label)
-                .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
-                .lineLimit(1)
+        HStack(spacing: compact ? 8 : 10) {
+            shimmeringLabel
             if let startedAt, showTiming {
                 TimelineView(.periodic(from: startedAt, by: 1)) { context in
                     Text("\(max(0, Int(context.date.timeIntervalSince(startedAt)))) 秒")
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(tint.opacity(0.7))
+                        .foregroundStyle(tint.opacity(0.5))
                 }
             }
             if let stop {
-                Divider().frame(height: 14)
+                Rectangle().fill(tint.opacity(0.15)).frame(width: 1, height: compact ? 10 : 12)
                 Button(action: stop) {
-                    Label("停止", systemImage: "stop.fill")
-                        .labelStyle(.titleAndIcon)
-                        .font(.caption.weight(.semibold))
+                    Text("停止")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(tint.opacity(0.8))
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("停止")
             }
         }
-        .foregroundStyle(tint)
-        .padding(.horizontal, compact ? 9 : 12)
+        .padding(.horizontal, compact ? 10 : 14)
         .padding(.vertical, compact ? 4 : 7)
-        .background(tint.opacity(0.16), in: Capsule())
-        .overlay(Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 1))
-        // 一圈光沿着胶囊边框转，底色轻轻呼吸。按当前时间算位置，不靠 @State 动画，
-        // 文字流式刷新、秒数变化时都不会被打断重来，所以不会一卡一卡
-        .overlay {
-            TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { context in
-                let t = context.date.timeIntervalSinceReferenceDate
-                let turn = t.truncatingRemainder(dividingBy: 2.2) / 2.2
-                let breath = (sin(t * 2 * .pi / 2.4) + 1) / 2
-                let width: CGFloat = compact ? 1.5 : 2
-                ZStack {
-                    Capsule().fill(tint.opacity(0.10 * breath))
-                    // 按边框长度取一段（trim 按长度算），所以长边、圆头上走得一样快；两段光对着转
-                    ForEach(Array(Self.arcs(at: turn).enumerated()), id: \.offset) { _, arc in
-                        Capsule().inset(by: width / 2)
-                            .trim(from: arc.0, to: arc.1)
-                            .stroke(tint.opacity(0.45), style: StrokeStyle(lineWidth: width * 2.5, lineCap: .round))
-                            .blur(radius: 2)
-                        Capsule().inset(by: width / 2)
-                            .trim(from: arc.0, to: arc.1)
-                            .stroke(tint, style: StrokeStyle(lineWidth: width, lineCap: .round))
-                    }
-                }
-            }
-            .allowsHitTesting(false)
-        }
+        .background(tint.opacity(0.06), in: Capsule())
+        .overlay(Capsule().strokeBorder(tint.opacity(0.12), lineWidth: 0.5))
         .fixedSize()
     }
 
-    /// 两段各占边框 18% 的光，起点相差半圈；跨过路径终点的那段拆成两截
-    private static func arcs(at turn: Double) -> [(CGFloat, CGFloat)] {
-        let length = 0.18
-        var result: [(CGFloat, CGFloat)] = []
-        for start in [turn, (turn + 0.5).truncatingRemainder(dividingBy: 1)] {
-            let end = start + length
-            if end <= 1 {
-                result.append((start, end))
-            } else {
-                result.append((start, 1))
-                result.append((0, end - 1))
-            }
+    /// 文字本身底色淡，一道深一点的同色光从左到右匀速划过文字。
+    /// 按当前时间算位置，不靠 @State 动画，文字流式刷新、秒数变化时都不会被打断重来
+    private var shimmeringLabel: some View {
+        TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { context in
+            let font: Font = compact ? .caption.weight(.medium) : .subheadline.weight(.medium)
+            let period = 2.0
+            let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+            // 光的中心从文字左边外面走到右边外面，进出都看不到硬边
+            let center = -0.4 + t * 1.8
+            Text(label)
+                .font(font)
+                .lineLimit(1)
+                .foregroundStyle(reduceMotion
+                    ? AnyShapeStyle(tint.opacity(0.85))
+                    : AnyShapeStyle(LinearGradient(
+                        stops: [.init(color: tint.opacity(0.4), location: 0),
+                                .init(color: tint, location: 0.5),
+                                .init(color: tint.opacity(0.4), location: 1)],
+                        startPoint: UnitPoint(x: center - 0.35, y: 0.5),
+                        endPoint: UnitPoint(x: center + 0.35, y: 0.5))))
         }
-        return result
     }
 }

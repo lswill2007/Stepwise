@@ -16,160 +16,215 @@ struct SettingsView: View {
     @AppStorage("clockEnabled") private var clockEnabled = false
     @AppStorage("clockScale") private var clockScale: Double = 1
     @AppStorage(AILanguage.storageKey) private var aiLanguage: String = AILanguage.auto.rawValue
+    @State private var pane: Pane? = .study
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
-        NavigationStack(path: $path) {
-            Form {
-                Section {
-                    StudySummaryRow()
-                    NavigationLink {
-                        StudyLogView()
-                    } label: {
-                        Label("学习日志和周报", systemImage: "chart.bar")
-                    }
-                } footer: {
-                    Text("一分钟内有操作（写字、翻页、点按）的时间算作学习，停下来不动的时间不算。记在本机；选了文件储存位置时也存一份在那个文件夹里。")
+        NavigationSplitView {
+            List(Pane.allCases, selection: $pane) { p in
+                Label(p.title, systemImage: p.icon).tag(p)
+            }
+            .navigationTitle("设置")
+            .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 280)
+            .toolbar(removing: .sidebarToggle)
+            .toolbar {
+                // 窄窗口时分栏收成一列，先看到的是这个分类列表，也要能关掉
+                if sizeClass == .compact {
+                    ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
                 }
+            }
+        } detail: {
+            NavigationStack(path: $path) {
+                Form { paneContent(pane ?? .study) }
+                    .navigationTitle((pane ?? .study).title)
+                    .navigationDestination(for: String.self) { id in
+                        ProviderEditView(providerID: id)
+                    }
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                    }
+            }
+        }
+        .navigationSplitViewStyle(.balanced)
+        // 换分类时回到这一类的第一页
+        .onChange(of: pane) { path = [] }
+        .onAppear {
+            // 还没填任何 Key（比如刚同意数据说明后被带过来）时直接打开 AI 模型
+            if !store.providers.contains(where: \.hasKey) { pane = .ai }
+        }
+        .modifier(LargeSheetSizing())
+        .sheet(isPresented: $showConsent) { ConsentView() }
+        .fileImporter(isPresented: $showImporter,
+                      allowedContentTypes: importerKind == .folder ? [.folder] : [.json]) { result in
+            if importerKind == .folder {
+                folderPick = FolderPick(result: result)
+                return
+            }
+            do {
+                let backup = try LibraryBackup.read(from: result.get())
+                let r = store.importBackup(backup, select: false)
+                var message = String(localized: "已导入 \(r.sets) 个题集，共 \(r.questions) 道题")
+                message += r.notes > 0 ? String(localized: "，以及 \(r.notes) 篇笔记，都放在左侧列表的最上面。") : L("，放在左侧题集列表的最上面。")
+                if r.boards > 0 { message += String(localized: "另外导入了 \(r.boards) 块白板。") }
+                if r.copies > 0 { message += String(localized: "其中 \(r.copies) 个题集本机已经有了，作为副本导入（名称后面带“导入”）。") }
+                importMessage = message
+            } catch {
+                importMessage = error.localizedDescription
+            }
+        }
+        .alert("导入", isPresented: Binding(get: { importMessage != nil }, set: { if !$0 { importMessage = nil } })) {
+            Button("好") { importMessage = nil }
+        } message: {
+            Text(importMessage ?? "")
+        }
+    }
 
-                Section {
-                    Toggle(isOn: $clockEnabled) {
-                        Label("时钟", systemImage: "clock")
-                    }
-                    if clockEnabled {
-                        LabeledContent("大小") {
-                            Slider(value: $clockScale, in: 0.6...3)
-                                .frame(maxWidth: 220)
-                        }
-                        Button("放回右上角") {
-                            UserDefaults.standard.set(0.85, forKey: "clockX")
-                            UserDefaults.standard.set(0.06, forKey: "clockY")
-                        }
-                    }
-                } footer: {
-                    Text("时钟浮在页面上，液态玻璃效果，颜色跟随系统深浅色；可以拖到任何位置，双指缩放。")
+    /// 设置左侧的分类
+    enum Pane: String, CaseIterable, Identifiable {
+        case study, ai, practice, notes, storage, privacy
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .study: L("学习与时钟")
+            case .ai: L("AI 模型")
+            case .practice: L("做题")
+            case .notes: L("笔记")
+            case .storage: L("储存与备份")
+            case .privacy: L("数据与隐私")
+            }
+        }
+        var icon: String {
+            switch self {
+            case .study: "chart.bar"
+            case .ai: "cpu"
+            case .practice: "pencil.and.list.clipboard"
+            case .notes: "note.text"
+            case .storage: "externaldrive"
+            case .privacy: "hand.raised"
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func paneContent(_ pane: Pane) -> some View {
+        switch pane {
+        case .study:
+            Section {
+                StudySummaryRow()
+                NavigationLink {
+                    StudyLogView()
+                } label: {
+                    Label("学习日志和周报", systemImage: "chart.bar")
                 }
+            } footer: {
+                Text("一分钟内有操作（写字、翻页、点按）的时间算作学习，停下来不动的时间不算。记在本机；选了文件储存位置时也存一份在那个文件夹里。")
+            }
 
-                Section {
-                    if let p = store.activeProvider {
-                        LabeledContent("服务商", value: p.name)
-                        LabeledContent(L("模型"), value: p.model.isEmpty ? L("未选择") : p.model)
-                        if !p.hasKey {
-                            Label("还没有填写这个服务商的 API Key", systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                } header: {
-                    Text("当前使用")
-                } footer: {
-                    Text("点下面任意服务商，填写 API Key 并选择模型，再点“设为当前使用”。做题时也可以在右上角随时切换模型。")
+            Section {
+                Toggle(isOn: $clockEnabled) {
+                    Label("时钟", systemImage: "clock")
                 }
-
-                Section {
-                    NavigationLink {
-                        UsageView()
-                    } label: {
-                        UsageSummaryRow()
+                if clockEnabled {
+                    LabeledContent("大小") {
+                        Slider(value: $clockScale, in: 0.6...3)
+                            .frame(maxWidth: 220)
                     }
-                } header: {
-                    Text("用量和费用")
-                }
-
-                Section {
-                    Picker(selection: $aiLanguage) {
-                        ForEach(AILanguage.allCases) { Text($0.title).tag($0.rawValue) }
-                    } label: {
-                        Label("AI 回答语言", systemImage: "character.bubble")
+                    Button("放回右上角") {
+                        UserDefaults.standard.set(0.85, forKey: "clockX")
+                        UserDefaults.standard.set(0.06, forKey: "clockY")
                     }
-                } footer: {
-                    Text("检查、提示、讲解、笔记和周报用的语言。默认跟随界面语言（繁体界面默认用粤语）；用英文学 AP、IB 等课程时可以单独选 English，准备香港 DSE 可以选粤语：讲解用粤语口语，答案用 DSE 的繁体书面语。")
                 }
-
-                gradingSection
-                followUpSection
-                noteSection
-                answerSection
-
-                Section("模型服务商") {
-                    ForEach(ProviderCatalog.displayOrder(store.providers)) { p in
-                        NavigationLink(value: p.id) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(p.name)
-                                    Text(p.note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                                Spacer()
-                                if p.id == store.activeProviderID {
-                                    Text("使用中").font(.caption).foregroundStyle(.tint)
-                                }
-                                if p.hasKey {
-                                    Image(systemName: "key.fill").foregroundStyle(.green)
-                                }
+            } footer: {
+                Text("时钟浮在页面上，液态玻璃效果，颜色跟随系统深浅色；可以拖到任何位置，双指缩放。")
+            }
+        case .ai:
+            Section {
+                if let p = store.activeProvider {
+                    LabeledContent("服务商", value: p.name)
+                    LabeledContent(L("模型"), value: p.model.isEmpty ? L("未选择") : p.model)
+                    if !p.hasKey {
+                        Label("还没有填写这个服务商的 API Key", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                }
+            } header: {
+                Text("当前使用")
+            } footer: {
+                Text("点下面任意服务商，填写 API Key 并选择模型，再点“设为当前使用”。做题时也可以在右上角随时切换模型。")
+            }
+            Section("模型服务商") {
+                ForEach(ProviderCatalog.displayOrder(store.providers)) { p in
+                    NavigationLink(value: p.id) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(p.name)
+                                Text(p.note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer()
+                            if p.id == store.activeProviderID {
+                                Text("使用中").font(.caption).foregroundStyle(.tint)
+                            }
+                            if p.hasKey {
+                                Image(systemName: "key.fill").foregroundStyle(.green)
                             }
                         }
                     }
-                    Button {
-                        let custom = ProviderCatalog.newCustom()
-                        store.updateProvider(custom)
-                        path.append(custom.id)
-                    } label: {
-                        Label("添加自定义服务商（OpenAI 兼容）", systemImage: "plus")
-                    }
                 }
-
-                StorageLocationSection(pick: $folderPick) {
-                    importerKind = .folder
-                    showImporter = true
-                }
-                backupSection
-
-                Section {
-                    LabeledContent("发送题目给 AI 服务商") {
-                        Text(store.aiConsent == true ? L("已同意") : L("未同意"))
-                            .foregroundStyle(store.aiConsent == true ? Color.green : Color.orange)
-                    }
-                    Button("查看数据发送说明", systemImage: "hand.raised") { showConsent = true }
-                    Link(destination: AppInfo.privacyPolicyURL) {
-                        Label("隐私政策", systemImage: "doc.text")
-                    }
-                    Link(destination: AppInfo.supportURL) {
-                        Label("帮助与反馈", systemImage: "questionmark.circle")
-                    }
-                } header: {
-                    Text("数据与隐私")
-                } footer: {
-                    Text("API Key 保存在本机钥匙串中，选了文件储存位置时也会存一份在那个文件夹里；只会发送给对应服务商的接口地址。Stepwise 不收集任何数据。")
+                Button {
+                    let custom = ProviderCatalog.newCustom()
+                    store.updateProvider(custom)
+                    path.append(custom.id)
+                } label: {
+                    Label("添加自定义服务商（OpenAI 兼容）", systemImage: "plus")
                 }
             }
-            .navigationTitle("设置")
-            .sheet(isPresented: $showConsent) { ConsentView() }
-            .fileImporter(isPresented: $showImporter,
-                          allowedContentTypes: importerKind == .folder ? [.folder] : [.json]) { result in
-                if importerKind == .folder {
-                    folderPick = FolderPick(result: result)
-                    return
+            Section {
+                NavigationLink {
+                    UsageView()
+                } label: {
+                    UsageSummaryRow()
                 }
-                do {
-                    let backup = try LibraryBackup.read(from: result.get())
-                    let r = store.importBackup(backup, select: false)
-                    var message = String(localized: "已导入 \(r.sets) 个题集，共 \(r.questions) 道题")
-                    message += r.notes > 0 ? String(localized: "，以及 \(r.notes) 篇笔记，都放在左侧列表的最上面。") : L("，放在左侧题集列表的最上面。")
-                    if r.boards > 0 { message += String(localized: "另外导入了 \(r.boards) 块白板。") }
-                    if r.copies > 0 { message += String(localized: "其中 \(r.copies) 个题集本机已经有了，作为副本导入（名称后面带“导入”）。") }
-                    importMessage = message
-                } catch {
-                    importMessage = error.localizedDescription
+            } header: {
+                Text("用量和费用")
+            }
+            Section {
+                Picker(selection: $aiLanguage) {
+                    ForEach(AILanguage.allCases) { Text($0.title).tag($0.rawValue) }
+                } label: {
+                    Label("AI 回答语言", systemImage: "character.bubble")
                 }
+            } footer: {
+                Text("检查、提示、讲解、笔记和周报用的语言。默认跟随界面语言（繁体界面默认用粤语）；用英文学 AP、IB 等课程时可以单独选 English，准备香港 DSE 可以选粤语：讲解用粤语口语，答案用 DSE 的繁体书面语。")
             }
-            .alert("导入", isPresented: Binding(get: { importMessage != nil }, set: { if !$0 { importMessage = nil } })) {
-                Button("好") { importMessage = nil }
-            } message: {
-                Text(importMessage ?? "")
+        case .practice:
+            gradingSection
+            followUpSection
+            answerSection
+        case .notes:
+            noteSection
+        case .storage:
+            StorageLocationSection(pick: $folderPick) {
+                importerKind = .folder
+                showImporter = true
             }
-            .navigationDestination(for: String.self) { id in
-                ProviderEditView(providerID: id)
-            }
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+            backupSection
+        case .privacy:
+            Section {
+                LabeledContent("发送题目给 AI 服务商") {
+                    Text(store.aiConsent == true ? L("已同意") : L("未同意"))
+                        .foregroundStyle(store.aiConsent == true ? Color.green : Color.orange)
+                }
+                Button("查看数据发送说明", systemImage: "hand.raised") { showConsent = true }
+                Link(destination: AppInfo.privacyPolicyURL) {
+                    Label("隐私政策", systemImage: "doc.text")
+                }
+                Link(destination: AppInfo.supportURL) {
+                    Label("帮助与反馈", systemImage: "questionmark.circle")
+                }
+            } header: {
+                Text("数据与隐私")
+            } footer: {
+                Text("API Key 保存在本机钥匙串中，选了文件储存位置时也会存一份在那个文件夹里；只会发送给对应服务商的接口地址。Stepwise 不收集任何数据。")
             }
         }
     }
@@ -1196,5 +1251,16 @@ private struct PriceEditor: View {
         // 让列表重新算费用
         log.objectWillChange.send()
         dismiss()
+    }
+}
+
+/// 设置有左侧分类栏，用大一点的弹窗放得下两栏（iOS 18 起；iOS 17 用默认大小，窄时分栏自动收成一列）
+private struct LargeSheetSizing: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.presentationSizing(.page)
+        } else {
+            content
+        }
     }
 }
