@@ -1043,19 +1043,38 @@ struct MarginNotes: View {
             }
             .marginRule(Ink.blue)
         case .solution:
-            // 和左边自己的作答并排对照
+            // 和左边自己的作答并排对照。刚看的答案直接展开；之后再回到这道题时先盖住，免得重做时照着抄
+            let open = store.openSolutionQuestion == qID
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("完整答案").font(.caption.weight(.semibold)).foregroundStyle(Ink.blue)
                     Spacer()
-                    // 页边太窄，长的推导看不清时可以放大到题目下方
-                    Button("放大到题目下方 ↓") {
-                        withAnimation(.easeInOut(duration: 0.25)) { solutionBelow = true }
+                    if open {
+                        // 页边太窄，长的推导看不清时可以放大到题目下方
+                        Button("放大到题目下方 ↓") {
+                            withAnimation(.easeInOut(duration: 0.25)) { solutionBelow = true }
+                        }
+                        .buttonStyle(InkTextButtonStyle(color: Ink.blue))
+                        .font(.caption)
+                    }
+                }
+                if open {
+                    RichText(message.text, scale: 0.92)
+                    Button("盖住答案") {
+                        withAnimation(.easeInOut(duration: 0.2)) { store.openSolutionQuestion = nil }
                     }
                     .buttonStyle(InkTextButtonStyle(color: Ink.blue))
                     .font(.caption)
+                } else {
+                    Text("答案先盖住了，自己再写一遍试试")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Button("再看答案") {
+                        withAnimation(.easeInOut(duration: 0.2)) { store.openSolutionQuestion = qID }
+                    }
+                    .buttonStyle(InkTextButtonStyle(color: Ink.blue))
+                    .font(.callout)
                 }
-                RichText(message.text, scale: 0.92)
             }
             .marginRule(Ink.blue)
         default:
@@ -1180,7 +1199,6 @@ struct QuestionNotes: View {
     let qID: UUID
     /// 页面宽时完整答案放在页边，和自己的作答并排对照；选择放大后放在这里
     let wide: Bool
-    @State private var showSolution = false
     @AppStorage("solutionBelow") private var solutionBelow = false
     private var solutionInMargin: Bool { wide && !solutionBelow }
 
@@ -1190,7 +1208,10 @@ struct QuestionNotes: View {
             let pending = store.pending[qID]
             VStack(alignment: .leading, spacing: 12) {
                 if let solution {
-                    DisclosureGroup(isExpanded: $showSolution) {
+                    // 和页边共用一个“展开着”：刚看完、点了展开时打开；离开这道题再回来先盖住
+                    DisclosureGroup(isExpanded: Binding(
+                        get: { store.openSolutionQuestion == qID },
+                        set: { store.openSolutionQuestion = $0 ? qID : nil })) {
                         RichText(solution.text)
                             .padding(.top, 8)
                     } label: {
@@ -1210,15 +1231,9 @@ struct QuestionNotes: View {
                     }
                     .tint(Ink.blue)
                     .marginRule(Ink.blue)
-                    // 刚看的答案、刚放大过来的答案直接展开
-                    .onChange(of: solution.id) { showSolution = true }
-                    // 从页边放大过来（包括切到全屏时）直接展开
-                    .onAppear { if wide && solutionBelow { showSolution = true } }
-                    .onChange(of: wide) { if wide && solutionBelow { showSolution = true } }
                 }
                 if let pending, pending.kind == .solution, !solutionInMargin {
                     PendingNote(qID: qID, pending: pending)
-                        .onDisappear { showSolution = true }
                 }
 
                 ForEach(Array(notes(q).enumerated()), id: \.element.answer.id) { _, note in

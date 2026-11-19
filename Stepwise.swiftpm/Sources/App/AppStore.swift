@@ -69,7 +69,15 @@ final class AppStore: ObservableObject {
     @Published var folders: [Folder] = [] { didSet { saveFolders() } }
     /// 选了题集（或错题本）、笔记就不再显示白板
     @Published var selectedSetID: UUID? { didSet { if selectedSetID != nil, selectedBoardID != nil { selectedBoardID = nil }; rememberOpened() } }
-    @Published var selectedQuestionID: UUID? { didSet { rememberOpened() } }
+    @Published var selectedQuestionID: UUID? {
+        didSet {
+            rememberOpened()
+            if openSolutionQuestion != selectedQuestionID { openSolutionQuestion = nil }
+        }
+    }
+    /// 现在展开着完整答案的那道题。刚看完答案、或点了“再看答案”时设上；
+    /// 离开这道题（翻到别的题、换题集）就清掉，回来时答案先盖住，免得重做时照着抄
+    @Published var openSolutionQuestion: UUID?
     /// 错题复习结果提示
     @Published var reviewOutcomes: [UUID: ReviewOutcome] = [:]
 
@@ -1041,6 +1049,8 @@ final class AppStore: ObservableObject {
                     self?.reviewOutcomes[qID] = .revealed
                 }
             }
+            // 刚看的答案直接展开
+            self?.openSolutionQuestion = qID
         }
     }
 
@@ -1116,7 +1126,11 @@ final class AppStore: ObservableObject {
         guard let q = question(setID, qID) else { return }
 
         let system = Tutor.tutorSystem(for: q, origin: q.originNote ?? legacyOrigin(of: q, in: setID))
-        let history = Self.context(for: q, current: userMessage, purpose: purpose)
+        var history = Self.context(for: q, current: userMessage, purpose: purpose)
+        // 之前的回复也在上下文里，模型容易照着它们的开头和用字写（“同学你好！”、繁体题用简体回答），在这次的请求最后再提醒一次
+        if !history.isEmpty {
+            history[history.count - 1].parts.append(.text(Tutor.replyReminder(for: q)))
+        }
         let options = RequestOptions(fast: purpose.isGrading && quickGrading)
         let modelName = client.config.model
         pending[qID] = PendingReply(kind: replyKind, inMargin: inMargin)

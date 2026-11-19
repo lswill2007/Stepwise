@@ -666,3 +666,6 @@
 "共 %lld 题" = "%lld questions";
 "收起左栏" = "Hide Sidebar";
 "显示左栏" = "Show Sidebar";
+"答案先盖住了，自己再写一遍试试" = "The answer is covered for now. Try writing it out yourself again.";
+"再看答案" = "Show Answer";
+"盖住答案" = "Cover Answer";

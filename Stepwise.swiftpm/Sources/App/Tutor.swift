@@ -5,7 +5,8 @@ import Foundation
 enum Tutor {
     static let formatRuleZH = """
     排版要求：
-    - 使用中文。
+    - 使用中文。简体还是繁体跟着题目（或资料）原文：原文是繁体字，就全部用繁体字写；否则用简体字。
+    - 开门见山，直接进入正题。不要写“我来系统地解答这道题”“好的”之类的开场白，也不要客套。
     - 所有数学表达式一律用 LaTeX 书写：行内公式用 $...$，单独成行的公式用 $$...$$。哪怕只是一个变量或数字式子（如 $x$、$a_1$、$3\\times 4$）也放进 $ 里。
     - 多步推导用 $$\\begin{aligned} ... \\end{aligned}$$ 按等号对齐；方程组用 \\begin{cases}；分数用 \\frac，根号用 \\sqrt，向量用 \\vec，角用 \\angle。
     - 化学式和化学方程式用 $\\ce{...}$，如 $\\ce{2H2 + O2 -> 2H2O}$。
@@ -154,8 +155,30 @@ enum Tutor {
         <answer>参考答案和简要解析</answer>
         </new_question>
 
-        \(formatRule)
+        \(formatRule)\(traditionalRule(for: q.content))
         """
+    }
+
+    /// 题目原文是繁体字（香港、台湾的题）：中文提示词整套是简体写的，模型容易跟着用简体，这里单独点明
+    static func traditionalRule(for text: String) -> String {
+        guard isTraditional(text) else { return "" }
+        return "\n\n【用字】这道题的原文是繁体字：你的所有回答都必须用繁体中文书写，不要出现简体字。"
+    }
+
+    /// 每次请求最后附上的一句提醒：开门见山；繁体题用繁体回答
+    static func replyReminder(for q: Question) -> String {
+        if AILanguage.isEnglish { return "(Get straight to the point: no greeting or opening line.)" }
+        if AILanguage.isCantonese || isTraditional(q.content) {
+            return "（直接講重點，不要打招呼、不要開場白。全部用繁體字。）"
+        }
+        return "（直接说重点，不要打招呼、不要开场白。）"
+    }
+
+    /// 文字里有不少只在繁体里才这样写的字（转成简体后会变）
+    static func isTraditional(_ text: String) -> Bool {
+        guard let simplified = text.applyingTransform(StringTransform("Hant-Hans"), reverse: false) else { return false }
+        let changed = zip(text, simplified).filter { $0 != $1 }.count
+        return changed >= 3
     }
 
     /// lineNumbers：手写图片左边印了行号，可以要求模型指出错在哪一行
@@ -263,7 +286,7 @@ enum Tutor {
         - 只输出最终答案和关键步骤，简洁，不超过 12 行；选择题写明正确选项的字母；有多个小问时逐问给出答案。
         - 不要寒暄，不要解释你在做什么。
 
-        \(formatRule)
+        \(formatRule)\(traditionalRule(for: q.content))
         """
     }
 

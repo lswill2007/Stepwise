@@ -14,6 +14,7 @@ extension Tutor {
     static let formatRuleEN = """
     Formatting rules:
     - Write in English.
+    - Get straight to the point. No opening lines such as "I'll solve this systematically" or "Sure!", and no pleasantries.
     - Write every mathematical expression in LaTeX: inline as $...$, on its own line as $$...$$. Even a single variable or a simple expression (e.g. $x$, $a_1$, $3\\times 4$) goes inside $.
     - Align multi-step derivations at the equals signs with $$\\begin{aligned} ... \\end{aligned}$$; use \\begin{cases} for systems of equations, \\frac for fractions, \\sqrt for roots, \\vec for vectors and \\angle for angles.
     - Write chemical formulas and equations with $\\ce{...}$, e.g. $\\ce{2H2 + O2 -> 2H2O}$.
