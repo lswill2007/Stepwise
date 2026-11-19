@@ -31,7 +31,10 @@ final class NotebookInk: ObservableObject {
     func redrawAfterResize() {
         pendingRedraw?.cancel()
         let work = DispatchWorkItem { [weak self] in
+            #if os(iOS)
+            // Mac 版没有 PencilKit 画布
             self?.models.values.compactMap(\.canvas).filter { $0.window != nil }.forEach { $0.refreshRendering() }
+            #endif
         }
         pendingRedraw = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)

@@ -163,28 +163,48 @@ private final class TouchSpy: UIGestureRecognizer, UIGestureRecognizerDelegate {
 // MARK: - 时钟
 
 /// 浮在页面上的时钟：液态玻璃，文字颜色跟随系统深浅色（iPadOS 26 以前用毛玻璃）；
-/// 可以拖到任何位置，双指缩放大小
+/// 拖动时跟着手指走，松手后贴到最近的一个角：上面的角在顶栏下面、下面的角在工具栏上面，不会盖住顶栏的按钮和工具栏；双指缩放大小
 struct FloatingClock: View {
+    /// 贴在哪个角：x < 0.5 是左边，y < 0.5 是上面（以前存的是任意位置，按离哪个角近换算）
     @AppStorage("clockX") private var x: Double = 0.85
     @AppStorage("clockY") private var y: Double = 0.06
     @AppStorage("clockScale") private var scale: Double = 1
-    @GestureState private var drag: CGSize = .zero
+    /// 松手时从手指的位置滑回角上，不是一下跳过去
+    @GestureState(resetTransaction: Transaction(animation: .spring(duration: 0.3))) private var drag: CGSize = .zero
     @GestureState private var pinch: CGFloat = 1
+    @State private var size = CGSize(width: 100, height: 44)
+
+    /// 离边的距离：上面让出顶栏（标题和右上角按钮），下面让出底部的工具栏
+    private static let topInset: CGFloat = 64
+    private static let bottomInset: CGFloat = 100
+    private static let sideInset: CGFloat = 20
+
+    /// 贴在某个角时，时钟中心的位置
+    private func anchor(left: Bool, top: Bool, in area: CGSize) -> CGPoint {
+        CGPoint(x: left ? Self.sideInset + size.width / 2 : area.width - Self.sideInset - size.width / 2,
+                y: top ? Self.topInset + size.height / 2 : area.height - Self.bottomInset - size.height / 2)
+    }
 
     var body: some View {
         GeometryReader { geo in
             let s = min(max(scale * pinch, 0.6), 3)
+            let home = anchor(left: x < 0.5, top: y < 0.5, in: geo.size)
             // 只显示到分钟：每分钟刷新一次就够，每秒重画玻璃效果白白占用写字的时间
             TimelineView(.everyMinute) { context in
                 ClockFace(date: context.date, scale: s)
             }
-            .position(x: geo.size.width * x + drag.width, y: geo.size.height * y + drag.height)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+            .position(x: home.x + drag.width, y: home.y + drag.height)
+            .animation(.spring(duration: 0.3), value: home)
             .gesture(
                 DragGesture()
                     .updating($drag) { value, state, _ in state = value.translation }
                     .onEnded { value in
-                        x = min(max(x + value.translation.width / geo.size.width, 0.05), 0.95)
-                        y = min(max(y + value.translation.height / geo.size.height, 0.03), 0.97)
+                        // 松手的位置（算上甩出去的速度）离哪个角近就贴到哪个角
+                        let end = CGPoint(x: home.x + value.predictedEndTranslation.width,
+                                          y: home.y + value.predictedEndTranslation.height)
+                        x = end.x < geo.size.width / 2 ? 0 : 1
+                        y = end.y < geo.size.height / 2 ? 0 : 1
                     }
                     .simultaneously(with: MagnificationGesture()
                         .updating($pinch) { value, state, _ in state = value }

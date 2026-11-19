@@ -80,10 +80,27 @@ struct ModelMenu: View {
             Divider()
             Button("模型设置…", systemImage: "gearshape", action: onOpenSettings)
         } label: {
-            Label(store.activeProvider.map { $0.model.isEmpty ? $0.name : $0.model } ?? L("选择模型"),
-                  systemImage: "cpu")
-                .labelStyle(.titleAndIcon)
+            // 顶栏里只放图标的话看不出现在用的是哪个模型：图标旁边写上简短的模型名
+            HStack(spacing: 6) {
+                Image(systemName: "cpu")
+                Text(Self.shortName(store.activeProvider.map { $0.model.isEmpty ? $0.name : $0.model } ?? L("选择模型")))
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 170)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(String(localized: "模型：\(store.activeProvider?.model ?? L("选择模型"))"))
         }
+    }
+
+    /// 顶栏里显示的模型名：去掉聚合平台加的厂商前缀（anthropic/…）和末尾的日期（-20250929）
+    static func shortName(_ model: String) -> String {
+        var name = model.split(separator: "/").last.map(String.init) ?? model
+        if let range = name.range(of: #"-\d{8}$"#, options: .regularExpression) {
+            name.removeSubrange(range)
+        }
+        return name
     }
 }
 
