@@ -864,12 +864,7 @@ private struct BoardActionBar: View {
                         .lineLimit(2...5)
                         .padding(10)
                         .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-                    FlowLayout(spacing: 10) {
-                        ForEach(Self.quick, id: \.self) { q in
-                            Button(q) { submit(q) }.font(.caption)
-                        }
-                    }
-                    .buttonStyle(InkTextButtonStyle())
+                    AskPresetChips(place: .board) { submit($0) }
                     Button {
                         submit(text)
                     } label: {
@@ -902,8 +897,6 @@ private struct BoardActionBar: View {
             }
         }
     }
-
-    static let quick = [L("下一步怎么写？"), L("这一步为什么？"), L("有更简单的方法吗？"), L("讲一下这道题的思路")]
 
     private func submit(_ q: String) {
         let q = q.trimmingCharacters(in: .whitespacesAndNewlines)

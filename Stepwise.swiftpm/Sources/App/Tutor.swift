@@ -263,11 +263,13 @@ enum Tutor {
 
     /// 用笔圈出一步来提问
     static func stepQuestionZH(_ text: String, done: Bool) -> String {
-        var s = "【我圈出的这一步】见手写图片里蓝框圈住的部分（左边的灰色数字是行号）。\n" + text
+        // 点的是常用问题：换成具体的问法；“详细过程”这类不限几句话
+        let (question, detailed) = AskPreset.resolve(text, in: .step)
+        var s = "【我圈出的这一步】见手写图片里蓝框圈住的部分（左边的灰色数字是行号）。\n" + question
         if !done {
             s += "\n（这道题我还没做完：请只针对我圈出的这一步回答，可以指出问题、提示方向，不要直接给出最终答案。）"
         }
-        return s + "\n请简洁回答，控制在几句话以内。"
+        return s + "\n" + (detailed ? detailedAnswerRule : "请简洁回答，控制在几句话以内。")
     }
 
     static let solutionInstructionZH = "我已经决定看完整答案了：请把这道题的每一小问都完整解出来，写出最终答案和详细的解题过程（推导写成对齐的公式），不要只给提示，也不要让我自己先试；最后总结一下解题的关键点。"

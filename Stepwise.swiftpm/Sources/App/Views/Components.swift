@@ -274,3 +274,24 @@ struct GeneratingBadge: View {
         }
     }
 }
+
+/// 圈出来问的常用问题：一排小胶囊，点了直接问（发的是按钮文字，提示词里再换成具体问法，见 AskPreset）
+struct AskPresetChips: View {
+    let place: AskPreset.Place
+    var disabled = false
+    let send: (String) -> Void
+
+    var body: some View {
+        FlowLayout(spacing: 8) {
+            ForEach(AskPreset.presets(for: place)) { preset in
+                Button(preset.label) { send(preset.label) }
+                    .font(.callout)
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.small)
+                    .tint(Ink.blue)
+            }
+        }
+        .disabled(disabled)
+    }
+}

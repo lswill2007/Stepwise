@@ -191,11 +191,12 @@ extension Tutor {
 
     static func stepQuestion(_ text: String, done: Bool) -> String {
         guard AILanguage.isEnglish else { return stepQuestionZH(text, done: done) }
-        var s = "[The step I circled] See the part circled in blue in the handwriting image (the gray numbers on the left are line numbers).\n" + text
+        let (question, detailed) = AskPreset.resolve(text, in: .step)
+        var s = "[The step I circled] See the part circled in blue in the handwriting image (the gray numbers on the left are line numbers).\n" + question
         if !done {
             s += "\n(I haven't finished this question yet: answer only about the step I circled. You can point out a problem or suggest a direction, but don't give the final answer.)"
         }
-        return s + "\nPlease answer briefly, a few sentences at most."
+        return s + "\n" + (detailed ? detailedAnswerRule : "Please answer briefly, a few sentences at most.")
     }
 
     static var solutionInstruction: String {
@@ -333,13 +334,15 @@ extension Tutor {
 
     static func noteCircleInstruction(block: String, question: String, hasImage: Bool) -> String {
         guard AILanguage.isEnglish else { return noteCircleInstructionZH(block: block, question: question, hasImage: hasImage) }
+        let (asked, detailed) = AskPreset.resolve(question, in: .note)
+        let length = detailed ? detailedAnswerRule : "a few sentences, with the key derivation if needed;"
         return """
         \(hasImage ? "[What I circled] See the image (a small part of the notes that I circled, possibly with my handwriting on it).\n\n" : "")[The note text it comes from]
         \(clip(block, 3000))
 
-        [My question] \(question)
+        [My question] \(asked)
 
-        Answer like a teacher's short note in the margin: stick to what is circled, a few sentences, with the key derivation if needed; formulas in $...$. No introduction.
+        Answer like a teacher's note in the margin: stick to what is circled. \(length) Formulas in $...$. No introduction.
         """
     }
 

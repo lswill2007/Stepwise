@@ -1289,8 +1289,6 @@ private struct CircleAskCard: View {
     @State private var text = ""
     @FocusState private var focused: Bool
 
-    static let quick = [L("这是什么意思？"), L("为什么是这样？"), L("举个例子"), L("和前面有什么联系？")]
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -1309,12 +1307,7 @@ private struct CircleAskCard: View {
                 .padding(8)
                 .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
                 .onSubmit { submit(text) }
-            FlowLayout(spacing: 10) {
-                ForEach(Self.quick, id: \.self) { q in
-                    Button(q) { submit(q) }.font(.caption)
-                }
-            }
-            .buttonStyle(InkTextButtonStyle())
+            AskPresetChips(place: .note, disabled: busy) { submit($0) }
             Button { submit(text) } label: {
                 Text("发送").font(.callout).frame(maxWidth: .infinity)
             }

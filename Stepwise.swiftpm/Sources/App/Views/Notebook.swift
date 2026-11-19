@@ -778,20 +778,10 @@ private struct StepAskPopover: View {
     let send: (String) -> Void
     @State private var text = ""
 
-    static let quick = [L("这一步对吗？"), L("这一步为什么不对？"), L("这一步是怎么来的？"), L("接下来该怎么写？")]
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("问圈出来的这一步").font(.headline)
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Self.quick, id: \.self) { question in
-                    Button(question) { send(question) }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if question != Self.quick.last { Divider() }
-                }
-            }
-            .buttonStyle(InkTextButtonStyle())
-            .disabled(disabled)
+            AskPresetChips(place: .step, disabled: disabled, send: send)
             // 输入框里可以直接用 Apple Pencil 写字，系统会转成文字
             TextField("或者写下想问的…", text: $text, axis: .vertical)
                 .lineLimit(2...5)

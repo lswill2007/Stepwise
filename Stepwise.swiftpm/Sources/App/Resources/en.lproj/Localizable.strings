@@ -679,3 +679,13 @@
 "移到右下角" = "Move to Bottom Right";
 "点一下可以移到别的角" = "Tap to move it to another corner";
 "时钟默认在顶栏右边，不挡页面；点一下可以移到别的角。在别的角时浮在页面上（液态玻璃，颜色跟随系统深浅色），拖到哪个角就贴在哪个角，双指缩放；拖回右上角又收进顶栏。" = "The clock sits on the right of the top bar by default, out of the page's way; tap it to move it to another corner. In other corners it floats over the page (liquid glass, follows light and dark mode); drag it to any corner and it stays there, pinch to resize. Drag it back to the top right to put it in the top bar again.";
+"对不对" = "Right?";
+"解释" = "Explain";
+"详细过程" = "Full Steps";
+"用了什么公式" = "Which Formula";
+"换个方法" = "Another Way";
+"为什么" = "Why";
+"易错点" = "Common Mistakes";
+"怎么考" = "How It's Tested";
+"和前面的联系" = "Link to Earlier";
+"讲讲思路" = "Approach";

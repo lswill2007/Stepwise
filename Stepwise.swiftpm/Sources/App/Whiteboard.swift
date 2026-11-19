@@ -233,18 +233,19 @@ extension Tutor {
 
     static func boardAskInstruction(_ question: String, lineCount: Int) -> String {
         let lines = lineCount > 0
+        let (question, detailed) = AskPreset.resolve(question, in: .board)
         return pick("""
         图片是我在白板上框选的手写内容。\(lines ? "图片左边的灰色数字是行号。" : "")
 
         【我的问题】\(question)
 
-        在 <reply>…</reply> 里回答，像老师写在便签上的话：紧扣我框住的内容，几句话说清楚，必要时写出关键推导。\(lines ? "要指出某一行时，可以在 </reply> 后面单独写 <comment line=\"行号\">一句话</comment>，最多 3 处。" : "")标签外面不要写其他内容。
+        在 <reply>…</reply> 里回答，像老师写在便签上的话：紧扣我框住的内容，\(detailed ? detailedAnswerRule : "几句话说清楚，必要时写出关键推导。")\(lines ? "要指出某一行时，可以在 </reply> 后面单独写 <comment line=\"行号\">一句话</comment>，最多 3 处。" : "")标签外面不要写其他内容。
         """, """
         The image is handwriting I selected on my whiteboard.\(lines ? " The gray numbers on the left of the image are line numbers." : "")
 
         [My question] \(question)
 
-        Answer inside <reply>…</reply>, like a teacher's words on a sticky note: stick to what I selected, a few sentences, with the key derivation if needed.\(lines ? " To point at a particular line, after </reply> you may write <comment line=\"line number\">one sentence</comment> on its own line, at most 3." : "") Write nothing outside the tags.
+        Answer inside <reply>…</reply>, like a teacher's words on a sticky note: stick to what I selected. \(detailed ? detailedAnswerRule : "A few sentences, with the key derivation if needed.")\(lines ? " To point at a particular line, after </reply> you may write <comment line=\"line number\">one sentence</comment> on its own line, at most 3." : "") Write nothing outside the tags.
         """)
     }
 

@@ -156,13 +156,15 @@ extension Tutor {
 
     /// 用笔圈出来问：圈住的地方截了图，问题写在后面
     static func noteCircleInstructionZH(block: String, question: String, hasImage: Bool) -> String {
-        """
+        let (asked, detailed) = AskPreset.resolve(question, in: .note)
+        let length = detailed ? detailedAnswerRule : "几句话说清楚，必要时写出关键推导；"
+        return """
         \(hasImage ? "【我圈出的部分】见图片（笔记里圈住的一小段，可能带着我的笔迹）。\n\n" : "")【这段所在的笔记原文】
         \(clip(block, 3000))
 
-        【我的问题】\(question)
+        【我的问题】\(asked)
 
-        像老师写在页边的小字批注一样回答：紧扣圈住的内容，几句话说清楚，必要时写出关键推导；公式用 $...$。不要开场白。
+        像老师写在页边的批注一样回答：紧扣圈住的内容，\(length)公式用 $...$。不要开场白。
         """
     }
 
