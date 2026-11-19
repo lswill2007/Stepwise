@@ -38,11 +38,58 @@ final class PadCanvasView: PKCanvasView {
         super.init(frame: frame)
         // 每一笔写完时，把写的时候推迟的换笔迹补上
         drawingGestureRecognizer.addTarget(self, action: #selector(strokeGestureChanged(_:)))
+        drawingGestureRecognizer.addTarget(self, action: #selector(trackAskOutline(_:)))
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         drawingGestureRecognizer.addTarget(self, action: #selector(strokeGestureChanged(_:)))
+        drawingGestureRecognizer.addTarget(self, action: #selector(trackAskOutline(_:)))
+    }
+
+    // MARK: 圈出来问的虚线
+
+    /// 正在用“圈出来问”：PencilKit 的笔画不了虚线，这时笔的墨水是透明的（见 InkTools.pkTool），
+    /// 由这里沿着笔尖画一条深蓝色虚线；抬笔就拿掉（圈的这一笔本来就不留在纸上）
+    var drawsAskOutline = false {
+        didSet { if !drawsAskOutline { askPath = nil; askOutline.path = nil } }
+    }
+    private var askPath: UIBezierPath?
+    /// 落笔的位置：书写手势挪了一小段才开始，虚线从落笔的地方画起
+    private var askStart: CGPoint?
+    private lazy var askOutline: CAShapeLayer = {
+        let outline = CAShapeLayer()
+        outline.fillColor = nil
+        outline.lineWidth = 2.5
+        outline.lineDashPattern = [7, 5]
+        outline.lineCap = .round
+        outline.lineJoin = .round
+        outline.zPosition = 1000
+        layer.addSublayer(outline)
+        return outline
+    }()
+
+    @objc private func trackAskOutline(_ gesture: UIGestureRecognizer) {
+        guard drawsAskOutline else { return }
+        let point = gesture.location(in: self)
+        switch gesture.state {
+        case .began:
+            let path = UIBezierPath()
+            path.move(to: askStart ?? point)
+            path.addLine(to: point)
+            askStart = nil
+            askPath = path
+            askOutline.strokeColor = UIColor(Ink.blue).resolvedColor(with: traitCollection).cgColor
+        case .changed:
+            askPath?.addLine(to: point)
+        default:
+            askPath = nil
+        }
+        // 不要隐式动画：虚线要紧跟着笔尖
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        askOutline.path = askPath?.cgPath
+        CATransaction.commit()
     }
 
     // MARK: 写字时不换笔迹
@@ -67,6 +114,10 @@ final class PadCanvasView: PKCanvasView {
         // 手指只有在能写字（打开了手指书写）时才算；手掌、滑动页面的手指不算
         watcher.canDraw = { [weak self] touch in touch.type == .pencil || self?.drawingPolicy == .anyInput }
         watcher.onPencilDown = { [weak self] in self?.pencilTouchedDown() }
+        watcher.onDrawTouchBegan = { [weak self] touch in
+            guard let self, self.drawsAskOutline else { return }
+            self.askStart = touch.location(in: self)
+        }
         // 换完笔迹 PencilKit 还没重画好就又落笔了：这时才把垫着的截图露出来（见 coverWhileRedrawing）
         watcher.onTouchDown = { [weak self] in
             guard let self, self.touchWatcher.isDown, self.awaitingRender else { return }
@@ -331,6 +382,8 @@ final class InkTouchWatcher: UIGestureRecognizer, UIGestureRecognizerDelegate {
     var canDraw: (UITouch) -> Bool = { $0.type == .pencil }
     var onPencilDown: () -> Void = {}
     var onTouchDown: () -> Void = {}
+    /// 能写字的笔或手指落下的那一下（书写手势要挪一点才开始，落笔的位置从这里拿）
+    var onDrawTouchBegan: (UITouch) -> Void = { _ in }
     var onAllLifted: () -> Void = {}
     private var drawing = Set<ObjectIdentifier>()
     private var pencils = Set<ObjectIdentifier>()
@@ -360,7 +413,7 @@ final class InkTouchWatcher: UIGestureRecognizer, UIGestureRecognizerDelegate {
         for touch in touches {
             let id = ObjectIdentifier(touch)
             all.insert(id)
-            if canDraw(touch) { drawing.insert(id) }
+            if canDraw(touch) { drawing.insert(id); onDrawTouchBegan(touch) }
             if touch.type == .pencil { pencils.insert(id); pencil = true }
         }
         onTouchDown()
@@ -528,7 +581,8 @@ final class InkTools: ObservableObject {
             return PKInkingTool(.marker, color: UIColor(hex: markerColor).withAlphaComponent(markerOpacity), width: markerWidth)
         case .eraser: return eraserKind == .stroke ? PKEraserTool(.vector) : PKEraserTool(.bitmap, width: eraserWidth)
         case .lasso: return PKLassoTool()
-        case .ask: return PKInkingTool(.pen, color: .systemBlue, width: 2)
+        // 墨水透明：纸上看到的是画布自己画的深蓝虚线（PadCanvasView.drawsAskOutline）
+        case .ask: return PKInkingTool(.monoline, color: .clear, width: 2)
         }
     }
 
@@ -840,6 +894,7 @@ final class HandwritingModel: ObservableObject {
         guard let canvas, key != appliedTools else { return }
         appliedTools = key
         canvas.tool = tools.pkTool()
+        canvas.drawsAskOutline = tools.tool == .ask
         canvas.drawingPolicy = tools.allowFinger && !pencilOnly ? .anyInput : .pencilOnly
     }
 
