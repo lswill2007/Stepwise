@@ -29,8 +29,40 @@ enum RequestPurpose {
     var isGrading: Bool { self == .check || self == .hint }
 }
 
+/// AI 正在流式写出的一段文字。不放在 AppStore 的 @Published 里：
+/// 那样每收到一段字，整个 App 所有看着 store 的页面（左栏、目录、整本题、整篇笔记）都要重算一遍，
+/// 输出的时候上下翻页就一顿一顿的。单独一个对象，只有显示这段字的那一小块跟着刷新
+@MainActor
+final class LiveText: ObservableObject {
+    @Published var text = ""
+}
+
+/// 读出正在写的文字交给 content；只有这一小块跟着刷新
+struct LiveTextReader<Content: View>: View {
+    @ObservedObject var live: LiveText
+    @ViewBuilder let content: (String) -> Content
+
+    var body: some View { content(live.text) }
+}
+
 @MainActor
 final class AppStore: ObservableObject {
+    /// 正在写的文字（题目 id、笔记 id、回答块 id、批注 id、便签 id → 文字），见 LiveText
+    private var liveTexts: [UUID: LiveText] = [:]
+
+    /// 某个回复正在写的文字；没有就建一个空的（不会让页面刷新）
+    func live(_ id: UUID) -> LiveText {
+        if let existing = liveTexts[id] { return existing }
+        let created = LiveText()
+        liveTexts[id] = created
+        return created
+    }
+
+    /// 写完了：最终的文字已经存进题目 / 笔记，不再需要
+    func endLive(_ id: UUID) {
+        liveTexts[id] = nil
+    }
+
     // MARK: 题库
     @Published var sets: [QuestionSet] = [] { didSet { scheduleSave() } }
     /// 左侧的分级文件夹，单独存在 folders.json
@@ -72,18 +104,50 @@ final class AppStore: ObservableObject {
     static let masteryRounds = 2
 
     var isMistakeBook: Bool { selectedSetID == Self.mistakeBookID }
-    /// 左侧两栏（题集、题目列表）是否显示；.detailOnly 为全屏做题
-    @Published var columnVisibility: NavigationSplitViewVisibility = .all
+    // MARK: 分栏怎么显示
+    //
+    // 三样东西，各管各的：
+    // · 左栏（题集、笔记、白板的列表）：收起 = .detailOnly。宽屏时左栏挤在页面旁边，不会浮在页面上（见 RootView）
+    // · 中间栏（题目列表、笔记目录）：listHidden，向左拽收起、从页面左边拽回来。左栏收起时中间栏照样显示
+    // · 全屏：左栏、中间栏都收起，只留页面；退出全屏时左栏回到全屏前的样子，中间栏跟着 listHidden
 
-    var isFullScreen: Bool { columnVisibility == .detailOnly }
+    /// 左栏显不显示（系统分栏的状态）
+    @Published var columnVisibility: NavigationSplitViewVisibility = .all {
+        didSet {
+            // 只用两种：左栏开着（.all）或收起（.detailOnly）。窄屏时系统的分栏可能给别的值，统一成 .all
+            if columnVisibility != .detailOnly && columnVisibility != .all {
+                columnVisibility = .all
+            }
+            // 全屏时用系统按钮、边缘划动把左栏拉了回来：不再算全屏，中间栏也回来
+            if isFullScreen && columnVisibility != .detailOnly { isFullScreen = false }
+        }
+    }
+
+    /// 左栏收起来了（全屏、或者点了左栏上的收起按钮）
+    var sidebarHidden: Bool { columnVisibility == .detailOnly }
+
+    /// 全屏：只留页面
+    @Published private(set) var isFullScreen = false
+    /// 进全屏前左栏是不是开着，退出时照原样放回
+    private var sidebarBeforeFullScreen = true
+
     /// 中间的白色栏（题目列表、笔记目录）拽到左边收起来了，记住上次的选择
     @Published var listHidden: Bool = UserDefaults.standard.bool(forKey: "listHidden") {
         didSet { UserDefaults.standard.set(listHidden, forKey: "listHidden") }
     }
 
+    /// 进 / 出全屏。不在全屏但左栏收着时“退出”就是把左栏放回来（白板只有左栏，收起左栏就是全屏）
     func setFullScreen(_ on: Bool) {
         withAnimation(.easeInOut(duration: 0.25)) {
-            columnVisibility = on ? .detailOnly : .all
+            if on {
+                if !isFullScreen { sidebarBeforeFullScreen = !sidebarHidden }
+                isFullScreen = true
+                columnVisibility = .detailOnly
+            } else {
+                let restore = isFullScreen ? sidebarBeforeFullScreen : true
+                isFullScreen = false
+                columnVisibility = restore ? .all : .detailOnly
+            }
         }
     }
 
@@ -1056,6 +1120,7 @@ final class AppStore: ObservableObject {
         let options = RequestOptions(fast: purpose.isGrading && quickGrading)
         let modelName = client.config.model
         pending[qID] = PendingReply(kind: replyKind, inMargin: inMargin)
+        live(qID).text = ""
         let started = Date()
 
         replyTasks[qID] = Task { [weak self] in
@@ -1066,7 +1131,7 @@ final class AppStore: ObservableObject {
                     full += chunk
                     // 限制刷新频率，长回答流式输出时界面不卡
                     if Date().timeIntervalSince(lastFlush) > 0.08 {
-                        self?.pending[qID]?.text = full
+                        self?.live(qID).text = full
                         lastFlush = Date()
                     }
                 }
@@ -1094,6 +1159,7 @@ final class AppStore: ObservableObject {
                     self.errorMessage = error.localizedDescription
                 }
             }
+            self?.endLive(qID)
             self?.replyTasks[qID] = nil
         }
     }

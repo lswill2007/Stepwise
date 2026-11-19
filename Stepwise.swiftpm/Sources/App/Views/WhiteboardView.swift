@@ -666,7 +666,7 @@ struct WhiteboardView: View {
             let model = ink.model(for: boardID)
             ZStack(alignment: .topLeading) {
                 BoardCanvas(model: model, tools: ink.tools, state: state, paper: board.paper,
-                            onEdgePull: store.isFullScreen ? { store.setFullScreen(false) } : nil)
+                            onEdgePull: store.sidebarHidden ? { store.setFullScreen(false) } : nil)
                 BoardOverlay(boardID: boardID, board: board, state: state, viewport: state.viewport)
             }
             .background(Ink.paper)
@@ -693,10 +693,10 @@ struct WhiteboardView: View {
                         Label("纸", systemImage: board.paper.icon)
                     }
                     Button {
-                        store.setFullScreen(!store.isFullScreen)
+                        store.setFullScreen(!store.sidebarHidden)
                     } label: {
-                        Label(store.isFullScreen ? L("显示目录") : L("全屏"),
-                              systemImage: store.isFullScreen ? "sidebar.left" : "arrow.up.left.and.arrow.down.right")
+                        Label(store.sidebarHidden ? L("退出全屏") : L("全屏"),
+                              systemImage: store.sidebarHidden ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                     }
                     ModelMenu { showSettings = true }
                 }

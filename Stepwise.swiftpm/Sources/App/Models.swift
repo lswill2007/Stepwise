@@ -215,6 +215,8 @@ struct NoteBlock: Codable, Identifiable, Equatable {
     var question: String?
     /// 手写块的纸：点阵、方格或空白（旧数据没有，按点阵）
     var paper: PaperStyle?
+    /// 练习题折起来了：只露出一行题目，看笔记时不占地方
+    var collapsed: Bool?
 }
 
 /// 空白纸的样式：白板和笔记里的手写块用。纸色不变，只画点或格子

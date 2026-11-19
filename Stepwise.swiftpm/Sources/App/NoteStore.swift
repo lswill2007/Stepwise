@@ -3,8 +3,6 @@ import Foundation
 /// 正在进行的笔记 AI 任务：生成整篇笔记，或者回答选中文字的提问
 struct NoteJob: Equatable {
     var label: String
-    /// 正在写、还没写完的那一块笔记
-    var partial = ""
     /// 提问时：显示在哪一块后面
     var afterBlock: UUID?
     /// 圈出来问时：正在写哪一条页边批注
@@ -117,6 +115,14 @@ extension AppStore {
         mutateNote(docID) { doc in
             guard let i = doc.blocks.firstIndex(where: { $0.id == blockID }) else { return }
             doc.blocks[i].paper = style
+        }
+    }
+
+    /// 练习题折起来 / 展开
+    func setBlockCollapsed(_ docID: UUID, _ blockID: UUID, _ collapsed: Bool) {
+        mutateNote(docID) { doc in
+            guard let i = doc.blocks.firstIndex(where: { $0.id == blockID }) else { return }
+            doc.blocks[i].collapsed = collapsed ? true : nil
         }
     }
 
@@ -272,7 +278,7 @@ extension AppStore {
                 startBuffer(index)
                 guard let buffer = buffers[index] else { continue }
                 self.noteJobs[docID]?.label = chunks.count > 1 ? String(localized: "正在生成 第 \(index + 1)/\(chunks.count) 部分…") : L("正在生成笔记…")
-                self.noteJobs[docID]?.partial = ""
+                self.live(docID).text = ""
 
                 var added = 0
                 // 把已经写完的块加进笔记，没写完的那块实时显示
@@ -291,12 +297,21 @@ extension AppStore {
                         blocksWritten += 1
                     }
                     added = max(added, parsed.items.count)
-                    self.noteJobs[docID]?.partial = Tutor.unfinishedNote(full) ?? ""
-                    // 进度：写完的部分加上这部分已经写了多少
+                    // 正在写的这一块单独刷新，不让整个 App 跟着重算（输出时上下翻页才流畅）
+                    let partial = Tutor.unfinishedNote(full) ?? ""
+                    if self.live(docID).text != partial { self.live(docID).text = partial }
+                    // 进度：写完的部分加上这部分已经写了多少。只在看得出变化时才更新（百分比、块数），
+                    // 每 0.2 秒都改一次会让整个 App 的页面一直重算
                     for (i, b) in buffers { estimator.update(i, written: b.text.count) }
-                    self.noteJobs[docID]?.progress = GenerationProgress(
+                    let progress = GenerationProgress(
                         fraction: estimator.fraction, parts: chunks.count, doneParts: index,
                         found: blocksWritten, startedAt: started)
+                    if let old = self.noteJobs[docID]?.progress,
+                       old.found == progress.found, old.doneParts == progress.doneParts,
+                       abs(old.fraction - progress.fraction) < 0.01 {
+                    } else {
+                        self.noteJobs[docID]?.progress = progress
+                    }
                 }
                 // 每 0.2 秒把新收到的内容放进笔记，直到这部分写完
                 while !buffer.finished && !Task.isCancelled {
@@ -327,6 +342,7 @@ extension AppStore {
             for buffer in buffers.values { buffer.task?.cancel() }
             guard let self else { return }
             let cancelled = Task.isCancelled
+            self.endLive(docID)
             self.noteJobs[docID] = nil
             self.noteTasks[docID] = nil
             guard !cancelled else { return }
@@ -410,20 +426,21 @@ extension AppStore {
                     full += piece
                     // 写的时候先在这一块下面淡淡地显示，写完再插进原文
                     if Date().timeIntervalSince(lastFlush) > 0.15 {
-                        self?.noteJobs[docID]?.partial = Tutor.parseIntegrate(full).insert
+                        self?.live(docID).text = Tutor.parseIntegrate(full).insert
                         lastFlush = Date()
                     }
                 }
                 try Task.checkCancellation()
                 let parsed = Tutor.parseIntegrate(full)
                 if !parsed.insert.isEmpty, let self {
-                    self.noteJobs[docID]?.partial = parsed.insert
+                    self.live(docID).text = parsed.insert
                     ok = await self.insertIntoBlock(docID, blockID, parsed.insert, afterLine: parsed.line, quote: quote)
                 }
                 if !ok && !Task.isCancelled { self?.errorMessage = L("没能补进笔记，请再试一次。") }
             } catch {
                 if !(error is CancellationError) { self?.errorMessage = error.localizedDescription }
             }
+            self?.endLive(docID)
             self?.noteJobs[docID] = nil
             self?.noteTasks[docID] = nil
             done(ok)
@@ -499,7 +516,7 @@ extension AppStore {
                 for try await piece in client.stream(system: system, messages: [LLMMessage(role: .user, parts: parts)]) {
                     full += piece
                     if Date().timeIntervalSince(lastFlush) > 0.15 {
-                        self?.mutateComment(docID, comment.id) { $0.answer = full }
+                        self?.live(comment.id).text = full
                         lastFlush = Date()
                     }
                 }
@@ -508,8 +525,14 @@ extension AppStore {
             } catch {
                 if !(error is CancellationError) { self?.errorMessage = error.localizedDescription }
                 // 没写出内容就撤掉这条批注
-                if full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { self?.deleteComment(docID, comment.id) }
+                if full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self?.deleteComment(docID, comment.id)
+                } else {
+                    // 停下来了：已经写出来的留下（写的时候只显示，没有存进批注）
+                    self?.mutateComment(docID, comment.id) { $0.answer = full.trimmingCharacters(in: .whitespacesAndNewlines) }
+                }
             }
+            self?.endLive(comment.id)
             self?.noteJobs[docID] = nil
             self?.noteTasks[docID] = nil
         }
@@ -572,7 +595,7 @@ extension AppStore {
                 for try await piece in client.stream(system: system, messages: messages) {
                     full += piece
                     if Date().timeIntervalSince(lastFlush) > 0.15 {
-                        self?.updateBlockText(docID, answer.id, full)
+                        self?.live(answer.id).text = full
                         lastFlush = Date()
                     }
                 }
@@ -581,8 +604,14 @@ extension AppStore {
             } catch {
                 if !(error is CancellationError) { self?.errorMessage = error.localizedDescription }
                 // 没写出内容就撤掉这一块
-                if full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { self?.deleteBlock(docID, answer.id) }
+                if full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self?.deleteBlock(docID, answer.id)
+                } else {
+                    // 停下来了：已经写出来的留下（写的时候只显示，没有存进这一块）
+                    self?.updateBlockText(docID, answer.id, full.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
             }
+            self?.endLive(answer.id)
             self?.noteJobs[docID] = nil
             self?.noteTasks[docID] = nil
         }

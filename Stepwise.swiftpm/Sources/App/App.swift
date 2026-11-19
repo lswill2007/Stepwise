@@ -60,42 +60,118 @@ struct RootView: View {
         return store.isMistakeBook || store.set(store.selectedSetID) != nil
     }
 
+    // MARK: 分栏
+    //
+    // 宽屏不用系统的 NavigationSplitView：它在新系统上把左栏做成浮在页面上的玻璃板，
+    // 从收起（全屏）拉出左栏时页面不让位、也不重新排版，中间栏被压在左栏下面、字从左栏透出来，页面右边被挤出屏幕。
+    // 现在自己排三栏：左栏 | 中间栏 | 页面，一个挨一个，谁收起谁就滑走，旁边的跟着变宽。
+    // 窄屏（分屏多任务）还用系统的，会自动叠成一层层推进去
+
+    /// 左栏的宽度
+    private let sidebarWidth: CGFloat = 280
+
+    /// 导航栏左右两边（Mac 上只用于编译检查）
+    #if os(iOS)
+    private static let leading: ToolbarItemPlacement = .topBarLeading
+    private static let trailing: ToolbarItemPlacement = .topBarTrailing
+    #else
+    private static let leading: ToolbarItemPlacement = .navigation
+    private static let trailing: ToolbarItemPlacement = .primaryAction
+    #endif
+
     @ViewBuilder
     private var columns: some View {
-        if let boardID = store.selectedBoardID, store.board(boardID) != nil {
-            // 白板只要左栏和画布两栏，书写的地方大一些；纸的样式在右上角选
-            NavigationSplitView(columnVisibility: $store.columnVisibility) {
-                sidebar
-                    // 向左拽：收起左栏，整个屏幕都是白板
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 24).onEnded { value in
-                            if isLeftSwipe(value) { store.setFullScreen(true) }
-                        }
-                    )
-            } detail: {
-                // 左栏收起后从最左边向右拽拉回来：白板自己用只认手指的边缘手势做（见 BoardCanvas），
-                // 不在上面盖一条透明的条，否则笔从最左边落下会被挡住
-                WhiteboardView(boardID: boardID)
-                    .id(boardID)
-            }
-        } else if sizeClass == .compact {
-            // 窄屏（分屏多任务）：用系统的三栏，会自动叠成一层层推进去
-            NavigationSplitView(columnVisibility: $store.columnVisibility) {
-                sidebar
-            } content: {
-                list
-            } detail: {
-                detail
+        if sizeClass == .compact {
+            if let boardID = store.selectedBoardID, store.board(boardID) != nil {
+                NavigationSplitView(columnVisibility: $store.columnVisibility) {
+                    sidebar
+                } detail: {
+                    WhiteboardView(boardID: boardID)
+                        .id(boardID)
+                }
+            } else {
+                NavigationSplitView(columnVisibility: $store.columnVisibility) {
+                    sidebar
+                } content: {
+                    list
+                } detail: {
+                    detail
+                }
             }
         } else {
-            // 中间栏和页面放在同一栏里：收起 / 拉回只是把中间栏滑走 / 滑回来，
-            // 页面一直是同一个，不会因为换布局整页重建（以前就是这样卡住、还跳回第一题）
-            NavigationSplitView(columnVisibility: $store.columnVisibility) {
-                sidebar
-                    .navigationSplitViewColumnWidth(280)
-            } detail: {
-                listAndPage
+            sideBySide
+        }
+    }
+
+    /// 宽屏：左栏和页面并排。左栏收起时滑出去，页面跟着变宽；页面一直是同一个，不会重建
+    private var sideBySide: some View {
+        HStack(spacing: 0) {
+            if !store.sidebarHidden {
+                NavigationStack {
+                    sidebar
+                        #if os(iOS)
+                        .toolbarTitleDisplayMode(.inlineLarge)
+                        #endif
+                        .background(Ink.sidebar)
+                        .toolbar {
+                            ToolbarItem(placement: Self.trailing) {
+                                Button {
+                                    setSidebarHidden(true)
+                                } label: {
+                                    Label("收起左栏", systemImage: "sidebar.left")
+                                }
+                            }
+                        }
+                }
+                .frame(width: sidebarWidth)
+                .overlay(alignment: .trailing) {
+                    Rectangle().fill(Ink.separator).frame(width: 0.5).ignoresSafeArea()
+                }
+                // 向左拽：收起左栏
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 24).onEnded { value in
+                        if isLeftSwipe(value) { setSidebarHidden(true) }
+                    }
+                )
+                .transition(.move(edge: .leading))
             }
+            NavigationStack {
+                Group {
+                    if let boardID = store.selectedBoardID, store.board(boardID) != nil {
+                        // 白板只要左栏和画布两栏，书写的地方大一些；纸的样式在右上角选。
+                        // 左栏收起后从最左边向右拽拉回来：白板自己用只认手指的边缘手势做（见 BoardCanvas），
+                        // 不在上面盖一条透明的条，否则笔从最左边落下会被挡住
+                        WhiteboardView(boardID: boardID)
+                            .id(boardID)
+                    } else {
+                        listAndPage
+                    }
+                }
+                .toolbar {
+                    // 左栏收起了（不是全屏）：左上角放回左栏。全屏时页面右上角有“退出全屏”
+                    if store.sidebarHidden && !store.isFullScreen && store.selectedBoardID == nil {
+                        ToolbarItem(placement: Self.leading) {
+                            Button {
+                                setSidebarHidden(false)
+                            } label: {
+                                Label("显示左栏", systemImage: "sidebar.left")
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func setSidebarHidden(_ hidden: Bool) {
+        // 白板只有左栏和画布：收起左栏就是全屏
+        if store.selectedBoardID != nil {
+            store.setFullScreen(hidden)
+            return
+        }
+        withAnimation(.snappy(duration: 0.28)) {
+            store.columnVisibility = hidden ? .detailOnly : .all
         }
     }
 
@@ -115,9 +191,6 @@ struct RootView: View {
                 }
             if listShown {
                 list
-                    // 和原来系统中间栏一样：白底、选中是圆角灰条
-                    .listStyle(.sidebar)
-                    .scrollContentBackground(.hidden)
                     .frame(width: listWidth)
                     .background(Ink.systemBackground)
                     .overlay(alignment: .trailing) {

@@ -295,7 +295,9 @@ struct NoteOutlineView: View {
                         Text("目录")
                     }
                 }
+                .paneRows()
             }
+            .paneList(selection: nil)
             .navigationTitle(doc.title)
         }
     }
@@ -428,10 +430,15 @@ struct NoteDocView: View {
                           let block = doc.blocks.first(where: { b in
                               b.questionID.map { store.exerciseQuestions(noteID, $0).contains { $0.id == qID } } ?? false
                           }) else { return }
+                    // 折起来的练习题先展开
+                    if block.collapsed == true { store.setBlockCollapsed(noteID, block.id, false) }
                     withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(block.id, anchor: .top) }
                 }
             }
             .scrollDismissesKeyboard(.interactively)
+            // 量的是外面给的宽度，不是里面内容的宽度：内容按上次量到的宽度排，页面变窄（左栏拉出来）时
+            // 内容还是宽的，滚动视图跟着内容一样宽，量到的宽度就一直不变 —— 页面卡在原来的宽度，被挤出屏幕、整体歪到一边
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
             .background(Ink.paper)
             .onGeometryChange(for: CGSize.self) { $0.size } action: { width = $0.width; viewHeight = $0.height }
             // 页面变宽变窄（缩放比例跟着变）、删掉一块：空白处的笔迹也要重新对上
@@ -448,8 +455,8 @@ struct NoteDocView: View {
                     Button {
                         store.setFullScreen(!store.isFullScreen)
                     } label: {
-                        Label(store.isFullScreen ? L("显示目录") : L("全屏"),
-                              systemImage: store.isFullScreen ? "sidebar.left" : "arrow.up.left.and.arrow.down.right")
+                        Label(store.isFullScreen ? L("退出全屏") : L("全屏"),
+                              systemImage: store.isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                     }
                     ModelMenu { showSettings = true }
                 }
@@ -582,22 +589,65 @@ struct NoteDocView: View {
     }
 
     private func exerciseView(_ block: NoteBlock, in doc: NoteDoc) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("练习").font(.caption.weight(.semibold)).foregroundStyle(Ink.red)
-                    Spacer()
+        let questions = block.questionID.map { store.exerciseQuestions(noteID, $0) } ?? []
+        let collapsed = block.collapsed == true
+        return VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    // 点“练习”这一行折起来 / 展开：看笔记时练习题只占一行
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            store.setBlockCollapsed(noteID, block.id, !collapsed)
+                        }
+                    } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.bold))
+                                .rotationEffect(.degrees(collapsed ? 0 : 90))
+                            Text("练习").font(.caption.weight(.semibold))
+                            if collapsed {
+                                exerciseSummary(questions)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .foregroundStyle(Ink.red)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(collapsed ? L("展开练习") : L("折起练习"))
                     blockMenu(block, in: doc)
                 }
-                .padding(.top, 12)
-                ForEach(block.questionID.map { store.exerciseQuestions(noteID, $0) } ?? []) { q in
-                    QuestionBlock(setID: doc.exerciseSetID, qID: q.id, model: ink.model(for: q.id),
-                                  wide: wide, mistakeMode: false, nextID: nil)
+                .padding(.vertical, collapsed ? 12 : 0)
+                .padding(.top, collapsed ? 0 : 12)
+                if !collapsed {
+                    ForEach(questions) { q in
+                        QuestionBlock(setID: doc.exerciseSetID, qID: q.id, model: ink.model(for: q.id),
+                                      wide: wide, mistakeMode: false, nextID: nil)
+                    }
                 }
             }
             .padding(.horizontal, 16)
             // 像夹在笔记里的一张练习纸
             .background(Color.secondary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.15)))
+    }
+
+    /// 折起来的练习题：一行题目，做过的标出结果
+    private func exerciseSummary(_ questions: [Question]) -> some View {
+        let first = questions.first
+        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(Tutor.plainPreview(first?.content ?? ""))
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            if questions.count > 1 {
+                Text("共 \(questions.count) 题").font(.caption).foregroundStyle(.secondary)
+            }
+            switch first?.status {
+            case .passed: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.caption)
+            case .wrong: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Ink.red).font(.caption)
+            default: EmptyView()
+            }
+        }
     }
 
     private func blockMenu(_ block: NoteBlock, in doc: NoteDoc) -> some View {
@@ -683,9 +733,9 @@ struct NoteDocView: View {
 
     private func generatingRow(_ job: NoteJob) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            if !job.partial.isEmpty {
-                // 正在写的这一块，写完就变成正式的笔记块
-                RichText(job.partial).opacity(0.55)
+            // 正在写的这一块，写完就变成正式的笔记块（单独刷新，翻页不卡）
+            LiveTextReader(live: store.live(noteID)) { partial in
+                if !partial.isEmpty { RichText(partial).opacity(0.55) }
             }
             GeneratingBadge(label: job.label, startedAt: job.startedAt) { store.stopNoteJob(noteID) }
             // 生成整篇笔记时：大概进度、写好几块、用了多久
@@ -698,9 +748,9 @@ struct NoteDocView: View {
 
     private func progressRow(_ job: NoteJob) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            if !job.partial.isEmpty {
-                // 补进笔记时正在写的解释，写完插进上面这一块里提问的地方
-                RichText(job.partial).opacity(0.55)
+            // 补进笔记时正在写的解释，写完插进上面这一块里提问的地方
+            LiveTextReader(live: store.live(noteID)) { partial in
+                if !partial.isEmpty { RichText(partial).opacity(0.55) }
             }
             GeneratingBadge(label: job.label, startedAt: job.startedAt) { store.stopNoteJob(noteID) }
         }
@@ -948,6 +998,13 @@ struct NoteTextBlockView<MenuContent: View>: View {
                     }
                 } else if block.text.isEmpty {
                     if streaming {
+                        // 正在写的回答：单独刷新，写的时候上下翻页不卡
+                        LiveTextReader(live: store.live(block.id)) { text in
+                            if !text.isEmpty {
+                                RichText(text, tone: legacyLayout ? .legacy : .normal)
+                                    .modifier(NotePaper(width: paperWidth, scale: paperScale))
+                            }
+                        }
                         GeneratingBadge(label: L("正在回答…"), startedAt: store.noteJobs[noteID]?.startedAt, tint: Ink.blue) {
                             store.stopNoteJob(noteID)
                         }
@@ -1303,6 +1360,37 @@ struct NoteCommentView: View {
 
     private var streaming: Bool { store.noteJobs[noteID]?.commentID == comment.id }
 
+    /// 批注的回答：正在写的时候读 LiveText，只有这一条跟着刷新
+    @ViewBuilder
+    private func answerBody(_ answer: String) -> some View {
+        if answer.isEmpty {
+            GeneratingBadge(label: L("正在写…"), startedAt: store.noteJobs[noteID]?.startedAt, tint: Ink.blue,
+                            compact: true) { store.stopNoteJob(noteID) }
+        } else {
+            RichText(answer, scale: 0.82 * Double(fit))
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { answerHeight = $0; refit() }
+                .frame(maxHeight: answerCap, alignment: .top)
+                .clipped()
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shownAnswerHeight = $0; refit() }
+                // 写不下的部分淡出，双击看全文
+                .mask {
+                    if answerCap != nil {
+                        LinearGradient(stops: [.init(color: .black, location: 0.75), .init(color: .clear, location: 1)],
+                                       startPoint: .top, endPoint: .bottom)
+                    } else {
+                        Color.black
+                    }
+                }
+                // 文字显示在网页视图里，点击会被它吃掉：盖一层透明的来接双击
+                .overlay {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) { enlarged = true }
+                }
+        }
+    }
+
     /// 除了回答以外占的高度（问题、按钮、留白）
     private var otherHeight: CGFloat { max(0, cardHeight - shownAnswerHeight) }
 
@@ -1377,31 +1465,10 @@ struct NoteCommentView: View {
                     .buttonStyle(InkTextButtonStyle(color: .secondary))
                     .accessibilityLabel("收起批注")
                 }
-                if comment.answer.isEmpty {
-                    GeneratingBadge(label: L("正在写…"), startedAt: store.noteJobs[noteID]?.startedAt, tint: Ink.blue,
-                                    compact: true) { store.stopNoteJob(noteID) }
+                if streaming {
+                    LiveTextReader(live: store.live(comment.id)) { answerBody($0) }
                 } else {
-                    RichText(comment.answer, scale: 0.82 * Double(fit))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { answerHeight = $0; refit() }
-                        .frame(maxHeight: answerCap, alignment: .top)
-                        .clipped()
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shownAnswerHeight = $0; refit() }
-                        // 写不下的部分淡出，双击看全文
-                        .mask {
-                            if answerCap != nil {
-                                LinearGradient(stops: [.init(color: .black, location: 0.75), .init(color: .clear, location: 1)],
-                                               startPoint: .top, endPoint: .bottom)
-                            } else {
-                                Color.black
-                            }
-                        }
-                        // 文字显示在网页视图里，点击会被它吃掉：盖一层透明的来接双击
-                        .overlay {
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .onTapGesture(count: 2) { enlarged = true }
-                        }
+                    answerBody(comment.answer)
                 }
                 if !streaming && !comment.answer.isEmpty && !compact {
                     if comment.savedToNote {

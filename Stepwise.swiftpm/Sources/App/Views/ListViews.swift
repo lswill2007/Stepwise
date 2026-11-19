@@ -31,6 +31,7 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: selectionBinding) {
+            Group {
             if !store.questionSets.isEmpty {
                 Section {
                     HStack(spacing: 10) {
@@ -47,6 +48,7 @@ struct SidebarView: View {
                     }
                     .padding(.vertical, 6)
                     .tag(AppStore.mistakeBookID)
+                    .paneRow(AppStore.mistakeBookID, tint: Ink.blue)
                 }
             }
             Section {
@@ -82,7 +84,12 @@ struct SidebarView: View {
                         }
                 }
             }
+            }
+            // 左栏和中间栏自己排在页面旁边（不在系统分栏里），系统给的是一块块卡片：去掉卡片底色和分隔线，
+            // 选中的一行自己画圆角底色（见 PaneRowStyle）
+            .paneRows()
         }
+        .paneList(selection: selectionBinding.wrappedValue)
         .overlay {
             if store.questionSets.isEmpty && store.folders.isEmpty && store.notes.isEmpty && store.boards.isEmpty {
                 ContentUnavailableView {
@@ -356,6 +363,7 @@ struct BoardRow: View {
         }
         .padding(.vertical, 4)
         .tag(board.id)
+        .paneRow(board.id, tint: Ink.blue)
         .contextMenu { menuItems }
     }
 
@@ -400,6 +408,7 @@ struct NoteRow: View {
         }
         .padding(.vertical, 4)
         .tag(doc.id)
+        .paneRow(doc.id, tint: Ink.blue)
         .contextMenu { menuItems }
     }
 
@@ -438,6 +447,7 @@ struct SetRow: View {
         }
         .padding(.vertical, 4)
         .tag(set.id)
+        .paneRow(set.id, tint: Ink.blue)
         .draggable("set:\(set.id.uuidString)") {
             Label(set.title, systemImage: "doc.text").padding(8)
         }
@@ -512,12 +522,15 @@ struct QuestionListView: View {
                         }
                         .padding(.vertical, 2)
                         .tag(q.id)
+                        .paneRow(q.id)
                     }
                 } header: {
                     Text("已完成 \(set.doneCount) / \(set.questions.count)")
                 }
+                .paneRows()
             }
         }
+        .paneList(selection: store.selectedQuestionID)
         .navigationTitle(set?.title ?? "")
     }
 }
@@ -572,6 +585,7 @@ struct MistakeBookView: View {
                         }
                         .padding(.vertical, 2)
                         .tag(q.id)
+                        .paneRow(q.id)
                         .contextMenu {
                             Button("移出错题本", systemImage: "bookmark.slash") { store.toggleStar(entry.setID, q.id) }
                         }
@@ -579,8 +593,10 @@ struct MistakeBookView: View {
                 } header: {
                     Text(store.set(setID)?.title ?? "")
                 }
+                .paneRows()
             }
         }
+        .paneList(selection: store.selectedQuestionID)
         .overlay {
             if entries.isEmpty {
                 ContentUnavailableView {
@@ -591,5 +607,58 @@ struct MistakeBookView: View {
             }
         }
         .navigationTitle("错题本")
+    }
+}
+
+// MARK: - 左栏、中间栏的列表样式
+//
+// 左栏和中间栏自己排在页面旁边（不在系统分栏里），系统默认把列表画成一块块白卡片、带分隔线、选中是一整条深色。
+// 这里换成平铺在栏底色上，没有分隔线，选中的一行画一块圆角底色
+
+private struct PaneSelectionKey: EnvironmentKey {
+    static let defaultValue: UUID? = nil
+}
+
+extension EnvironmentValues {
+    /// 这一栏里选中的是哪一行
+    var paneSelection: UUID? {
+        get { self[PaneSelectionKey.self] }
+        set { self[PaneSelectionKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// 栏里的列表：平铺，底色由栏自己给
+    func paneList(selection: UUID?) -> some View {
+        listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.paneSelection, selection)
+    }
+
+    /// 列表里的每一行：没有分隔线、没有白底（套在 List 里最外层的 Group / Section 上，对所有行生效）
+    func paneRows() -> some View {
+        listRowSeparator(.hidden)
+            .listSectionSeparator(.hidden)
+            .listRowBackground(Color.clear)
+    }
+
+    /// 能选中的一行：选中时画一块圆角底色
+    func paneRow(_ id: UUID, tint: Color = Color.primary.opacity(0.08)) -> some View {
+        modifier(PaneRowBackground(id: id, tint: tint))
+    }
+}
+
+private struct PaneRowBackground: ViewModifier {
+    @Environment(\.paneSelection) private var selection
+    let id: UUID
+    let tint: Color
+
+    func body(content: Content) -> some View {
+        content.listRowBackground(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(selection == id ? tint : Color.clear)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 2)
+        )
     }
 }

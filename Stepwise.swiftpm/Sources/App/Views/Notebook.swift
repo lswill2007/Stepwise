@@ -109,6 +109,9 @@ struct NotebookView: View {
             }
         }
         .scrollDismissesKeyboard(.interactively)
+        // 量的是外面给的宽度，不是里面内容的宽度：内容按上次量到的宽度排，页面变窄（左栏拉出来）时
+        // 内容还是宽的，滚动视图跟着内容一样宽，量到的宽度就一直不变 —— 页面卡在原来的宽度，被挤出屏幕、整体歪到一边
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .background(Ink.paper)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .overlay { InkOptionsDismissLayer(tools: ink.tools) }
@@ -132,8 +135,8 @@ struct NotebookView: View {
                 Button {
                     store.setFullScreen(!store.isFullScreen)
                 } label: {
-                    Label(store.isFullScreen ? L("显示题目列表") : L("全屏做题"),
-                          systemImage: store.isFullScreen ? "sidebar.left" : "arrow.up.left.and.arrow.down.right")
+                    Label(store.isFullScreen ? L("退出全屏") : L("全屏做题"),
+                          systemImage: store.isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                 }
                 ModelMenu { showSettings = true }
             }
@@ -798,7 +801,7 @@ struct MarginNotes: View {
             VStack(alignment: .leading, spacing: 10) {
                 if items.count > 1 { tabs(items, current: current, q: q) }
                 if let pending {
-                    PendingNote(pending: pending)
+                    PendingNote(qID: qID, pending: pending)
                 } else if let current {
                     note(current, in: q)
                         // 新批注到了，像用荧光笔轻轻划过一下
@@ -1107,12 +1110,21 @@ struct PenMark: View {
 /// AI 正在写的批注：判定一出来就先标上对错，说明随后补上
 struct PendingNote: View {
     @EnvironmentObject var store: AppStore
+    let qID: UUID
     let pending: PendingReply
 
     var body: some View {
+        // 正在写的文字单独刷新，不让整道题、整本题跟着重算
+        LiveTextReader(live: store.live(qID)) { text in
+            content(text)
+        }
+    }
+
+    @ViewBuilder
+    private func content(_ text: String) -> some View {
         let isVerdict = pending.kind == .verdictWrong || pending.kind == .verdictCorrect
-        let verdict = isVerdict ? Tutor.parseVerdict(pending.text) : nil
-        let shown = Tutor.hideUnfinishedTags(verdict?.feedback ?? pending.text)
+        let verdict = isVerdict ? Tutor.parseVerdict(text) : nil
+        let shown = Tutor.hideUnfinishedTags(verdict?.feedback ?? text)
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 if let correct = verdict?.correct {
@@ -1192,7 +1204,7 @@ struct QuestionNotes: View {
                     .onChange(of: wide) { if wide && solutionBelow { showSolution = true } }
                 }
                 if let pending, pending.kind == .solution, !solutionInMargin {
-                    PendingNote(pending: pending)
+                    PendingNote(qID: qID, pending: pending)
                         .onDisappear { showSolution = true }
                 }
 
@@ -1211,7 +1223,7 @@ struct QuestionNotes: View {
                     .marginRule(Ink.pen)
                 }
                 if let pending, pending.kind == .chat, !pending.inMargin {
-                    PendingNote(pending: pending)
+                    PendingNote(qID: qID, pending: pending)
                 }
             }
         }

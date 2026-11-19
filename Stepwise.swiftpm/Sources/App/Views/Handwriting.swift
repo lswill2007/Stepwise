@@ -67,10 +67,11 @@ final class PadCanvasView: PKCanvasView {
         // 手指只有在能写字（打开了手指书写）时才算；手掌、滑动页面的手指不算
         watcher.canDraw = { [weak self] touch in touch.type == .pencil || self?.drawingPolicy == .anyInput }
         watcher.onPencilDown = { [weak self] in self?.pencilTouchedDown() }
-        // 一落笔（或手指）就拿掉重画时的截图，不挡住正在写的
-        watcher.onTouchDown = { [weak self] in self?.removeRedrawCover() }
         watcher.onAllLifted = { [weak self] in
-            guard let self, !self.deferredWork.isEmpty else { return }
+            guard let self else { return }
+            // 写的时候 PencilKit 不重画别处：抬笔后等它画完再拿掉垫在下面的截图
+            if !self.redrawCovers.isEmpty { self.armCoverDeadline() }
+            guard !self.deferredWork.isEmpty else { return }
             self.scheduleFlush()
         }
         return watcher
@@ -143,7 +144,7 @@ final class PadCanvasView: PKCanvasView {
 
     /// 清空再放回去，逼 PencilKit 把现有的笔迹重画一遍（尺寸、缩放变了它常常不重画）。写字时等抬笔再做
     ///
-    /// 清空的那一下会空一帧，字就闪一下：先拍一张现在的样子盖在上面，PencilKit 重画完（或者笔、手指一落下）再拿掉
+    /// 清空的那一下会空一帧，字就闪一下：先拍一张现在的样子垫在画布下面，PencilKit 重画完再拿掉
     func refreshRendering() {
         whenIdle { [weak self] in
             guard let self, self.pendingDrawing == nil, !self.drawing.strokes.isEmpty else { return }
@@ -156,33 +157,60 @@ final class PadCanvasView: PKCanvasView {
         }
     }
 
-    /// 重画时盖在画布上的截图
-    private weak var redrawCover: UIView?
-    private var coverDeadline: DispatchWorkItem?
+    // MARK: 用代码换笔迹时垫一张截图
+    //
+    // 用代码给 drawing 赋值（写完一笔整理笔锋、撤销、排版变了挪笔迹、逼它重画……）后，PencilKit 要过几帧才把变了的地方重画好。
+    // 这几帧里笔又落下开始写下一笔，PencilKit 会先顾着正在写的这一笔、停下别处的重画，直到这一笔写完：
+    // 刚写的上一笔就在写下一笔时消失、抬笔后才回来。
+    // 所以换笔迹前先拍一张现在的样子垫在画布下面（画布是透明的）：没重画好的地方露出来的是截图里的字，
+    // 正在写的笔画在画布上，不会被挡住。PencilKit 重画完、笔也抬起来了再拿掉
 
-    private func coverWhileRedrawing() {
-        guard redrawCover == nil, window != nil, let cover = snapshotView(afterScreenUpdates: false) else { return }
+    /// 垫在画布下面的截图（连着换了几次就有几张，一起拿掉）
+    private var redrawCovers: [UIView] = []
+    private var coverDeadline: DispatchWorkItem?
+    /// 拍截图时画布滚动到的位置：之后画布滚动、缩放了，截图就对不上，马上拿掉
+    private var coverOffset: CGPoint = .zero
+    private var coverZoom: CGFloat = 1
+
+    func coverWhileRedrawing() {
+        guard window != nil, let superview, bounds.width > 1, bounds.height > 1,
+              let cover = snapshotView(afterScreenUpdates: false) else { return }
+        if !redrawCovers.isEmpty, contentOffset != coverOffset || zoomScale != coverZoom { removeRedrawCover() }
         cover.frame = frame
         cover.isUserInteractionEnabled = false
-        superview?.insertSubview(cover, aboveSubview: self)
-        redrawCover = cover
-        // PencilKit 没报告画完也不一直盖着
-        let deadline = DispatchWorkItem { [weak self] in self?.removeRedrawCover() }
+        superview.insertSubview(cover, belowSubview: self)
+        redrawCovers.append(cover)
+        coverOffset = contentOffset
+        coverZoom = zoomScale
+        armCoverDeadline()
+    }
+
+    /// PencilKit 没报告画完也不一直垫着；笔还在纸上就接着等
+    private func armCoverDeadline() {
+        coverDeadline?.cancel()
+        let deadline = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if self.isStroking { self.armCoverDeadline() } else { self.removeRedrawCover() }
+        }
         coverDeadline = deadline
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: deadline)
     }
 
-    /// PencilKit 画完了：再等一帧拿掉截图，免得刚画完的那一帧还没上屏
+    /// PencilKit 画完了：再等一帧拿掉截图，免得刚画完的那一帧还没上屏。
+    /// 笔还在纸上时它报告的“画完”不算（只画了正在写的这一笔），等抬笔后下一次
     func renderingFinished() {
-        guard redrawCover != nil else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.034) { [weak self] in self?.removeRedrawCover() }
+        guard !redrawCovers.isEmpty, !isStroking else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, !self.isStroking else { return }
+            self.removeRedrawCover()
+        }
     }
 
     private func removeRedrawCover() {
         coverDeadline?.cancel()
         coverDeadline = nil
-        redrawCover?.removeFromSuperview()
-        redrawCover = nil
+        redrawCovers.forEach { $0.removeFromSuperview() }
+        redrawCovers = []
     }
 
     /// 画布在屏幕上且有了实际尺寸后再放入恢复的笔迹
@@ -190,6 +218,9 @@ final class PadCanvasView: PKCanvasView {
         // 画布大出文字的那一圈也要画得出来：PencilKit 只画内容范围里的笔迹
         if overflow > 0, contentSize != bounds.size { contentSize = bounds.size }
         super.layoutSubviews()
+        // 画布滚动、缩放、挪了位置：垫着的截图对不上了
+        if let cover = redrawCovers.first,
+           contentOffset != coverOffset || zoomScale != coverZoom || cover.frame != frame { removeRedrawCover() }
         guard pendingDrawing != nil, window != nil, bounds.width > 1, bounds.height > 1 else { return }
         DispatchQueue.main.async { [weak self] in
             self?.whenIdle { [weak self] in
@@ -209,6 +240,7 @@ final class PadCanvasView: PKCanvasView {
     func replaceDrawing(_ newDrawing: PKDrawing) {
         whenIdle { [weak self] in
             guard let self else { return }
+            self.coverWhileRedrawing()
             self.isRefreshing = true
             self.paperDrawing = newDrawing
             self.isRefreshing = false
@@ -1040,10 +1072,14 @@ struct NotebookCanvas: UIViewRepresentable {
                current.strokes.count == model.drawing.strokes.count + 1,
                let shaped = Self.shaped(current, tools: model.tools) {
                 let before = model.drawing
-                model.drawingChanged(shaped)
+                // 先按纸上的样子记下；换成整理后的笔画时再记一次
+                model.drawingChanged(current)
                 DispatchQueue.main.async { [weak self] in
                     pad.whenIdle { [weak self] in
                         guard let self else { return }
+                        // PencilKit 晚报了这一笔、等到下一笔写完才轮到这里：纸上已经多了别的笔画，
+                        // 再换成当时整理好的样子会把后来写的弄丢，撤销记录最上面也不再是这一笔。这一笔就不整理了
+                        guard pad.paperDrawing == current else { return }
                         // 先换成整理后的笔画，再把 PencilKit 记下的“加了原来那一笔”拿掉：
                         // 以前先撤销再放回，中间有一两帧这一笔不见了，写完一笔字就闪一下。
                         // 原来那一笔已经不在纸上，撤销它什么也不会改，只是从撤销记录里拿掉
@@ -1060,6 +1096,8 @@ struct NotebookCanvas: UIViewRepresentable {
         private func replace(_ canvasView: PadCanvasView, with drawing: PKDrawing, undoTo previous: PKDrawing,
                              droppingPencilKitUndo: Bool = false) {
             let undoManager = canvasView.undoManager
+            // 换之前垫一张截图：PencilKit 重画好之前又落笔写下一笔，刚写的字也不会消失
+            canvasView.coverWhileRedrawing()
             applying = true
             canvasView.paperDrawing = drawing
             if droppingPencilKitUndo, let undoManager, undoManager.canUndo {

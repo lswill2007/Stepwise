@@ -144,6 +144,9 @@ enum Ink {
     /// 笔记本的纸色
     static let paper = adaptive(light: (0.984, 0.977, 0.958), dark: (0.105, 0.105, 0.115))
 
+    /// 左栏的底色（浅灰，和系统侧栏一样）
+    static let sidebar = adaptive(light: (0.925, 0.929, 0.945), dark: (0.11, 0.11, 0.122))
+
     /// 系统的底色、分隔线颜色（Mac 上只用于编译检查，换成对应的 AppKit 颜色）
     #if os(iOS)
     static let systemBackground = Color(uiColor: .systemBackground)
