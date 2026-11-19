@@ -150,6 +150,7 @@ struct NotebookView: View {
         #endif
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                TopBarClock()
                 Button {
                     store.setFullScreen(!store.isFullScreen)
                 } label: {

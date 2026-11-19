@@ -163,7 +163,8 @@ private final class TouchSpy: UIGestureRecognizer, UIGestureRecognizerDelegate {
 // MARK: - 时钟
 
 /// 浮在页面上的时钟：液态玻璃，文字颜色跟随系统深浅色（iPadOS 26 以前用毛玻璃）；
-/// 拖动时跟着手指走，松手后贴到最近的一个角：上面的角在顶栏下面、下面的角在工具栏上面，不会盖住顶栏的按钮和工具栏；双指缩放大小
+/// 拖动时跟着手指走，松手后贴到最近的一个角：左上角在顶栏下面、下面的角在工具栏上面；双指缩放大小。
+/// 拖到右上角就收进顶栏（TopBarClock），不再浮在页面上——以前浮在右上角时会挡住题目右上角的“加入错题本”
 struct FloatingClock: View {
     /// 贴在哪个角：x < 0.5 是左边，y < 0.5 是上面（以前存的是任意位置，按离哪个角近换算）
     @AppStorage("clockX") private var x: Double = 0.85
@@ -187,6 +188,14 @@ struct FloatingClock: View {
 
     var body: some View {
         GeometryReader { geo in
+            if !TopBarClock.isDocked(x: x, y: y) {
+                floating(in: geo)
+            }
+        }
+    }
+
+    private func floating(in geo: GeometryProxy) -> some View {
+        Group {
             let s = min(max(scale * pinch, 0.6), 3)
             let home = anchor(left: x < 0.5, top: y < 0.5, in: geo.size)
             // 只显示到分钟：每分钟刷新一次就够，每秒重画玻璃效果白白占用写字的时间
@@ -211,6 +220,42 @@ struct FloatingClock: View {
                         .onEnded { scale = min(max(scale * $0, 0.6), 3) })
             )
             .accessibilityLabel("时钟，可以拖动和缩放")
+        }
+    }
+}
+
+/// 时钟在右上角时放在顶栏里（和全屏、模型菜单同一行），不挡页面上的东西。
+/// 点一下可以把它移到别的角，移出去以后又浮在页面上、可以拖动缩放
+struct TopBarClock: View {
+    @AppStorage("clockEnabled") private var enabled = false
+    @AppStorage("clockX") private var x: Double = 0.85
+    @AppStorage("clockY") private var y: Double = 0.06
+
+    /// 右上角就是收进顶栏
+    static func isDocked(x: Double, y: Double) -> Bool { x >= 0.5 && y < 0.5 }
+
+    var body: some View {
+        if enabled && Self.isDocked(x: x, y: y) {
+            Menu {
+                Button("移到左上角", systemImage: "arrow.up.left") { move(left: true, top: true) }
+                Button("移到左下角", systemImage: "arrow.down.left") { move(left: true, top: false) }
+                Button("移到右下角", systemImage: "arrow.down.right") { move(left: false, top: false) }
+            } label: {
+                TimelineView(.everyMinute) { context in
+                    Text(context.date, format: .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+                        .font(.system(.title3, design: .rounded).weight(.semibold))
+                        .monospacedDigit()
+                }
+            }
+            .accessibilityLabel("时钟")
+            .accessibilityHint(L("点一下可以移到别的角"))
+        }
+    }
+
+    private func move(left: Bool, top: Bool) {
+        withAnimation(.spring(duration: 0.3)) {
+            x = left ? 0 : 1
+            y = top ? 0 : 1
         }
     }
 }

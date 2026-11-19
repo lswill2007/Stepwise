@@ -129,13 +129,13 @@ struct SettingsView: View {
                         Slider(value: $clockScale, in: 0.6...3)
                             .frame(maxWidth: 220)
                     }
-                    Button("放回右上角") {
+                    Button("放回顶栏") {
                         UserDefaults.standard.set(0.85, forKey: "clockX")
                         UserDefaults.standard.set(0.06, forKey: "clockY")
                     }
                 }
             } footer: {
-                Text("时钟浮在页面上，液态玻璃效果，颜色跟随系统深浅色；拖到哪个角就贴在哪个角（不挡顶栏和工具栏），双指缩放。")
+                Text("时钟默认在顶栏右边，不挡页面；点一下可以移到别的角。在别的角时浮在页面上（液态玻璃，颜色跟随系统深浅色），拖到哪个角就贴在哪个角，双指缩放；拖回右上角又收进顶栏。")
             }
         case .ai:
             Section {

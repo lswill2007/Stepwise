@@ -677,6 +677,7 @@ struct WhiteboardView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
+                    TopBarClock()
                     if !board.notes.isEmpty {
                         Button {
                             store.mutateBoard(boardID) { $0.notesHidden.toggle() }
