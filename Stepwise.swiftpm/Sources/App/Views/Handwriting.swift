@@ -206,7 +206,7 @@ final class PadCanvasView: PKCanvasView {
         }
     }
 
-    private func removeRedrawCover() {
+    func removeRedrawCover() {
         coverDeadline?.cancel()
         coverDeadline = nil
         redrawCovers.forEach { $0.removeFromSuperview() }
@@ -470,6 +470,8 @@ final class InkTools: ObservableObject {
     private var toolBeforeSqueeze: Tool?
     /// 最近写过的手写区，撤销 / 重做作用在它上面
     weak var active: HandwritingModel?
+    /// 橡皮擦经过别的画布时一起擦（笔记页上文字、空白处的笔迹在不同的画布上）
+    let eraserRelay = InkEraserRelay()
 
     init() {
         eraserKind = EraserKind(rawValue: UserDefaults.standard.string(forKey: "handwritingEraserKind") ?? "") ?? .area
@@ -582,6 +584,177 @@ final class InkTools: ObservableObject {
     }
 }
 
+/// 橡皮擦跨画布擦。
+///
+/// 笔记页上的笔迹分在好几块画布上：每一块文字一块（书写手势挂在那块文字上），页边、块和块之间的空白处一块整页的。
+/// PencilKit 的橡皮擦只擦落笔那块画布上的笔迹：一笔从文字擦到页边、从这一块擦到下一块，另一块画布上的字就留着 ——
+/// 擦好几个字时有的擦不掉，就是这么来的。所以橡皮擦经过的路线也交给同一页上别的画布，按同样的大小把碰到的笔迹擦掉
+final class InkEraserRelay {
+    private let models = NSHashTable<HandwritingModel>.weakObjects()
+    /// 这一笔橡皮擦落在哪块画布上（那块由 PencilKit 自己擦）
+    private weak var origin: PadCanvasView?
+    private weak var originModel: HandwritingModel?
+    /// 上一次经过的位置（窗口坐标）
+    private var last: CGPoint?
+    /// 这一笔擦到的别的画布和擦之前的笔迹：抬笔时记撤销用
+    private var touched: [(canvas: PadCanvasView, before: PKDrawing)] = []
+
+    var isErasing: Bool { origin != nil }
+
+    func register(_ model: HandwritingModel) { models.add(model) }
+
+    func track(_ gesture: UIGestureRecognizer, from model: HandwritingModel, tools: InkTools) {
+        switch gesture.state {
+        case .began, .changed, .ended: break
+        case .cancelled, .failed: finish(); return
+        default: return
+        }
+        // 看画布上真正用着的工具：刚点了橡皮、画布还没换过来时，这一笔还是笔写的
+        guard let canvas = model.canvas, let eraser = canvas.tool as? PKEraserTool,
+              let window = canvas.window else { finish(); return }
+        if gesture.state == .began || origin !== canvas {
+            finish()
+            origin = canvas
+            originModel = model
+        }
+        let point = gesture.location(in: nil)
+        erase(from: last ?? point, to: point, in: window, eraser: eraser, tools: tools)
+        last = point
+        if gesture.state == .ended { finish() }
+    }
+
+    private func erase(from a: CGPoint, to b: CGPoint, in window: UIWindow, eraser: PKEraserTool, tools: InkTools) {
+        guard let origin else { return }
+        let page = Self.screenRoot(of: origin)
+        // 局部擦按橡皮的大小；整笔擦碰到就算
+        let wholeStrokes = eraser.eraserType == .vector
+        let screenRadius: CGFloat = wholeStrokes ? 3 : eraser.width / 2
+        for model in models.allObjects {
+            guard let pad = model.canvas, pad !== origin, pad.window === window, !pad.isHidden,
+                  pad.pendingDrawing == nil, !pad.isStroking, !pad.drawing.strokes.isEmpty,
+                  // 只擦同一页上的：盖在上面的白板、弹出的页面不会擦到下面笔记的字
+                  Self.screenRoot(of: pad) === page else { continue }
+            // 窗口坐标 → 这块画布笔迹的坐标（画布可能滚动过、缩放过，文字块的画布还整体缩放过）
+            let zoom = max(pad.zoomScale, 0.0001)
+            func local(_ p: CGPoint) -> CGPoint {
+                let q = pad.convert(p, from: nil)
+                return CGPoint(x: q.x / zoom, y: q.y / zoom)
+            }
+            let la = local(a), lb = local(b)
+            let probe = local(CGPoint(x: a.x + 100, y: a.y))
+            let radius = screenRadius * hypot(probe.x - la.x, probe.y - la.y) / 100
+            let before = pad.drawing
+            guard let erased = Self.erase(before, from: la, to: lb, radius: radius,
+                                          wholeStrokes: wholeStrokes) else { continue }
+            if !touched.contains(where: { $0.canvas === pad }) { touched.append((pad, before)) }
+            // 垫着的截图里还有擦掉的字，拿掉
+            pad.removeRedrawCover()
+            pad.drawing = erased
+        }
+        // 撤销 / 重做还是作用在落笔的那块（别的画布擦掉的记在它上面，一起撤销）
+        if let originModel { tools.active = originModel }
+    }
+
+    /// 抬笔：别的画布上擦掉的记一步撤销，记在落笔那块画布上。
+    /// 和 PencilKit 记的“擦掉”在同一次事件里登记，撤销时一下全回来
+    private func finish() {
+        let changes = touched.compactMap { item -> Change? in
+            let after = item.canvas.drawing
+            return after == item.before ? nil : Change(canvas: item.canvas, before: item.before, after: after)
+        }
+        if let origin, let manager = origin.undoManager, !changes.isEmpty {
+            Self.registerUndo(on: manager, changes: changes, origin: origin, backward: true, active: originModel)
+        }
+        origin = nil
+        originModel = nil
+        last = nil
+        touched = []
+    }
+
+    private struct Change {
+        weak var canvas: PadCanvasView?
+        let before: PKDrawing
+        let after: PKDrawing
+    }
+
+    private static func registerUndo(on manager: UndoManager, changes: [Change], origin: PadCanvasView,
+                                     backward: Bool, active: HandwritingModel?) {
+        manager.registerUndo(withTarget: manager) { [weak origin, weak active] manager in
+            guard let origin else { return }
+            registerUndo(on: manager, changes: changes, origin: origin, backward: !backward, active: active)
+            for change in changes {
+                guard let pad = change.canvas, pad.window != nil else { continue }
+                pad.drawing = backward ? change.before : change.after
+            }
+            if let active { active.tools.active = active }
+            // 撤销时放回来的笔画（连同落笔那块 PencilKit 自己放回的）PencilKit 常常不画，
+            // 手写块还可能跟着变高：等这一下忙完逼它们重画一遍
+            let pads = changes.compactMap(\.canvas) + [origin]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                pads.forEach { $0.refreshRendering() }
+            }
+        }
+    }
+
+    /// 视图所在的这一页（窗口的根页面，或者弹出来盖在上面的那一页）
+    private static func screenRoot(of view: UIView) -> UIViewController? {
+        var responder: UIResponder? = view
+        while let r = responder, !(r is UIViewController) { responder = r.next }
+        var controller = responder as? UIViewController
+        while let parent = controller?.parent { controller = parent }
+        return controller
+    }
+
+    /// 擦掉 a 到 b 这一段碰到的笔迹（笔迹的坐标）；什么也没碰到时为 nil。
+    /// wholeStrokes：整笔擦；否则只擦掉碰到的那一段，两边剩下的各留成一笔
+    static func erase(_ drawing: PKDrawing, from a: CGPoint, to b: CGPoint, radius: CGFloat,
+                      wholeStrokes: Bool) -> PKDrawing? {
+        let reach = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
+            .insetBy(dx: -radius, dy: -radius)
+        let step = min(max(radius / 3, 0.5), 2)
+        var strokes: [PKStroke] = []
+        var changed = false
+        for stroke in drawing.strokes {
+            guard stroke.renderBounds.intersects(reach) else { strokes.append(stroke); continue }
+            let points = Array(stroke.path.interpolatedPoints(by: .distance(step)))
+            // 笔画有粗细：橡皮碰到墨迹的边就算
+            let hit = points.map { p in
+                distance(p.location.applying(stroke.transform), a, b) <= radius + p.size.width / 2
+            }
+            guard hit.contains(true) else { strokes.append(stroke); continue }
+            changed = true
+            if wholeStrokes { continue }
+            var run: [PKStrokePoint] = []
+            func keepRun() {
+                if run.count > 1 {
+                    var piece = PKStroke(ink: stroke.ink, path: PKStrokePath(controlPoints: run, creationDate: stroke.path.creationDate),
+                                         transform: stroke.transform, mask: stroke.mask)
+                    piece.randomSeed = stroke.randomSeed
+                    strokes.append(piece)
+                }
+                run = []
+            }
+            for (point, isHit) in zip(points, hit) {
+                if isHit { keepRun() } else { run.append(point) }
+            }
+            keepRun()
+        }
+        guard changed else { return nil }
+        var result = drawing
+        result.strokes = strokes
+        return result
+    }
+
+    /// 点 p 到线段 ab 的距离
+    private static func distance(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let length2 = dx * dx + dy * dy
+        guard length2 > 0.0001 else { return hypot(p.x - a.x, p.y - a.y) }
+        let t = min(max(((p.x - a.x) * dx + (p.y - a.y) * dy) / length2, 0), 1)
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+    }
+}
+
 /// 一道题的手写区。笔迹（PKDrawing）保存在这里，画布视图可以随页面滚动被回收、重建
 final class HandwritingModel: ObservableObject {
     @Published var isEmpty = true
@@ -631,6 +804,7 @@ final class HandwritingModel: ObservableObject {
     /// 新建或重建画布时调用：放入笔迹、应用当前工具
     func attach(_ canvas: PadCanvasView) {
         self.canvas = canvas
+        tools.eraserRelay.register(self)
         // 没有要恢复的笔迹就不用等画布排好版
         canvas.pendingDrawing = drawing.strokes.isEmpty ? nil : drawing
         appliedTools = nil
@@ -958,6 +1132,10 @@ struct NotebookCanvas: UIViewRepresentable {
             if [.began, .changed, .ended].contains(gesture.state) { model.tools.writingBegan.send() }
             // 写字时推迟的加长，这一笔写完再补上
             if [.ended, .cancelled, .failed].contains(gesture.state) { model.strokeEnded() }
+            // 橡皮擦经过的地方，别的画布上的笔迹也擦掉
+            if model.canvas?.tool is PKEraserTool || model.tools.eraserRelay.isErasing {
+                model.tools.eraserRelay.track(gesture, from: model, tools: model.tools)
+            }
             // 很快的一笔可能只收到“结束”，也要算
             guard model.tools.tool == .eraser, [.began, .changed, .ended].contains(gesture.state),
                   let view = gesture.view else { return }
