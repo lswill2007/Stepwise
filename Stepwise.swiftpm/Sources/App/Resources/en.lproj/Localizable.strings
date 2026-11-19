@@ -672,3 +672,6 @@
 "模型：%@" = "Model: %@";
 "做对 %lld / %lld" = "Correct %lld / %lld";
 "做对 %lld · 看过答案 %lld · 共 %lld" = "Correct %lld · Answer shown %lld · %lld total";
+"移动" = "Move";
+"求助" = "Help";
+"还没写时给下一档提示；写了一些时找出卡在哪一步" = "With nothing written, gives the next hint; once you've written something, finds the step you're stuck on";

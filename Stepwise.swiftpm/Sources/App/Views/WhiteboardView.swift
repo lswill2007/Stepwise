@@ -672,7 +672,7 @@ struct WhiteboardView: View {
             .background(Ink.paper)
             .overlay(alignment: .top) { BoardEmptyHint(model: model, hasNotes: !board.notes.isEmpty) }
             .overlay { InkOptionsDismissLayer(tools: ink.tools) }
-            .overlay(alignment: .bottom) { InkPalette(tools: ink.tools) }
+            .overlay(alignment: .bottom) { InkPalette(tools: ink.tools, lassoTitle: L("框选")) }
             .navigationTitle(board.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

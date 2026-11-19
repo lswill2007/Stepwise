@@ -541,22 +541,21 @@ struct QuestionBlock: View {
     // MARK: 操作
 
     private func actionRow(_ q: Question) -> some View {
-        // 侧栏、笔记栏都打开时这一栏会很窄：先收紧间距、提示按钮只写“提示”，还放不下就把“卡了”“看答案”收进“⋯”。
+        // 侧栏、笔记栏都打开时这一栏会很窄：先收紧间距，还放不下就把“看答案”收进“⋯”。
         // 每个按钮的字都不换行
         ViewThatFits(in: .horizontal) {
-            actionButtons(q, spacing: 20, fullHint: true, collapse: false)
-            actionButtons(q, spacing: 12, fullHint: false, collapse: false)
-            actionButtons(q, spacing: 12, fullHint: false, collapse: true)
+            actionButtons(q, spacing: 20, collapse: false)
+            actionButtons(q, spacing: 12, collapse: false)
+            actionButtons(q, spacing: 12, collapse: true)
         }
         .buttonStyle(InkTextButtonStyle())
     }
 
-    private func actionButtons(_ q: Question, spacing: CGFloat, fullHint: Bool, collapse: Bool) -> some View {
+    private func actionButtons(_ q: Question, spacing: CGFloat, collapse: Bool) -> some View {
         let busy = store.isBusy(qID)
         let empty = model.isEmpty && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let hintTitle = fullHint ? L("提示：") + Tutor.hintLevelShortName(q.hintCount + 1) : L("提示")
         return HStack(spacing: spacing) {
-            // 做对之前：检查、提示、看答案。只有“检查”是实心按钮，其余是文字
+            // 做对之前：检查、求助、看答案。只有“检查”是实心按钮，其余是文字
             if q.status != .passed {
                 Button {
                     saveDraft()
@@ -568,30 +567,22 @@ struct QuestionBlock: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(busy || empty)
 
-                // 提示分三档：思路方向 → 关键一步 → 下一步写什么，按钮上写着下一档是什么
-                Button { store.requestHint(setID, qID) } label: {
-                    Text(hintTitle).lineLimit(1).fixedSize()
+                // 求助：以前分成“提示”和“卡了”两个按钮，学生要先想该点哪个。现在合成一个，按纸上写了没有来决定
+                Button { requestHelp(empty: empty) } label: {
+                    Text("求助").lineLimit(1).fixedSize()
                 }
                 .disabled(busy)
+                .accessibilityHint(L("还没写时给下一档提示；写了一些时找出卡在哪一步"))
 
-                if collapse {
-                    Menu {
-                        Button(L("卡了"), systemImage: "questionmark.bubble") { reportStuck() }
-                        if q.status != .revealed {
+                if q.status != .revealed {
+                    if collapse {
+                        Menu {
                             Button(L("看答案"), systemImage: "eye") { store.requestSolution(setID, qID) }
+                        } label: {
+                            Image(systemName: "ellipsis.circle").imageScale(.large)
                         }
-                    } label: {
-                        Image(systemName: "ellipsis.circle").imageScale(.large)
-                    }
-                    .disabled(busy)
-                } else {
-                    // 卡住了：把现在写到哪里直接发过去，AI 自己找出卡在哪一步
-                    Button { reportStuck() } label: {
-                        Text("卡了").lineLimit(1).fixedSize()
-                    }
-                    .disabled(busy)
-
-                    if q.status != .revealed {
+                        .disabled(busy)
+                    } else {
                         Button { store.requestSolution(setID, qID) } label: {
                             Text("看答案").lineLimit(1).fixedSize()
                         }
@@ -610,6 +601,27 @@ struct QuestionBlock: View {
                 GeneratingBadge(label: pending.statusLabel, startedAt: pending.startedAt) { store.cancelReply(qID) }
                     .transition(.scale(scale: 0.8).combined(with: .opacity))
             }
+        }
+    }
+
+    /// 上次“求助”时纸上写到哪（几笔、打了什么字）
+    @State private var lastHelpSnapshot: String?
+
+    /// 求助：
+    /// - 纸上还没写：给下一档提示（思路 → 关键一步 → 下一步写什么）
+    /// - 写了一些：把现在写的发过去，找出卡在哪一步
+    /// - 上次求助以后没有再写：不重复找卡在哪，改给下一档提示
+    private func requestHelp(empty: Bool) {
+        if empty {
+            store.requestHint(setID, qID)
+            return
+        }
+        let snapshot = "\(model.strokeCount)|\(draft)"
+        if snapshot == lastHelpSnapshot {
+            store.requestHint(setID, qID)
+        } else {
+            lastHelpSnapshot = snapshot
+            reportStuck()
         }
     }
 

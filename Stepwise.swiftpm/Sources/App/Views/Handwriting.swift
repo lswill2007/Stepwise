@@ -796,6 +796,8 @@ final class HandwritingModel: ObservableObject {
     /// 只换了显示位置（整页涂鸦跟着排版挪）时，存盘的还是原来记下的笔迹
     private var storedDrawing: PKDrawing?
     private(set) var drawing = PKDrawing()
+    /// 纸上有几笔：用来判断上次求助以后有没有接着写
+    var strokeCount: Int { drawing.strokes.count }
     /// 当前显示在屏幕上的画布
     weak var canvas: PadCanvasView?
 
@@ -1623,6 +1625,9 @@ struct PageInkCanvas: UIViewRepresentable {
 /// 再点一次已选中的工具（或点右边的调节按钮），上方展开这个工具的参数
 struct InkPalette: View {
     @ObservedObject var tools: InkTools
+    /// 套索工具的名字：做题、笔记页上它只用来挪笔迹，叫“移动”，免得和“圈出来问”分不清；
+    /// 白板上框住的笔迹还能发给 AI 检查，仍叫“框选”
+    var lassoTitle: String = L("移动")
     /// 手动收起（记住）；shrunk 是开始书写时自动缩小（临时的，下次打开还是展开）
     @AppStorage("inkPaletteCollapsed") private var collapsed = false
     @State private var shrunk = false
@@ -1687,7 +1692,7 @@ struct InkPalette: View {
             compactPen(1)
             compactTool(.marker, title: L("荧光笔"))
             compactTool(.eraser, title: L("橡皮"))
-            compactTool(.lasso, title: L("框选"))
+            compactTool(.lasso, title: lassoTitle)
             compactTool(.ask, title: L("圈出来问"))
             Divider().frame(height: 24).padding(.horizontal, 4)
             compactIcon("arrow.uturn.backward", L("撤销")) { tools.undo() }
@@ -1767,7 +1772,7 @@ struct InkPalette: View {
             penButton(1, label: labels)
             toolButton(.marker, title: L("荧光笔"), label: labels)
             toolButton(.eraser, title: L("橡皮"), label: labels)
-            toolButton(.lasso, title: L("框选"), label: labels)
+            toolButton(.lasso, title: lassoTitle, label: labels)
             toolButton(.ask, title: L("圈出来问"), label: labels)
 
             Divider().frame(height: 30).padding(.horizontal, labels ? 4 : 2)
@@ -2027,6 +2032,7 @@ final class HandwritingModel: ObservableObject {
     let tools: InkTools
     static let isAvailable = false
     var pencilOnly = false
+    var strokeCount: Int { 0 }
     var onDrawingChanged: (() -> Void)?
     init(questionID: UUID?, tools: InkTools) { self.tools = tools }
     func clear() {}
@@ -2057,6 +2063,7 @@ struct NotebookCanvas: View {
 
 struct InkPalette: View {
     @ObservedObject var tools: InkTools
+    var lassoTitle: String = ""
     var body: some View { EmptyView() }
 }
 
