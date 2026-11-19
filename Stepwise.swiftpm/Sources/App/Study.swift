@@ -9,8 +9,10 @@ final class StudyTracker: ObservableObject {
     /// 停多久不动就不算学习
     static let idleLimit: TimeInterval = 60
 
-    /// 日期（yyyy-MM-dd）→ 学习秒数
-    @Published private(set) var daily: [String: Double]
+    /// 日期（yyyy-MM-dd）→ 学习秒数。
+    /// 不用 @Published：它每秒都在涨，每秒通知一次会让整个 App 每秒重算一遍界面，写字、翻页时隔一秒卡一下。
+    /// 界面上只显示到分钟，分钟数变了才通知；要每秒刷新的地方自己用 TimelineView 读
+    private(set) var daily: [String: Double]
     /// 周（这一周星期一的日期）→ AI 写的周报
     @Published var weeklyReports: [String: String] {
         didSet { UserDefaults.standard.set(weeklyReports, forKey: "studyWeeklyReports") }
@@ -32,6 +34,7 @@ final class StudyTracker: ObservableObject {
 
     private func mergeRestored() {
         let restored = UserDefaults.standard.dictionary(forKey: "studyDaily") as? [String: Double] ?? [:]
+        objectWillChange.send()
         daily.merge(restored) { max($0, $1) }
         let reports = UserDefaults.standard.dictionary(forKey: "studyWeeklyReports") as? [String: String] ?? [:]
         if reports != weeklyReports { weeklyReports.merge(reports) { $1 } }
@@ -65,7 +68,10 @@ final class StudyTracker: ObservableObject {
         lastTick = now
         // 退到后台再回来时中间那段不算；一分钟内没有操作也不算
         guard dt > 0, dt < 5, now.timeIntervalSince(lastActivity) <= Self.idleLimit else { return }
-        daily[Self.key(now), default: 0] += dt
+        let key = Self.key(now)
+        let minutes = Int((daily[key] ?? 0) / 60)
+        daily[key, default: 0] += dt
+        if Int((daily[key] ?? 0) / 60) != minutes { objectWillChange.send() }
         if now.timeIntervalSince(lastSaved) > 20 { save() }
     }
 
@@ -168,7 +174,8 @@ struct FloatingClock: View {
     var body: some View {
         GeometryReader { geo in
             let s = min(max(scale * pinch, 0.6), 3)
-            TimelineView(.periodic(from: .now, by: 1)) { context in
+            // 只显示到分钟：每分钟刷新一次就够，每秒重画玻璃效果白白占用写字的时间
+            TimelineView(.everyMinute) { context in
                 ClockFace(date: context.date, scale: s)
             }
             .position(x: geo.size.width * x + drag.width, y: geo.size.height * y + drag.height)

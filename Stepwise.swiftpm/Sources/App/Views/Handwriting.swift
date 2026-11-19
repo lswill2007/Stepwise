@@ -67,6 +67,11 @@ final class PadCanvasView: PKCanvasView {
         // 手指只有在能写字（打开了手指书写）时才算；手掌、滑动页面的手指不算
         watcher.canDraw = { [weak self] touch in touch.type == .pencil || self?.drawingPolicy == .anyInput }
         watcher.onPencilDown = { [weak self] in self?.pencilTouchedDown() }
+        // 换完笔迹 PencilKit 还没重画好就又落笔了：这时才把垫着的截图露出来（见 coverWhileRedrawing）
+        watcher.onTouchDown = { [weak self] in
+            guard let self, self.touchWatcher.isDown, self.awaitingRender else { return }
+            self.redrawCovers.forEach { $0.isHidden = false }
+        }
         watcher.onAllLifted = { [weak self] in
             guard let self else { return }
             // 写的时候 PencilKit 不重画别处：抬笔后等它画完再拿掉垫在下面的截图
@@ -168,18 +173,28 @@ final class PadCanvasView: PKCanvasView {
     /// 垫在画布下面的截图（连着换了几次就有几张，一起拿掉）
     private var redrawCovers: [UIView] = []
     private var coverDeadline: DispatchWorkItem?
+    /// 换了笔迹、PencilKit 还没报告重画好
+    private var awaitingRender = false
     /// 拍截图时画布滚动到的位置：之后画布滚动、缩放了，截图就对不上，马上拿掉
     private var coverOffset: CGPoint = .zero
     private var coverZoom: CGFloat = 1
 
-    func coverWhileRedrawing() {
+    /// visible 为 false：先藏着，PencilKit 重画好之前又落笔了才露出来。
+    /// 截图和画布上的字叠在一起会画两遍（边缘发硬、对不准时像重影，看起来就是别的字一下变模糊），
+    /// 所以只在真的需要它补位的时候才露出来：写完一笔整理笔锋时，PencilKit 不清空画布，直接换笔迹没有空白的一帧
+    func coverWhileRedrawing(visible: Bool = true) {
         guard window != nil, let superview, bounds.width > 1, bounds.height > 1,
               let cover = snapshotView(afterScreenUpdates: false) else { return }
         if !redrawCovers.isEmpty, contentOffset != coverOffset || zoomScale != coverZoom { removeRedrawCover() }
-        cover.frame = frame
+        // 画布在正文的缩放里（scaleEffect）：frame 在有变换时不可靠，照着 bounds / center / transform 放，才和画布严丝合缝
+        cover.bounds = bounds
+        cover.center = center
+        cover.transform = transform
         cover.isUserInteractionEnabled = false
+        cover.isHidden = !visible && !isStroking
         superview.insertSubview(cover, belowSubview: self)
         redrawCovers.append(cover)
+        awaitingRender = true
         coverOffset = contentOffset
         coverZoom = zoomScale
         armCoverDeadline()
@@ -200,6 +215,7 @@ final class PadCanvasView: PKCanvasView {
     /// 笔还在纸上时它报告的“画完”不算（只画了正在写的这一笔），等抬笔后下一次
     func renderingFinished() {
         guard !redrawCovers.isEmpty, !isStroking else { return }
+        awaitingRender = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard let self, !self.isStroking else { return }
             self.removeRedrawCover()
@@ -211,6 +227,7 @@ final class PadCanvasView: PKCanvasView {
         coverDeadline = nil
         redrawCovers.forEach { $0.removeFromSuperview() }
         redrawCovers = []
+        awaitingRender = false
     }
 
     /// 画布在屏幕上且有了实际尺寸后再放入恢复的笔迹
@@ -220,7 +237,9 @@ final class PadCanvasView: PKCanvasView {
         super.layoutSubviews()
         // 画布滚动、缩放、挪了位置：垫着的截图对不上了
         if let cover = redrawCovers.first,
-           contentOffset != coverOffset || zoomScale != coverZoom || cover.frame != frame { removeRedrawCover() }
+           contentOffset != coverOffset || zoomScale != coverZoom || cover.bounds.size != bounds.size || cover.center != center {
+            removeRedrawCover()
+        }
         guard pendingDrawing != nil, window != nil, bounds.width > 1, bounds.height > 1 else { return }
         DispatchQueue.main.async { [weak self] in
             self?.whenIdle { [weak self] in
@@ -1274,8 +1293,8 @@ struct NotebookCanvas: UIViewRepresentable {
         private func replace(_ canvasView: PadCanvasView, with drawing: PKDrawing, undoTo previous: PKDrawing,
                              droppingPencilKitUndo: Bool = false) {
             let undoManager = canvasView.undoManager
-            // 换之前垫一张截图：PencilKit 重画好之前又落笔写下一笔，刚写的字也不会消失
-            canvasView.coverWhileRedrawing()
+            // 换之前垫一张截图（先藏着）：PencilKit 重画好之前又落笔写下一笔时露出来，刚写的字也不会消失
+            canvasView.coverWhileRedrawing(visible: false)
             applying = true
             canvasView.paperDrawing = drawing
             if droppingPencilKitUndo, let undoManager, undoManager.canUndo {
@@ -1361,6 +1380,7 @@ final class PageInkLayout {
     static let leftMargin: CGFloat = 2000
     private var observation: NSKeyValueObservation?
     private weak var observedScroll: UIScrollView?
+    private var pendingRefresh: DispatchWorkItem?
 
     /// 每一块在页面内容里的位置（上下边），和量的时候正文的缩放比例。
     /// 页面变宽变窄时缩放比例先变、块的位置后量到，两个要是同一次排版的才对得上
@@ -1481,8 +1501,12 @@ final class PageInkLayout {
             canvas.minimumZoomScale = min(canvas.minimumZoomScale, scale)
             canvas.maximumZoomScale = max(canvas.maximumZoomScale, scale)
             canvas.zoomScale = scale
-            // 缩放变了 PencilKit 不一定重画：放回一次笔迹逼它重画
-            canvas.refreshRendering()
+            // 缩放变了 PencilKit 不一定重画：放回一次笔迹逼它重画。
+            // 收起、拉出左栏时缩放跟着动画一帧一帧变，每帧都重画（还要拍截图垫着）会让滑动卡顿：等缩放停下来再重画一次
+            pendingRefresh?.cancel()
+            let work = DispatchWorkItem { [weak canvas] in canvas?.refreshRendering() }
+            pendingRefresh = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
         }
         // 页面内容的原点在画布上的位置
         let origin = container.convert(CGPoint.zero, from: host)

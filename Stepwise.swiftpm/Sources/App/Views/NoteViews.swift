@@ -442,7 +442,10 @@ struct NoteDocView: View {
             .background(Ink.paper)
             .onGeometryChange(for: CGSize.self) { $0.size } action: { width = $0.width; viewHeight = $0.height }
             // 页面变宽变窄（缩放比例跟着变）、删掉一块：空白处的笔迹也要重新对上
-            .onChange(of: width) { pageInk.scheduleSettle { settlePageInk() } }
+            .onChange(of: width) {
+                pageInk.scheduleSettle { settlePageInk() }
+                ink.redrawAfterResize()
+            }
             .onChange(of: doc.blocks.map(\.id)) { pageInk.scheduleSettle { settlePageInk() } }
             .overlay { InkOptionsDismissLayer(tools: ink.tools) }
             .overlay(alignment: .bottom) { bottomBar(doc, busy: job != nil) }
@@ -895,27 +898,23 @@ struct NoteTextBlockView<MenuContent: View>: View {
 
     var body: some View {
         // 页面宽时批注写在右边页边，和这一块顶端对齐；窄时写在这一块下面
-        // 展开、收起页边用同一个分支，只改留白和批注栏的尺寸：换分支会把这一块（连同排版的网页）整个重建，
-        // 重建时高度一下变成 0，页面就被弹回最上面
-        if let commentMargin {
+        // 宽窄、展开收起都用同一个结构，只改留白和批注栏放在哪：换分支会把这一块（连同排版的网页、涂鸦画布）整个重建，
+        // 重建时高度一下变成 0，页面就被弹回最上面；收起、拉出左栏时页面宽度跨过分界线，滑的时候也会卡一下
+        // 批注栏也一直是同一个（排法交给 BlockMarginLayout）：批注里的公式是网页，挪一次位置就重建一次也会卡
+        let pinned = commentMargin != nil
+        BlockMarginLayout(pinned: pinned, marginOpen: marginOpen) {
             content
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
                 // 展开：批注浮在页边，不占版面，长批注往下延伸也不会把下面的笔记推开
-                .padding(.trailing, marginOpen ? commentMargin + 16 : 0)
-                .overlay(alignment: .topTrailing) {
-                    marginColumn(pinned: true)
-                        .frame(width: marginOpen ? commentMargin : nil, alignment: .leading)
-                        // 收起：小图标挂在这一块右边外面，点一下展开
-                        .fixedSize(horizontal: !marginOpen, vertical: true)
-                        .alignmentGuide(.trailing) { marginOpen ? $0[.trailing] : $0[.leading] - 10 }
-                }
-                .zIndex(comments.isEmpty && !asking ? 0 : 1)
-        } else {
-            VStack(alignment: .trailing, spacing: 8) {
-                content
-                marginColumn(pinned: false).frame(maxWidth: 420, alignment: .leading)
-            }
+                .padding(.trailing, commentMargin.map { marginOpen ? $0 + 16 : 0 } ?? 0)
+            marginColumn(pinned: pinned)
+                .frame(width: pinned && marginOpen ? commentMargin : nil, alignment: .leading)
+                // 页面窄，没有页边：批注依次写在这一块下面，最宽 420
+                .frame(maxWidth: pinned ? nil : 420, alignment: .leading)
+                // 收起：小图标挂在这一块右边外面，点一下展开
+                .fixedSize(horizontal: pinned && !marginOpen, vertical: pinned)
         }
+        .zIndex(pinned && (!comments.isEmpty || asking) ? 1 : 0)
     }
 
     /// 页边：圈出来问的回答写在圈住的地方右边，同一高度；提问框也在那里。
@@ -1547,6 +1546,42 @@ private struct PaperLayout: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: width, height: nil))
+    }
+}
+
+/// 一块正文（第一个）和它的批注栏（第二个，可以没有）。
+/// pinned：批注浮在右边页边，不占版面，顶端和这一块对齐；展开时贴着正文让出的页边右对齐，收起时挂在正文右边外面。
+/// 不 pinned（页面窄）：批注排在这一块下面，靠右。
+/// 两种排法用同一个容器，正文和批注都不会因为页面宽窄变了而重建
+private struct BlockMarginLayout: Layout {
+    let pinned: Bool
+    let marginOpen: Bool
+    private let spacing: CGFloat = 8
+    private let hangGap: CGFloat = 10
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let first = subviews.first else { return .zero }
+        let content = first.sizeThatFits(proposal)
+        guard !pinned, subviews.count > 1 else { return content }
+        let note = subviews[1].sizeThatFits(ProposedViewSize(width: proposal.width ?? content.width, height: nil))
+        guard note.height > 0 else { return content }
+        return CGSize(width: max(content.width, note.width), height: content.height + spacing + note.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let first = subviews.first else { return }
+        let content = first.sizeThatFits(ProposedViewSize(width: bounds.width, height: proposal.height))
+        first.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: proposal.height))
+        guard subviews.count > 1 else { return }
+        let noteProposal = ProposedViewSize(width: bounds.width, height: nil)
+        let note = subviews[1].sizeThatFits(noteProposal)
+        if pinned {
+            let x = marginOpen ? bounds.maxX - note.width : bounds.maxX + hangGap
+            subviews[1].place(at: CGPoint(x: x, y: bounds.minY), anchor: .topLeading, proposal: noteProposal)
+        } else {
+            subviews[1].place(at: CGPoint(x: bounds.maxX - note.width, y: bounds.minY + content.height + spacing),
+                              anchor: .topLeading, proposal: noteProposal)
+        }
     }
 }
 

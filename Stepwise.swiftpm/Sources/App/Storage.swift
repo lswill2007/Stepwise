@@ -8,7 +8,24 @@ import UniformTypeIdentifiers
 enum Keychain {
     private static let service = "com.lswill2007.stepwise.apikeys"
 
+    /// 读过的 Key 记在内存里：界面每次刷新都要看哪家填了 Key（模型菜单），每次都查钥匙串会让页面一刷新就卡一下。
+    /// 所有写入都走 set，记下的不会过时
+    nonisolated(unsafe) private static var cache: [String: String?] = [:]
+    private static let lock = NSLock()
+
     static func get(_ account: String) -> String? {
+        lock.lock()
+        let cached = cache[account]
+        lock.unlock()
+        if let cached { return cached }
+        let value = read(account)
+        lock.lock()
+        cache[account] = .some(value)
+        lock.unlock()
+        return value
+    }
+
+    private static func read(_ account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -28,6 +45,9 @@ enum Keychain {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
+        lock.lock()
+        cache[account] = .some(value.isEmpty ? nil : value)
+        lock.unlock()
         SecItemDelete(base as CFDictionary)
         guard !value.isEmpty else { return }
         var add = base

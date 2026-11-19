@@ -23,6 +23,19 @@ final class NotebookInk: ObservableObject {
 
     /// 已经建好的笔迹模型（没打开过的不新建）
     func existingModel(for id: UUID) -> HandwritingModel? { models[id] }
+
+    private var pendingRedraw: DispatchWorkItem?
+
+    /// 页面宽窄变了（收起、拉出左栏）：画布跟着正文一起缩放、挪位置，但画布本身留着不重建，
+    /// PencilKit 常常只画出原来画过的那几块，文字上的笔迹缺一截。等宽度停下来，把屏幕上的画布都逼着重画一遍
+    func redrawAfterResize() {
+        pendingRedraw?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.models.values.compactMap(\.canvas).filter { $0.window != nil }.forEach { $0.refreshRendering() }
+        }
+        pendingRedraw = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+    }
 }
 
 /// 做题的主界面：整个题集是一本可以一直往下写的笔记本。
@@ -114,6 +127,8 @@ struct NotebookView: View {
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .background(Ink.paper)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        // 收起、拉出左栏：手写区留着不重建，宽度停下来后逼画布重画一遍
+        .onChange(of: width) { ink.redrawAfterResize() }
         .overlay { InkOptionsDismissLayer(tools: ink.tools) }
         .overlay(alignment: .bottom) {
             if HandwritingModel.isAvailable && !items.isEmpty {
@@ -245,17 +260,15 @@ struct QuestionBlock: View {
                         NoteGuideBanner(guide: guide)
                     }
                 }
-                if wide {
-                    HStack(alignment: .top, spacing: 18) {
-                        work
-                        MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, nextID: nextID, wide: true,
-                                    selection: $selectedNote, onSelect: showAskRegion)
-                            .frame(width: 290)
-                    }
-                } else {
+                // 宽窄只换排法（左右 / 上下），不换分支：换分支会把手写区（PencilKit 画布）和页边（排版的网页）整个重建，
+                // 收起、拉出左栏时页面宽度跨过分界线，滑的时候就卡一下
+                let arrange = wide ? AnyLayout(HStackLayout(alignment: .top, spacing: 18))
+                                   : AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
+                arrange {
                     work
-                    MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, nextID: nextID, wide: false,
+                    MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, nextID: nextID, wide: wide,
                                 selection: $selectedNote, onSelect: showAskRegion)
+                        .frame(width: wide ? 290 : nil)
                 }
 
                 QuestionNotes(setID: setID, qID: qID, wide: wide)

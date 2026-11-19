@@ -103,38 +103,43 @@ struct RootView: View {
         }
     }
 
-    /// 宽屏：左栏和页面并排。左栏收起时滑出去，页面跟着变宽；页面一直是同一个，不会重建
+    /// 宽屏：左栏和页面并排。左栏收起时滑出去，页面跟着变宽；页面一直是同一个，不会重建。
+    /// 左栏收起时也不拿掉，只是推到屏幕外面：拿掉再放回来要重建整个左栏（导航栏、列表、每一行的进度条），
+    /// 拉出来的那一下就卡住，滑得一顿一顿的
     private var sideBySide: some View {
-        HStack(spacing: 0) {
-            if !store.sidebarHidden {
-                NavigationStack {
-                    sidebar
-                        #if os(iOS)
-                        .toolbarTitleDisplayMode(.inlineLarge)
-                        #endif
-                        .background(Ink.sidebar)
-                        .toolbar {
-                            ToolbarItem(placement: Self.trailing) {
-                                Button {
-                                    setSidebarHidden(true)
-                                } label: {
-                                    Label("收起左栏", systemImage: "sidebar.left")
-                                }
+        let hidden = store.sidebarHidden
+        return HStack(spacing: 0) {
+            NavigationStack {
+                sidebar
+                    #if os(iOS)
+                    .toolbarTitleDisplayMode(.inlineLarge)
+                    #endif
+                    .background(Ink.sidebar)
+                    .toolbar {
+                        ToolbarItem(placement: Self.trailing) {
+                            Button {
+                                setSidebarHidden(true)
+                            } label: {
+                                Label("收起左栏", systemImage: "sidebar.left")
                             }
                         }
-                }
-                .frame(width: sidebarWidth)
-                .overlay(alignment: .trailing) {
-                    Rectangle().fill(Ink.separator).frame(width: 0.5).ignoresSafeArea()
-                }
-                // 向左拽：收起左栏
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 24).onEnded { value in
-                        if isLeftSwipe(value) { setSidebarHidden(true) }
                     }
-                )
-                .transition(.move(edge: .leading))
             }
+            .frame(width: sidebarWidth)
+            .overlay(alignment: .trailing) {
+                Rectangle().fill(Ink.separator).frame(width: 0.5).ignoresSafeArea()
+            }
+            // 向左拽：收起左栏
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 24).onEnded { value in
+                    if isLeftSwipe(value) { setSidebarHidden(true) }
+                }
+            )
+            // 外面再套一层：收起时这一层变窄到 0（里面的左栏一直按 280 排，不跟着重排），靠右对齐，
+            // 左栏就整个推到屏幕左边外面，看起来是往左滑出去
+            .frame(width: hidden ? 0 : sidebarWidth, alignment: .trailing)
+            .allowsHitTesting(!hidden)
+            .accessibilityHidden(hidden)
             NavigationStack {
                 Group {
                     if let boardID = store.selectedBoardID, store.board(boardID) != nil {
@@ -189,16 +194,19 @@ struct RootView: View {
                 .overlay(alignment: .leading) {
                     if hasList && store.listHidden && !store.isFullScreen { edgePull { setListHidden(false) } }
                 }
-            if listShown {
+            // 收起时也留着，挪到屏幕外面：拿掉再放回来要重建整个目录，拉出来时会卡一下
+            if hasList {
                 list
                     .frame(width: listWidth)
                     .background(Ink.systemBackground)
                     .overlay(alignment: .trailing) {
                         Rectangle().fill(Ink.separator).frame(width: 0.5)
                     }
-                    .offset(x: listDrag)
+                    .offset(x: listShown ? listDrag : -listWidth - 1)
                     // 向左拽：栏跟着手指走，松手拽够了就收起，不够就弹回去
                     .simultaneousGesture(listSwipe)
+                    .allowsHitTesting(listShown)
+                    .accessibilityHidden(!listShown)
                     .transition(.move(edge: .leading))
             }
         }
