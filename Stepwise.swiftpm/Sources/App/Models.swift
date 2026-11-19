@@ -134,6 +134,8 @@ struct QuestionSet: Codable, Identifiable, Equatable {
     var noteID: UUID?
 
     var doneCount: Int { questions.filter { $0.status.isDone }.count }
+    var passedCount: Int { questions.filter { $0.status == .passed }.count }
+    var revealedCount: Int { questions.filter { $0.status == .revealed }.count }
 }
 
 /// 笔记模式：导入 PDF 后按要求生成的可编辑文档

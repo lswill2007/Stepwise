@@ -496,7 +496,7 @@
 "数据现在就存在“%@”。" = "Data is already stored in “%@”.";
 "文件储存位置" = "Storage Location";
 "时钟" = "Clock";
-"时钟浮在页面上，液态玻璃效果，颜色跟随系统深浅色；可以拖到任何位置，双指缩放。" = "The clock floats over every page with a Liquid Glass look and follows light and dark mode. Drag it anywhere and pinch to resize.";
+"时钟浮在页面上，液态玻璃效果，颜色跟随系统深浅色；拖到哪个角就贴在哪个角（不挡顶栏和工具栏），双指缩放。" = "The clock floats over every page with a liquid glass look and follows light and dark mode. Drag it to any corner and it stays there, clear of the top bar and the toolbar; pinch to resize.";
 "时间" = "Period";
 "显示用时" = "Show Response Time";
 "有的模型在价格表里查不到，费用里没算它们；点那个模型可以自己填价格" = "Some models aren't in the price lists, so they aren't included in the cost — tap one to enter its price";
@@ -670,3 +670,5 @@
 "再看答案" = "Show Answer";
 "盖住答案" = "Cover Answer";
 "模型：%@" = "Model: %@";
+"做对 %lld / %lld" = "Correct %lld / %lld";
+"做对 %lld · 看过答案 %lld · 共 %lld" = "Correct %lld · Answer shown %lld · %lld total";

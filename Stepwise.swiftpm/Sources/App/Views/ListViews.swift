@@ -525,7 +525,12 @@ struct QuestionListView: View {
                         .paneRow(q.id)
                     }
                 } header: {
-                    Text("已完成 \(set.doneCount) / \(set.questions.count)")
+                    // 做对和看过答案分开数：只看了答案不算做对
+                    if set.revealedCount == 0 {
+                        Text("做对 \(set.passedCount) / \(set.questions.count)")
+                    } else {
+                        Text("做对 \(set.passedCount) · 看过答案 \(set.revealedCount) · 共 \(set.questions.count)")
+                    }
                 }
                 .paneRows()
             }

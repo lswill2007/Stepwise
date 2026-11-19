@@ -269,7 +269,7 @@ struct QuestionBlock: View {
                                    : AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
                 arrange {
                     work
-                    MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, nextID: nextID, wide: wide,
+                    MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, wide: wide,
                                 selection: $selectedNote, onSelect: showAskRegion)
                         .frame(width: wide ? 290 : nil)
                 }
@@ -598,6 +598,12 @@ struct QuestionBlock: View {
                         .disabled(busy)
                     }
                 }
+            } else if let nextID {
+                // 做对了：“检查”的位置换成“下一题”，刚点完检查的地方就能接着往下做
+                Button { store.selectedQuestionID = nextID } label: {
+                    Text("下一题 ↓").lineLimit(1).fixedSize().padding(.horizontal, 10)
+                }
+                .buttonStyle(.borderedProminent)
             }
             Spacer(minLength: 8)
             if let pending = store.pending[qID] {
@@ -798,7 +804,6 @@ struct MarginNotes: View {
     let setID: UUID
     let qID: UUID
     let mistakeMode: Bool
-    let nextID: UUID?
     let wide: Bool
     /// 和手写区共用：选中圈选提问时，手写区上标出圈住的地方
     @Binding var selection: UUID?
@@ -968,10 +973,7 @@ struct MarginNotes: View {
                 if showCorrectDetail {
                     RichText(message.text, scale: 0.92)
                 }
-                if let nextID {
-                    Button("下一题 ↓") { store.selectedQuestionID = nextID }
-                        .buttonStyle(InkTextButtonStyle())
-                }
+                // “下一题”放在手写区下面原来“检查”的位置（实心按钮），这里不再重复
             }
         case .verdictWrong:
             VStack(alignment: .leading, spacing: 8) {
