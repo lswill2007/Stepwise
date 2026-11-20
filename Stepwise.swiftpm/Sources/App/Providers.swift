@@ -163,17 +163,17 @@ struct ModelCombo: Identifiable, Equatable {
 
     var summary: String {
         id == "advanced"
-            ? L("最准：讲解、检查、整理笔记用 Claude Opus 5.5，出新题和预先求解答案用推理最强的 Claude Fable 5.2")
-            : L("又快又准：讲解、检查、整理笔记用 Claude Sonnet 5.5，出新题和预先求解答案用 Claude Opus 5.5")
+            ? L("最准：讲解、检查、出题、预先求解答案和整理笔记都用 Claude Opus 5.5")
+            : L("又快又准：讲解、检查、出题、预先求解答案和整理笔记都用 Claude Sonnet 5.5")
     }
 
     /// 检查答案不用 Haiku 这类轻量模型：数学题（尤其微积分）容易改错。FrontierMath 第 4 档（2026-11）：
     /// Haiku 5.5 约 46%，Sonnet 5.5 约 80%，Opus 5.5 约 95%。
-    /// 出新题模型也用来在后台预先求解没有参考答案的题，检查时拿它对答案，所以选更强的一档
+    /// 每档四个用途都用同一个模型（出新题模型也用来在后台预先求解答案）。Fable 5.2 太贵，不放进组合
     static let advanced = ModelCombo(id: "advanced", main: "claude-opus-5-5", grading: "claude-opus-5-5",
-                                     question: "claude-fable-5-2", note: "claude-opus-5-5")
+                                     question: "claude-opus-5-5", note: "claude-opus-5-5")
     static let intermediate = ModelCombo(id: "intermediate", main: "claude-sonnet-5-5", grading: "claude-sonnet-5-5",
-                                         question: "claude-opus-5-5", note: "claude-sonnet-5-5")
+                                         question: "claude-sonnet-5-5", note: "claude-sonnet-5-5")
     static let all = [advanced, intermediate]
 
     /// 能用这些组合的服务商（按优先顺序）：只放模型名称核对过的
