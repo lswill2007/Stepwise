@@ -143,7 +143,9 @@ struct ImportView: View {
                         .disabled(currentMaterial == nil)
                     }
                 } footer: {
-                    if let p = store.activeProvider {
+                    if let p = store.activeProvider, let v = store.visionProvider {
+                        Text("文字用 \(p.name) · \(p.model.isEmpty ? L("未选择模型") : p.model)；照片、扫描件等图片一律用 \(v.name) · \(v.model) 识别。")
+                    } else if let p = store.activeProvider {
                         Text("将使用 \(p.name) · \(p.model.isEmpty ? "未选择模型" : p.model)。图片和扫描件需要支持图片输入的模型。")
                     }
                 }

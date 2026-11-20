@@ -761,6 +761,16 @@ final class AppStore: ObservableObject {
         return ModelCombo.providerIDs.lazy.compactMap { id in usable.first { $0.id == id } }.first
     }
 
+    /// 图像识别（导入题目时读照片、扫描件、按图片发送的 PDF 页）一律用 Claude Haiku 5.5：只是把图上的题目抄下来，
+    /// 快又便宜。用当前服务商（要能调 Claude），否则找已填 Key 的 Anthropic、AIHubMix、OpenRouter；都没有时用当前模型
+    static let visionModel = "claude-haiku-5-5"
+
+    var visionProvider: ProviderConfig? {
+        guard var p = comboProvider else { return nil }
+        p.model = ModelCombo.modelID(Self.visionModel, for: p.id)
+        return p
+    }
+
     /// 一次设好当前模型、检查与提示、出新题和整理笔记四个模型
     func applyCombo(_ combo: ModelCombo) {
         guard let p = comboProvider else { return }
@@ -1300,6 +1310,8 @@ final class AppStore: ObservableObject {
     func split(material: ImportedMaterial, requirement: String, title: String,
                progress: @escaping (GenerationProgress) -> Void) async throws -> QuestionSet {
         let client = try makeClient(for: .split)
+        // 图片部分交给识图模型，文字部分仍用当前模型
+        let imageClient = visionProvider.map { LLMClient(config: $0, apiKey: $0.apiKey) } ?? client
         let chunks = Importer.chunks(for: material)
         guard !chunks.isEmpty else { throw LLMError(message: L("没有可以拆分的内容。")) }
 
@@ -1311,7 +1323,8 @@ final class AppStore: ObservableObject {
         let makeTask = { (i: Int) -> @Sendable () async throws -> (Int, Result<Parsed, Error>) in
             { [self] in
                 do {
-                    return (i, .success(try await self.splitChunk(i, chunks[i], count: chunks.count, client: client,
+                    return (i, .success(try await self.splitChunk(i, chunks[i], count: chunks.count,
+                                                                  client: chunks[i].images.isEmpty ? client : imageClient,
                                                                   requirement: requirement, tracker: tracker)))
                 } catch {
                     if error is CancellationError || Task.isCancelled { throw CancellationError() }
@@ -1337,7 +1350,8 @@ final class AppStore: ObservableObject {
         for i in results.indices {
             guard case .failure = results[i] else { continue }
             try Task.checkCancellation()
-            if let retried = try? await splitChunk(i, chunks[i], count: chunks.count, client: client,
+            if let retried = try? await splitChunk(i, chunks[i], count: chunks.count,
+                                                                  client: chunks[i].images.isEmpty ? client : imageClient,
                                                    requirement: requirement, tracker: tracker) {
                 results[i] = .success(retried)
             } else {
