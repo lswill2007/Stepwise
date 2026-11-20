@@ -700,3 +700,9 @@
 "先填写 Anthropic Claude、AIHubMix 或 OpenRouter 任意一个的 API Key，就可以一键选用。" = "Add an API key for Anthropic Claude, AIHubMix or OpenRouter to use these with one tap.";
 "文字用 %@ · %@；照片、扫描件等图片一律用 %@ · %@ 识别。" = "Text uses %@ · %@; photos, scans and other images are always read with %@ · %@.";
 "正在读手写…" = "Reading handwriting…";
+"最准" = "Most accurate";
+"又快又准" = "Fast and accurate";
+"%@：讲解、检查、出题、预先求解答案和整理笔记都用 %@，识别图片用 %@" = "%@: %@ for explanations, checking, new questions, pre-solving answers and notes; %@ reads images";
+"点一下就设好当前模型、检查与提示、出新题和整理笔记四个模型，并打开“预先求解答案”，使用 %@。照片和手写一律先用低档模型识别成文字，再交给中档（中级）或高档（高级）模型判断。之后仍可以在“做题”“笔记”里单独改。" = "One tap sets the current model plus the Checking, New Question and Notes models and turns on Pre-solve Answers, using %@. Photos and handwriting are always read into text by the low-tier model first, then judged by the mid-tier (Intermediate) or high-tier (Advanced) model. You can still change each one under Practice and Notes.";
+"先填写任意一个服务商的 API Key（DMXAPI 和自定义服务商没有预设），就可以一键选用。" = "Add an API key for any provider (DMXAPI and custom providers have no preset) to use these with one tap.";
+"只有 deepseek-flash 能看图；deepseek-chat、deepseek-reasoner 不支持图片" = "Only deepseek-flash can read images; deepseek-chat and deepseek-reasoner can't";

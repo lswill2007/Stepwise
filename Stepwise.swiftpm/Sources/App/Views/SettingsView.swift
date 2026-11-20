@@ -17,6 +17,8 @@ struct SettingsView: View {
     @AppStorage("clockScale") private var clockScale: Double = 1
     @AppStorage(AILanguage.storageKey) private var aiLanguage: String = AILanguage.auto.rawValue
     @State private var pane: Pane? = .study
+    /// “推荐模型组合”里选的服务商；nil 时用当前使用的服务商
+    @State private var comboProviderID: String?
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
@@ -244,35 +246,46 @@ struct SettingsView: View {
     // MARK: - 模型组合
 
     private var comboSection: some View {
-        let provider = store.comboProvider
+        let options = store.comboProviders
+        let provider = options.first { $0.id == comboProviderID } ?? store.comboProvider
+        let tiers = provider.flatMap { ModelTiers.forProvider($0.id) }
         let current = store.currentCombo
         return Section {
+            if options.count > 1 {
+                Picker("服务商", selection: Binding(
+                    get: { provider?.id ?? "" },
+                    set: { comboProviderID = $0 })) {
+                    ForEach(options) { Text($0.name).tag($0.id) }
+                }
+            }
             ForEach(ModelCombo.all) { combo in
                 Button {
-                    store.applyCombo(combo)
+                    store.applyCombo(combo, providerID: provider?.id)
                 } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(combo.title).foregroundStyle(provider == nil ? Color.secondary : Color.primary)
-                            Text(combo.summary).font(.caption).foregroundStyle(.secondary)
+                            Text(combo.title).foregroundStyle(tiers == nil ? Color.secondary : Color.primary)
+                            if let tiers {
+                                Text(combo.summary(tiers)).font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                         Spacer()
-                        if current == combo {
+                        if current == combo && store.activeProviderID == provider?.id {
                             Image(systemName: "checkmark").foregroundStyle(.tint)
                         }
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(provider == nil)
+                .disabled(tiers == nil)
             }
         } header: {
             Text("推荐模型组合")
         } footer: {
             if let provider {
-                Text(String(localized: "点一下就设好当前模型、检查与提示、出新题和整理笔记四个模型，并打开“预先求解答案”（先用强模型解出答案，检查时对答案，不容易改错），使用 \(provider.name)。之后仍可以在“做题”“笔记”里单独改。"))
+                Text(String(localized: "点一下就设好当前模型、检查与提示、出新题和整理笔记四个模型，并打开“预先求解答案”，使用 \(provider.name)。照片和手写一律先用低档模型识别成文字，再交给中档（中级）或高档（高级）模型判断。之后仍可以在“做题”“笔记”里单独改。"))
             } else {
-                Text("先填写 Anthropic Claude、AIHubMix 或 OpenRouter 任意一个的 API Key，就可以一键选用。")
+                Text("先填写任意一个服务商的 API Key（DMXAPI 和自定义服务商没有预设），就可以一键选用。")
             }
         }
     }

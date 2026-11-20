@@ -754,14 +754,19 @@ final class AppStore: ObservableObject {
 
     // MARK: - 模型组合
 
-    /// 套用模型组合时用哪个服务商：当前使用的能用就用它，否则按 Anthropic、AIHubMix、OpenRouter 的顺序找已填 Key 的
+    /// 套用模型组合时用哪个服务商：当前使用的有三档预设就用它，否则按 ModelTiers.providerOrder 找已填 Key 的
     var comboProvider: ProviderConfig? {
-        let usable = providers.filter { ModelCombo.providerIDs.contains($0.id) && $0.hasKey }
+        let usable = providers.filter { ModelTiers.forProvider($0.id) != nil && $0.hasKey }
         if let active = usable.first(where: { $0.id == activeProviderID }) { return active }
-        return ModelCombo.providerIDs.lazy.compactMap { id in usable.first { $0.id == id } }.first
+        return ModelTiers.providerOrder.lazy.compactMap { id in usable.first { $0.id == id } }.first
     }
 
-    /// 读手写用的模型（Claude Haiku 5.5）；没有能调 Claude 的服务商时为 nil
+    /// 已填 Key、有三档预设的服务商（设置里可以选用哪个服务商的组合）
+    var comboProviders: [ProviderConfig] {
+        ProviderCatalog.displayOrder(providers.filter { ModelTiers.forProvider($0.id) != nil && $0.hasKey })
+    }
+
+    /// 读手写用的模型（服务商的低档模型）；没有可用的服务商时为 nil
     func handwritingReader() -> LLMClient? {
         visionProvider.map { LLMClient(config: $0, apiKey: $0.apiKey) }
     }
@@ -776,40 +781,41 @@ final class AppStore: ObservableObject {
         return lines.isEmpty ? nil : lines
     }
 
-    /// 图像识别（导入题目时读照片、扫描件、按图片发送的 PDF 页）一律用 Claude Haiku 5.5：只是把图上的题目抄下来，
-    /// 快又便宜。用当前服务商（要能调 Claude），否则找已填 Key 的 Anthropic、AIHubMix、OpenRouter；都没有时用当前模型
-    static let visionModel = "claude-haiku-5-5"
-
+    /// 图像识别（手写作答、导入题目时的照片、扫描件、按图片发送的 PDF 页）一律用服务商的低档模型：只是把图上的字抄下来，
+    /// 快又便宜。先用检查模型所在的服务商，其次当前服务商，再其次任意已填 Key、有三档预设的服务商；都没有时为 nil（照旧发图片）
     var visionProvider: ProviderConfig? {
-        guard var p = comboProvider else { return nil }
-        p.model = ModelCombo.modelID(Self.visionModel, for: p.id)
+        let candidates = [gradingProvider, activeProvider, comboProvider].compactMap { $0 }
+        guard var p = candidates.first(where: { $0.hasKey && ModelTiers.forProvider($0.id) != nil }),
+              let tiers = ModelTiers.forProvider(p.id) else { return nil }
+        p.model = tiers.low
         return p
     }
 
-    /// 一次设好当前模型、检查与提示、出新题和整理笔记四个模型
-    func applyCombo(_ combo: ModelCombo) {
-        guard let p = comboProvider else { return }
-        func id(_ m: String) -> String { ModelCombo.modelID(m, for: p.id) }
-        select(provider: p.id, model: id(combo.main))
+    /// 一次设好当前模型、检查与提示、出新题和整理笔记四个模型（用 providerID 这个服务商的三档预设）
+    func applyCombo(_ combo: ModelCombo, providerID: String? = nil) {
+        guard let p = providerID.flatMap({ id in providers.first { $0.id == id && $0.hasKey } }) ?? comboProvider,
+              let tiers = ModelTiers.forProvider(p.id) else { return }
+        let model = combo.model(in: tiers)
+        select(provider: p.id, model: model)
         gradingProviderID = p.id
-        gradingModel = id(combo.grading)
+        gradingModel = model
         questionProviderID = p.id
-        questionModel = id(combo.question)
+        questionModel = model
         noteProviderID = p.id
-        noteModel = id(combo.note)
+        noteModel = model
         // 先用强模型解出答案，检查时对答案，不容易改错
         presolveAnswers = true
     }
 
     /// 现在的设置正好是哪个组合（任何一个模型改过就不算）
     var currentCombo: ModelCombo? {
-        guard let p = activeProvider, ModelCombo.providerIDs.contains(p.id) else { return nil }
-        func id(_ m: String) -> String { ModelCombo.modelID(m, for: p.id) }
+        guard let p = activeProvider, let tiers = ModelTiers.forProvider(p.id) else { return nil }
         return ModelCombo.all.first { c in
-            p.model == id(c.main)
-                && gradingProviderID == p.id && gradingModel == id(c.grading)
-                && questionProviderID == p.id && questionModel == id(c.question)
-                && noteProviderID == p.id && noteModel == id(c.note)
+            let m = c.model(in: tiers)
+            return p.model == m
+                && gradingProviderID == p.id && gradingModel == m
+                && questionProviderID == p.id && questionModel == m
+                && noteProviderID == p.id && noteModel == m
         }
     }
 

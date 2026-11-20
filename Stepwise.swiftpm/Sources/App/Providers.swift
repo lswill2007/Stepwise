@@ -52,7 +52,16 @@ struct ProviderConfig: Codable, Identifiable, Hashable {
 
 enum ProviderCatalog {
     /// 模型名称更新很快，这里只放常用的；在设置里点“获取模型列表”可拉取服务商当前提供的全部模型。
-    static let presets: [ProviderConfig] = [
+    /// 预设服务商；每个服务商的低中高三档模型也放进它的预设模型里
+    static let presets: [ProviderConfig] = basePresets.map { preset in
+        guard let t = ModelTiers.forProvider(preset.id) else { return preset }
+        var p = preset
+        var seen = Set<String>()
+        p.presetModels = ([t.high, t.mid, t.low] + preset.presetModels).filter { seen.insert($0).inserted }
+        return p
+    }
+
+    private static let basePresets: [ProviderConfig] = [
         ProviderConfig(
             id: "openai", name: "OpenAI", apiProtocol: .openAI,
             baseURL: "https://api.openai.com/v1", model: "gpt-5",
@@ -72,7 +81,7 @@ enum ProviderCatalog {
             id: "deepseek", name: "DeepSeek", apiProtocol: .openAI,
             baseURL: "https://api.deepseek.com/v1", model: "deepseek-chat",
             presetModels: ["deepseek-chat", "deepseek-reasoner"],
-            note: L("不支持图片：手写作答和图片题请换用其他模型")),
+            note: L("只有 deepseek-flash 能看图；deepseek-chat、deepseek-reasoner 不支持图片")),
         ProviderConfig(
             id: "qwen", name: L("通义千问"), apiProtocol: .openAI,
             baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-max",
@@ -147,45 +156,66 @@ enum ProviderCatalog {
     }
 }
 
+/// 每个服务商能看图的模型分低、中、高三档：
+/// - 低：只用来识别图像（手写作答、拍照导入的题目），快又便宜，不用来判断对错
+/// - 中：“中级”组合里讲解、检查、出题、预先求解答案、整理笔记
+/// - 高：“高级”组合里同上；每百万 token 的价格不超过 Claude Opus 5.5（$4 / $20）
+/// 模型名称都对过 models.dev 上各服务商的模型列表（2026-11），聚合平台再对过平台自己的列表。
+/// 只有一个能看图的模型的服务商（DeepSeek），三档用同一个。没有公开模型列表、核对不了的（DMXAPI、自定义）不给预设
+struct ModelTiers: Equatable {
+    let low: String
+    let mid: String
+    let high: String
+
+    static let byProvider: [String: ModelTiers] = [
+        "anthropic": ModelTiers(low: "claude-haiku-5-5", mid: "claude-sonnet-5-5", high: "claude-opus-5-5"),
+        "aihubmix": ModelTiers(low: "claude-haiku-5-5", mid: "claude-sonnet-5-5", high: "claude-opus-5-5"),
+        "302ai": ModelTiers(low: "claude-haiku-5-5", mid: "claude-sonnet-5-5", high: "claude-opus-5-5"),
+        "openrouter": ModelTiers(low: "anthropic/claude-haiku-5.5", mid: "anthropic/claude-sonnet-5.5", high: "anthropic/claude-opus-5.5"),
+        // $0.1/$0.5、$1/$5、$2/$10
+        "openai": ModelTiers(low: "gpt-6-luna", mid: "gpt-6.1-terra", high: "gpt-6.2-sol"),
+        // $0.3/$2.5、$1.5/$7.5、$3/$15
+        "gemini": ModelTiers(low: "gemini-3.5-flash-lite", mid: "gemini-4-hydrogen", high: "gemini-4-neon"),
+        // 只有 deepseek-flash 能看图（deepseek-v4-pro 只能读文字）
+        "deepseek": ModelTiers(low: "deepseek-flash", mid: "deepseek-flash", high: "deepseek-flash"),
+        // 约 ¥0.85/¥2.9、¥2/¥7.9、¥12.8/¥38 每百万 token
+        "qwen": ModelTiers(low: "qwen3.8-flash", mid: "qwen3.7-plus", high: "qwen3.8-max"),
+        // kimi-k3.1-pro 比 kimi-k3 新也更便宜；highspeed 版输出价超过 Opus 5.5
+        "moonshot": ModelTiers(low: "kimi-k2.6", mid: "kimi-k3.1-pro", high: "kimi-k3.1-pro"),
+        // glm-5.3 只能读文字；能看图里最强的是 glm-5v-turbo
+        "zhipu": ModelTiers(low: "glm-5.3-flash", mid: "glm-5v-turbo", high: "glm-5v-turbo"),
+        "doubao": ModelTiers(low: "doubao-seed-2-0-mini-260428", mid: "doubao-seed-2-1-turbo-260628", high: "doubao-seed-2-1-pro-260628"),
+        // $1.25/$2.5、$1.25/$2.5（推理）、$2/$6
+        "xai": ModelTiers(low: "grok-4.20-0309-non-reasoning", mid: "grok-4.3", high: "grok-4.7"),
+        "siliconflow": ModelTiers(low: "Qwen/Qwen3-VL-8B-Instruct", mid: "Qwen/Qwen3.8-27B", high: "Pro/moonshotai/Kimi-K2.6")
+    ]
+
+    static func forProvider(_ id: String) -> ModelTiers? { byProvider[id] }
+
+    /// 套用组合时找服务商的先后：当前使用的优先，其次按这个顺序找已填 Key 的
+    static let providerOrder = ["anthropic", "aihubmix", "openrouter", "302ai", "openai", "gemini", "xai",
+                                "qwen", "moonshot", "zhipu", "doubao", "deepseek", "siliconflow"]
+}
+
 /// 搭配好的模型组合：一次设好当前模型、检查与提示、出新题（也用来预先求解）和整理笔记四个模型。
-/// 模型名称已对过 Anthropic 官方、AIHubMix 和 OpenRouter 的模型列表（2026-11）
+/// 用哪个模型由服务商的三档决定（ModelTiers）
 struct ModelCombo: Identifiable, Equatable {
     let id: String
-    /// 用 Anthropic 官方的模型名称写；在其他服务商那里用 `modelID(_:for:)` 换成它的写法
-    let main: String
-    let grading: String
-    let question: String
-    let note: String
 
-    var title: String {
-        id == "advanced" ? L("高级") : L("中级")
+    var title: String { id == "advanced" ? L("高级") : L("中级") }
+
+    /// 这个组合在某个服务商里用的模型
+    func model(in tiers: ModelTiers) -> String { id == "advanced" ? tiers.high : tiers.mid }
+
+    func summary(_ tiers: ModelTiers) -> String {
+        let lead = id == "advanced" ? L("最准") : L("又快又准")
+        return String(localized: "\(lead)：讲解、检查、出题、预先求解答案和整理笔记都用 \(model(in: tiers))，识别图片用 \(tiers.low)")
     }
 
-    var summary: String {
-        id == "advanced"
-            ? L("最准：讲解、检查、出题、预先求解答案和整理笔记都用 Claude Opus 5.5")
-            : L("又快又准：讲解、检查、出题、预先求解答案和整理笔记都用 Claude Sonnet 5.5")
-    }
-
-    /// 检查答案不用 Haiku 这类轻量模型：数学题（尤其微积分）容易改错。FrontierMath 第 4 档（2026-11）：
-    /// Haiku 5.5 约 46%，Sonnet 5.5 约 80%，Opus 5.5 约 95%。
-    /// 每档四个用途都用同一个模型（出新题模型也用来在后台预先求解答案）。Fable 5.2 太贵，不放进组合
-    static let advanced = ModelCombo(id: "advanced", main: "claude-opus-5-5", grading: "claude-opus-5-5",
-                                     question: "claude-opus-5-5", note: "claude-opus-5-5")
-    static let intermediate = ModelCombo(id: "intermediate", main: "claude-sonnet-5-5", grading: "claude-sonnet-5-5",
-                                         question: "claude-sonnet-5-5", note: "claude-sonnet-5-5")
+    /// 检查答案不用低档模型：数学题（尤其微积分）容易改错。低档只用来识别图片
+    static let advanced = ModelCombo(id: "advanced")
+    static let intermediate = ModelCombo(id: "intermediate")
     static let all = [advanced, intermediate]
-
-    /// 能用这些组合的服务商（按优先顺序）：只放模型名称核对过的
-    static let providerIDs = ["anthropic", "aihubmix", "openrouter"]
-
-    /// 同一个模型在不同服务商那里的名称：OpenRouter 写成 anthropic/claude-opus-5.5，Anthropic 官方和 AIHubMix 一样
-    static func modelID(_ model: String, for providerID: String) -> String {
-        guard providerID == "openrouter" else { return model }
-        // claude-opus-5-5 → anthropic/claude-opus-5.5（只把版本号之间的“-”换成“.”）
-        let fixed = model.replacingOccurrences(of: #"-(\d+)-(\d+)$"#, with: "-$1.$2", options: .regularExpression)
-        return "anthropic/" + fixed
-    }
 }
 
 /// 根据模型名称判断厂商、能否看图等（聚合平台里的模型名称各不相同，只能按名称推测）
