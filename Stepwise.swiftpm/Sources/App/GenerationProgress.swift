@@ -41,6 +41,8 @@ struct ChunkEstimator {
 /// 进度条：百分比、第几部分、找到几道题（或写了几块）、用了多久
 struct GenerationProgressView: View {
     let progress: GenerationProgress
+    /// 几部分同时进行（导入题目）：写“已完成 1/3 部分”；一部分接一部分时写“第 2/3 部分”
+    var parallel = false
     /// “已识别 %lld 道题” / “已写好 %lld 块”
     let foundText: (Int) -> String
 
@@ -51,7 +53,11 @@ struct GenerationProgressView: View {
             HStack(spacing: 10) {
                 Text("\(Int((progress.fraction * 100).rounded()))%").monospacedDigit()
                 if progress.parts > 1 {
-                    Text("第 \(min(progress.doneParts + 1, progress.parts))/\(progress.parts) 部分")
+                    if parallel {
+                        Text("已完成 \(progress.doneParts)/\(progress.parts) 部分")
+                    } else {
+                        Text("第 \(min(progress.doneParts + 1, progress.parts))/\(progress.parts) 部分")
+                    }
                 }
                 if progress.found > 0 { Text(foundText(progress.found)) }
                 Spacer()

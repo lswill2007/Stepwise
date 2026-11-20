@@ -689,3 +689,4 @@
 "怎么考" = "How It's Tested";
 "和前面的联系" = "Link to Earlier";
 "讲讲思路" = "Approach";
+"已完成 %lld/%lld 部分" = "Done %lld/%lld parts";

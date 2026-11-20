@@ -127,7 +127,7 @@ struct ImportView: View {
                 Section {
                     if working {
                         // 拆分要一会儿：显示大概进度、找到了几道题、用了多久
-                        GenerationProgressView(progress: progress) { String(localized: "已识别 \($0) 道题") }
+                        GenerationProgressView(progress: progress, parallel: true) { String(localized: "已识别 \($0) 道题") }
                             .padding(.vertical, 6)
                     } else {
                         Button {
