@@ -137,6 +137,29 @@ struct LLMClient {
         return ids.sorted()
     }
 
+    // MARK: - 提前建连接
+
+    private static let warmLock = NSLock()
+    private static var lastWarm: [String: Date] = [:]
+
+    /// 向服务商的接口地址发一个空的 HEAD 请求（不带 Key、不带内容），把 TLS 连接建好放进连接池。
+    /// 写字时调用，之后点“检查”的请求直接复用这条连接，省掉连接和握手（离服务商远时能省半秒到一秒）
+    static func warmUp(_ config: ProviderConfig) {
+        var root = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        while root.hasSuffix("/") { root.removeLast() }
+        guard let url = URL(string: root), url.scheme == "https", let host = url.host else { return }
+        let recent = warmLock.withLock { () -> Bool in
+            let recent = lastWarm[host].map { Date().timeIntervalSince($0) < 40 } ?? false
+            if !recent { lastWarm[host] = Date() }
+            return recent
+        }
+        guard !recent else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 10
+        session.dataTask(with: request).resume()
+    }
+
     // MARK: - 请求构造
 
     private func url(_ string: String) throws -> URL {

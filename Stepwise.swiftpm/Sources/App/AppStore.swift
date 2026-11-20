@@ -758,6 +758,12 @@ final class AppStore: ObservableObject {
         if activeProviderID == id { activeProviderID = "anthropic" }
     }
 
+    /// 先和检查、提示用的服务商建好网络连接（不发送任何内容），之后的请求复用这条连接，少等一次握手
+    func warmUpGrading() {
+        guard aiConsent == true, let config = gradingProvider ?? activeProvider, config.hasKey else { return }
+        LLMClient.warmUp(config)
+    }
+
     func makeClient(for purpose: RequestPurpose = .chat) throws -> LLMClient {
         // 没有同意数据发送说明之前，不向任何 AI 服务商发送内容
         guard aiConsent == true else {

@@ -283,6 +283,10 @@ struct QuestionBlock: View {
                 Rectangle().fill(Color.secondary.opacity(0.2)).frame(height: 1)
             }
             .onAppear { onAppear(q) }
+            #if os(iOS)
+            // 开始写这道题时先和检查用的服务商建好连接，写完点“检查”时不用再等握手
+            .onReceive(model.tools.writingBegan) { store.warmUpGrading() }
+            #endif
             .onDisappear {
                 saveDraft()
                 model.saveNow()
