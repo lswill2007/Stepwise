@@ -285,7 +285,7 @@ struct SettingsView: View {
             if let provider {
                 Text(String(localized: "点一下就设好当前模型、检查与提示、出新题和整理笔记四个模型，并打开“预先求解答案”，使用 \(provider.name)。照片和手写一律先用低档模型识别成文字，再交给中档（中级）或高档（高级）模型判断。之后仍可以在“做题”“笔记”里单独改。"))
             } else {
-                Text("先填写任意一个服务商的 API Key（DMXAPI 和自定义服务商没有预设），就可以一键选用。")
+                Text("先填写 Anthropic、OpenAI、Gemini、xAI、通义千问、豆包或 AIHubMix、OpenRouter、302.AI 的 API Key，就可以一键选用。Kimi、DeepSeek、智谱、硅基流动等服务商的模型实测检查数学题会判错或太慢，暂时没有推荐组合。")
             }
         }
     }

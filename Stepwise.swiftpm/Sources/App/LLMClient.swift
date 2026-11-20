@@ -216,6 +216,9 @@ struct LLMClient {
             let claude5 = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-5", "claude-fable", "claude-mythos"]
             return ["output_config": ["effort": claude5.contains(where: m.hasPrefix) ? "medium" : "low"]]
         case .gemini:
+            if m.contains("gemini-4") {
+                return ["generationConfig": ["thinkingConfig": ["thinkingLevel": "medium"]]]
+            }
             if m.contains("gemini-3") {
                 return ["generationConfig": ["thinkingConfig": ["thinkingLevel": "low"]]]
             }
@@ -237,7 +240,8 @@ struct LLMClient {
             let reasoning = name.hasPrefix("gpt-5") || name.hasPrefix("o1") || name.hasPrefix("o3") || name.hasPrefix("o4")
             return reasoning ? ["reasoning_effort": "low"] : [:]
         case .google:
-            // Gemini 的 OpenAI 兼容接口接受 reasoning_effort
+            // Gemini 的 OpenAI 兼容接口接受 reasoning_effort；Gemini 4 检查数学题最低用 medium
+            if name.contains("gemini-4") { return ["reasoning_effort": "medium"] }
             return (name.contains("2.5") || name.contains("gemini-3")) ? ["reasoning_effort": "low"] : [:]
         case .qwen:
             return (name.hasPrefix("qwen3") || name.hasPrefix("qwq") || name.contains("plus") || name.contains("max"))

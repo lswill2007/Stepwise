@@ -161,7 +161,14 @@ enum ProviderCatalog {
 /// - 中：“中级”组合里讲解、检查、出题、预先求解答案、整理笔记
 /// - 高：“高级”组合里同上；每百万 token 的价格不超过 Claude Opus 5.5（$4 / $20）
 /// 模型名称都对过 models.dev 上各服务商的模型列表（2026-11），聚合平台再对过平台自己的列表。
-/// 只有一个能看图的模型的服务商（DeepSeek），三档用同一个。没有公开模型列表、核对不了的（DMXAPI、自定义）不给预设
+/// 中、高档都在 App 里实测过 8 道微积分检查（4 道错、4 道对，含漏绝对值、上下限代反、分部积分符号错）：
+/// 判错一次就不用；每次检查要等半分钟以上的也不用。实测（经 AIHubMix，2026-11-20）：
+/// Sonnet 5.5 8/8 约 3 秒、Opus 5.5 8/8 约 6 秒、gpt-6.1-terra 8/8 约 3 秒、gpt-6.2-sol 8/8 约 2 秒、
+/// gemini-4-hydrogen 8/8 约 8 秒、gemini-4-neon 7/7 约 12 秒、qwen3.8-max 6/6 约 7 秒、
+/// doubao-seed-2-1-pro 7/7 约 6 秒、grok-4.3 7/7 约 9 秒（grok-4.7 也全对，但平均 16 秒、最慢 31 秒）。
+/// 没有预设的服务商：Kimi（kimi-k3.1-pro、kimi-k3 都把错的判成对）、qwen3.7-plus 同样判错（通义改用 qwen3.8-max），
+/// DeepSeek（deepseek-flash 判得对但每次 70–140 秒）、智谱（glm-5v-turbo 判得对但每次 30–50 秒）、
+/// 硅基流动（核对的模型测不了）、DMXAPI 和自定义（核对不了模型名称）
 struct ModelTiers: Equatable {
     let low: String
     let mid: String
@@ -176,25 +183,19 @@ struct ModelTiers: Equatable {
         "openai": ModelTiers(low: "gpt-6-luna", mid: "gpt-6.1-terra", high: "gpt-6.2-sol"),
         // $0.3/$2.5、$1.5/$7.5、$3/$15
         "gemini": ModelTiers(low: "gemini-3.5-flash-lite", mid: "gemini-4-hydrogen", high: "gemini-4-neon"),
-        // 只有 deepseek-flash 能看图（deepseek-v4-pro 只能读文字）
-        "deepseek": ModelTiers(low: "deepseek-flash", mid: "deepseek-flash", high: "deepseek-flash"),
-        // 约 ¥0.85/¥2.9、¥2/¥7.9、¥12.8/¥38 每百万 token
-        "qwen": ModelTiers(low: "qwen3.8-flash", mid: "qwen3.7-plus", high: "qwen3.8-max"),
-        // kimi-k3.1-pro 比 kimi-k3 新也更便宜；highspeed 版输出价超过 Opus 5.5
-        "moonshot": ModelTiers(low: "kimi-k2.6", mid: "kimi-k3.1-pro", high: "kimi-k3.1-pro"),
-        // glm-5.3 只能读文字；能看图里最强的是 glm-5v-turbo
-        "zhipu": ModelTiers(low: "glm-5.3-flash", mid: "glm-5v-turbo", high: "glm-5v-turbo"),
-        "doubao": ModelTiers(low: "doubao-seed-2-0-mini-260428", mid: "doubao-seed-2-1-turbo-260628", high: "doubao-seed-2-1-pro-260628"),
-        // $1.25/$2.5、$1.25/$2.5（推理）、$2/$6
-        "xai": ModelTiers(low: "grok-4.20-0309-non-reasoning", mid: "grok-4.3", high: "grok-4.7"),
-        "siliconflow": ModelTiers(low: "Qwen/Qwen3-VL-8B-Instruct", mid: "Qwen/Qwen3.8-27B", high: "Pro/moonshotai/Kimi-K2.6")
+        // qwen3.7-plus 实测把错的判成对，中、高档都用 qwen3.8-max（约 $1.8/$5.3，仍比 Sonnet 5.5 便宜）
+        "qwen": ModelTiers(low: "qwen3.8-flash", mid: "qwen3.8-max", high: "qwen3.8-max"),
+        // 2-1-turbo 测不了，中、高档都用实测全对的 2-1-pro（约 $0.9/$4.5）
+        "doubao": ModelTiers(low: "doubao-seed-2-0-mini-260428", mid: "doubao-seed-2-1-pro-260628", high: "doubao-seed-2-1-pro-260628"),
+        // grok-4.7 比 grok-4.3 慢一倍，实测没有更准，中、高档都用 grok-4.3（$1.25/$2.5）
+        "xai": ModelTiers(low: "grok-4.20-0309-non-reasoning", mid: "grok-4.3", high: "grok-4.3")
     ]
 
     static func forProvider(_ id: String) -> ModelTiers? { byProvider[id] }
 
     /// 套用组合时找服务商的先后：当前使用的优先，其次按这个顺序找已填 Key 的
     static let providerOrder = ["anthropic", "aihubmix", "openrouter", "302ai", "openai", "gemini", "xai",
-                                "qwen", "moonshot", "zhipu", "doubao", "deepseek", "siliconflow"]
+                                "qwen", "doubao"]
 }
 
 /// 搭配好的模型组合：一次设好当前模型、检查与提示、出新题（也用来预先求解）和整理笔记四个模型。
