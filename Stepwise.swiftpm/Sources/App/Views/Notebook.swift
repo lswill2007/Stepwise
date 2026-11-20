@@ -1136,10 +1136,16 @@ struct PenMark: View {
                     path.addQuadCurve(to: CGPoint(x: w * 0.38, y: h * 0.9), control: CGPoint(x: w * 0.22, y: h * 0.66))
                     path.addQuadCurve(to: CGPoint(x: w * 0.95, y: h * 0.08), control: CGPoint(x: w * 0.55, y: h * 0.45))
                 } else {
-                    // 不画叉：像老师用红笔把要改的地方圈出来
-                    path.addEllipse(in: CGRect(x: w * 0.1, y: h * 0.12, width: w * 0.8, height: h * 0.76))
+                    // 不画叉，也不画圈：一小段红色波浪线，和手写区上标出要改的地方的波浪线一样
+                    let y = h * 0.62, x0 = w * 0.08, x1 = w * 0.92
+                    let step = (x1 - x0) / 4
+                    path.move(to: CGPoint(x: x0, y: y))
+                    for k in 0..<4 {
+                        let a = x0 + step * CGFloat(k)
+                        path.addQuadCurve(to: CGPoint(x: a + step, y: y), control: CGPoint(x: a + step / 2, y: y + (k.isMultiple(of: 2) ? -h * 0.32 : h * 0.32)))
+                    }
                 }
-                context.stroke(path, with: .color(Ink.red), style: StrokeStyle(lineWidth: 3.2, lineCap: .round, lineJoin: .round))
+                context.stroke(path, with: .color(Ink.red), style: StrokeStyle(lineWidth: correct ? 3.2 : 2.4, lineCap: .round, lineJoin: .round))
             }
             .frame(width: 30, height: 26)
             .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 4 }

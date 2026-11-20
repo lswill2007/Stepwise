@@ -213,21 +213,21 @@ extension Tutor {
     static func boardCheckInstruction(lineCount: Int) -> String {
         let lines = lineCount > 0
         return pick("""
-        图片是我在白板上框选的手写内容，可能有题目，也可能有我的解答。\(lines ? "图片左边的灰色数字是行号。" : "")
+        图片是我在白板上框选的手写内容，可能有题目，也可能有我的解答。\(lines ? "图片左边的灰色数字是行号，只给你定位用，我在白板上看不到，回答里不要说“第几行”。" : "")
         请像老师坐在旁边一样帮我检查：
-        - 先认清题目和我写的每一步。看不清的地方直接说是\(lines ? "第几行" : "哪里")看不清，不要猜。
+        - 先认清题目和我写的每一步。看不清的地方直接说哪里看不清（引用附近写的内容），不要猜。
         - 第一行只输出 <verdict>correct</verdict>、<verdict>wrong</verdict> 或 <verdict>unsure</verdict>（只给程序用，我看不到）：结果和必要的过程都对判 correct；有错判 wrong；只有题目还没开始做、没写完、或者看不清没法判断，判 unsure。
         - 然后在 <reply>…</reply> 里写给我的反馈，2–5 句：做对的步骤一句带过；出问题的地方说清是哪一步、为什么不对、该从哪里检查，不要直接给出这一步的正确结果，也不要给完整解法。只有题目时，给一个思路方向的提示，不要解出来；没写完时，确认已经写的对不对，再提示下一步往哪个方向想。
         - 语气平和，不要用“错了”开头，不要说教。
-        \(lines ? "- 判 wrong 时，在 </reply> 后面为每一处需要改的地方单独写一行 <comment line=\"行号\">一句话说清这一行哪里要再看、为什么</comment>，行号是图片左边的数字，最多 4 处；不要给出正确答案。判 correct 时不写 comment。\n" : "")标签外面不要写其他内容。
+        \(lines ? "- 判 wrong 时，在 </reply> 后面为每一处需要改的地方单独写一行 <comment line=\"行号\">一句话说清这一行哪里要再看、为什么</comment>，行号是图片左边的数字，按从上到下的顺序写，最多 4 处；不要给出正确答案。判 correct 时不写 comment。这些地方会在白板上用红色波浪线标出，按 comment 的先后标上 ①②③④；<reply> 里提到它们时直接用 ①②③④ 指代，或者引用我写的式子，不要说“第几行”，comment 里也一样。\n" : "")标签外面不要写其他内容。
         """, """
-        The image is handwriting I selected on my whiteboard. It may contain a question, my working, or both.\(lines ? " The gray numbers on the left of the image are line numbers." : "")
+        The image is handwriting I selected on my whiteboard. It may contain a question, my working, or both.\(lines ? " The gray numbers on the left of the image are line numbers, only for you to locate things; I can't see them on my whiteboard, so don't mention them." : "")
         Please check it like a teacher sitting next to me:
-        - First read the question and each step I wrote. If something is unreadable, say which \(lines ? "line" : "part") you can't read; don't guess.
+        - First read the question and each step I wrote. If something is unreadable, say which part you can't read (quote what's nearby); don't guess.
         - On the first line, output only <verdict>correct</verdict>, <verdict>wrong</verdict> or <verdict>unsure</verdict> (for the app; I won't see it): correct when the result and the necessary working are right; wrong when something is wrong; unsure when there is only a question with no working yet, the working is unfinished, or it can't be read.
         - Then write your feedback to me inside <reply>…</reply>, 2–5 sentences: confirm correct steps briefly; for the step that goes wrong, say which step it is, why it doesn't work and where to look again, without giving the correct result of that step or the full solution. If there is only a question, give a hint about which direction to think in, without solving it; if the working is unfinished, confirm whether what's there is right, then hint at the direction for the next step.
         - Keep the tone calm; don't open with "wrong" and don't lecture.
-        \(lines ? "- When the verdict is wrong, after </reply> write one separate line for each place that needs fixing: <comment line=\"line number\">one sentence on what to look at again in this line and why</comment>, using the numbers on the left of the image, at most 4; don't give the correct answer. No comment when the verdict is correct.\n" : "")Write nothing outside the tags.
+        \(lines ? "- When the verdict is wrong, after </reply> write one separate line for each place that needs fixing: <comment line=\"line number\">one sentence on what to look at again in this line and why</comment>, using the numbers on the left of the image, in order from top to bottom, at most 4; don't give the correct answer. No comment when the verdict is correct. These places get a red wavy underline on the whiteboard, labeled ①②③④ in the order of the comments; in <reply>, refer to them as ①②③④ or quote what I wrote, never as \"line 3\", and the same in the comments.\n" : "")Write nothing outside the tags.
         """)
     }
 
@@ -235,17 +235,17 @@ extension Tutor {
         let lines = lineCount > 0
         let (question, detailed) = AskPreset.resolve(question, in: .board)
         return pick("""
-        图片是我在白板上框选的手写内容。\(lines ? "图片左边的灰色数字是行号。" : "")
+        图片是我在白板上框选的手写内容。\(lines ? "图片左边的灰色数字是行号，只给你定位用，我在白板上看不到，回答里不要说“第几行”。" : "")
 
         【我的问题】\(question)
 
-        在 <reply>…</reply> 里回答，像老师写在便签上的话：紧扣我框住的内容，\(detailed ? detailedAnswerRule : "几句话说清楚，必要时写出关键推导。")\(lines ? "要指出某一行时，可以在 </reply> 后面单独写 <comment line=\"行号\">一句话</comment>，最多 3 处。" : "")标签外面不要写其他内容。
+        在 <reply>…</reply> 里回答，像老师写在便签上的话：紧扣我框住的内容，\(detailed ? detailedAnswerRule : "几句话说清楚，必要时写出关键推导。")\(lines ? "要指出某一行时，可以在 </reply> 后面单独写 <comment line=\"行号\">一句话</comment>，最多 3 处，<reply> 里按先后用 ①②③ 指代它们。" : "")标签外面不要写其他内容。
         """, """
-        The image is handwriting I selected on my whiteboard.\(lines ? " The gray numbers on the left of the image are line numbers." : "")
+        The image is handwriting I selected on my whiteboard.\(lines ? " The gray numbers on the left of the image are line numbers, only for you to locate things; I can't see them, so don't mention them." : "")
 
         [My question] \(question)
 
-        Answer inside <reply>…</reply>, like a teacher's words on a sticky note: stick to what I selected. \(detailed ? detailedAnswerRule : "A few sentences, with the key derivation if needed.")\(lines ? " To point at a particular line, after </reply> you may write <comment line=\"line number\">one sentence</comment> on its own line, at most 3." : "") Write nothing outside the tags.
+        Answer inside <reply>…</reply>, like a teacher's words on a sticky note: stick to what I selected. \(detailed ? detailedAnswerRule : "A few sentences, with the key derivation if needed.")\(lines ? " To point at a particular line, after </reply> you may write <comment line=\"line number\">one sentence</comment> on its own line, at most 3, and refer to them in <reply> as ①②③ in that order." : "") Write nothing outside the tags.
         """)
     }
 

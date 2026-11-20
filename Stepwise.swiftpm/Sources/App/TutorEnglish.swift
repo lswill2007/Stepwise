@@ -138,7 +138,8 @@ extension Tutor {
         if lineNumbers {
             s += """
 
-            - The gray numbers on the left of the handwriting image are line numbers. When you judge wrong, at the end of the feedback write one separate line for each place that needs fixing: <mark line="line number">one sentence on what to look at again in this line and why</mark>, where the line number is the one to the left of the line with the problem; at most 3 places. Wrap formulas in the note with $...$, but do not give the correct answer. When you judge correct, do not write any mark.
+            - The gray numbers on the left of the handwriting image are line numbers, only for locating things; I can't see them on my page. When you judge wrong, at the end of the feedback write one separate line for each place that needs fixing: <mark line="line number">one sentence on what to look at again here and why</mark>, where the line number is the one to the left of the line with the problem, in order from top to bottom; at most 3 places. Wrap formulas in the note with $...$, but do not give the correct answer. When you judge correct, do not write any mark.
+            - These places get a red wavy underline in my handwriting, labeled ①②③ in the order of the marks. When the feedback refers to them, use ①②③ (e.g. "check the sign at ①"), or quote what I wrote; never say "line 3" or mention line numbers, in the mark notes either.
             """
         }
         return s
@@ -181,7 +182,7 @@ extension Tutor {
 
         Please:
         1. Quickly go through the steps I've written, in order, and find where I'm stuck: usually it's the last step I wrote, but it may be that an earlier step went wrong and that's why I can't continue.
-        2. In your first sentence, say exactly where I'm stuck (e.g. "You're stuck on solving $f'(x)=0$"), quoting what I wrote or the line number.
+        2. In your first sentence, say exactly where I'm stuck (e.g. "You're stuck on solving $f'(x)=0$"), quoting what I wrote; the line numbers are only for you to locate things, I can't see them, so don't say \"line 3\".
         3. If an earlier step went wrong and caused it, say which step and why, so I can go back and fix it.
         4. If everything before is fine, give me a nudge at the point where I stopped: which condition or method to use for this step, or which way to transform the expression. You may write the key relation, but don't carry the calculation further for me, and don't give the final answer.
         5. Keep the tone calm, like a teacher sitting next to me, and be brief: 3–5 sentences.
@@ -192,7 +193,7 @@ extension Tutor {
     static func stepQuestion(_ text: String, done: Bool) -> String {
         guard AILanguage.isEnglish else { return stepQuestionZH(text, done: done) }
         let (question, detailed) = AskPreset.resolve(text, in: .step)
-        var s = "[The step I circled] See the part circled in blue in the handwriting image (the gray numbers on the left are line numbers).\n" + question
+        var s = "[The step I circled] See the part circled in blue in the handwriting image (the gray numbers on the left are line numbers, only for you to locate things; I can't see them, so don't mention them).\n" + question
         if !done {
             s += "\n(I haven't finished this question yet: answer only about the step I circled. You can point out a problem or suggest a direction, but don't give the final answer.)"
         }
