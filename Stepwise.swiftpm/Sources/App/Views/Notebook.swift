@@ -1200,7 +1200,7 @@ extension PendingReply {
     /// 正在生成时显示的文字
     var statusLabel: String {
         switch kind {
-        case .verdictWrong, .verdictCorrect: return L("正在一步一步检查…")
+        case .verdictWrong, .verdictCorrect: return label ?? L("正在一步一步检查…")
         case .hint: return label ?? L("正在写提示…")
         case .solution: return L("正在写答案…")
         default: return label ?? L("正在写…")

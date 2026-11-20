@@ -44,6 +44,8 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var erasedMarks: [Int]?
     /// 用笔圈出来提问时圈住的地方（手写区坐标）；问题和回答都记着，回答贴在页边
     var region: InkRegion?
+    /// 手写作答已经由识图模型逐行转写成文字（写在 prompt 里），检查时只发文字，不再发手写图片
+    var transcribed: Bool?
 }
 
 /// 批改标出的一处错误：第几行（手写区的横线行，从 1 开始）、一句短评

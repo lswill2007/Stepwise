@@ -1012,7 +1012,8 @@ final class AppStore: ObservableObject {
         let imageIDs = handwriting.map { [ImageStore.save($0)] } ?? []
         let message = ChatMessage(role: .user, kind: .submission, text: answer, prompt: prompt, imageIDs: imageIDs)
 
-        run(setID, qID, userMessage: message, replyKind: .verdictWrong, purpose: .check) { [weak self] full in
+        run(setID, qID, userMessage: message, replyKind: .verdictWrong, purpose: .check,
+            transcribe: handwriting) { [weak self] full in
             let verdict = Tutor.parseVerdict(full)
             // 没有按格式给出判定时按“未通过”处理，反馈原样显示
             let correct = verdict.correct ?? false
@@ -1166,7 +1167,8 @@ final class AppStore: ObservableObject {
 
     /// 通用流程：追加用户消息 → 流式请求 → 完成后由 finish 写入回复
     private func run(_ setID: UUID, _ qID: UUID, userMessage: ChatMessage, replyKind: MessageKind,
-                     purpose: RequestPurpose, inMargin: Bool = false, finish: @escaping (String) -> Void) {
+                     purpose: RequestPurpose, inMargin: Bool = false, transcribe handwriting: Data? = nil,
+                     finish: @escaping (String) -> Void) {
         guard !isBusy(qID) else { return }
         let client: LLMClient
         do { client = try makeClient(for: purpose) } catch {
@@ -1178,21 +1180,48 @@ final class AppStore: ObservableObject {
         guard let q = question(setID, qID) else { return }
 
         let system = Tutor.tutorSystem(for: q, origin: q.originNote ?? legacyOrigin(of: q, in: setID))
-        var history = Self.context(for: q, current: userMessage, purpose: purpose)
-        // 之前的回复也在上下文里，模型容易照着它们的开头和用字写（“同学你好！”、繁体题用简体回答），在这次的请求最后再提醒一次
-        if !history.isEmpty {
-            history[history.count - 1].parts.append(.text(Tutor.replyReminder(for: q)))
+        func makeHistory(_ q: Question, _ current: ChatMessage) -> [LLMMessage] {
+            var history = Self.context(for: q, current: current, purpose: purpose)
+            // 之前的回复也在上下文里，模型容易照着它们的开头和用字写（“同学你好！”、繁体题用简体回答），在这次的请求最后再提醒一次
+            if !history.isEmpty {
+                history[history.count - 1].parts.append(.text(Tutor.replyReminder(for: q)))
+            }
+            return history
         }
+        let history = makeHistory(q, userMessage)
+        // 手写作答先交给识图模型（Haiku）逐行转写，检查模型只看文字
+        let reader = handwriting == nil ? nil : visionProvider.map { LLMClient(config: $0, apiKey: $0.apiKey) }
         let options = RequestOptions(fast: purpose.isGrading && quickGrading)
         let modelName = client.config.model
-        pending[qID] = PendingReply(kind: replyKind, inMargin: inMargin)
+        pending[qID] = PendingReply(kind: replyKind, inMargin: inMargin, label: reader == nil ? nil : L("正在读手写…"))
         live(qID).text = ""
         let started = Date()
 
         replyTasks[qID] = Task { [weak self] in
             var full = ""
             var lastFlush = Date.distantPast
+            var history = history
             do {
+                if let reader, let handwriting {
+                    let text = try? await reader.complete(
+                        system: Tutor.transcribeSystem,
+                        messages: [LLMMessage(role: .user, parts: [.image(handwriting), .text(Tutor.pick("请逐行转写。", "Transcribe it line by line."))])],
+                        options: RequestOptions(fast: true))
+                    try Task.checkCancellation()
+                    let lines = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    // 转写失败或空着：照旧把手写图片发给检查模型
+                    if let self, !lines.isEmpty {
+                        var current = userMessage
+                        let typed = userMessage.text.isEmpty ? "" : Tutor.pick("【打字作答】\n", "[Typed answer]\n") + userMessage.text + "\n\n"
+                        current.prompt = typed + Tutor.transcribedAnswer(lines) + "\n\n" + Tutor.checkInstruction(lineNumbers: true)
+                        current.transcribed = true
+                        self.mutate(setID, qID) { q in
+                            if let i = q.messages.firstIndex(where: { $0.id == userMessage.id }) { q.messages[i] = current }
+                        }
+                        if let q = self.question(setID, qID) { history = makeHistory(q, current) }
+                    }
+                    self?.pending[qID]?.label = nil
+                }
                 for try await chunk in client.stream(system: system, messages: history, options: options) {
                     full += chunk
                     // 限制刷新频率，长回答流式输出时界面不卡
@@ -1257,7 +1286,9 @@ final class AppStore: ObservableObject {
         switch purpose {
         case .check:
             let blocks = [summary, summary == nil ? nil : Tutor.regradeNote, current.prompt ?? current.text]
-            result.append(LLMMessage(role: .user, parts: images(current) + [.text(blocks.compactMap { $0 }.joined(separator: "\n\n"))]))
+            // 已经转写成文字的手写不再发图片
+            let answerImages = current.transcribed == true ? [] : images(current)
+            result.append(LLMMessage(role: .user, parts: answerImages + [.text(blocks.compactMap { $0 }.joined(separator: "\n\n"))]))
         case .hint, .solution, .presolve, .split, .note:
             var blocks = [summary]
             var parts: [LLMContent] = []

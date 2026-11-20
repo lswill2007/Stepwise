@@ -204,6 +204,42 @@ enum Tutor {
         return s
     }
 
+    /// 识图模型转写手写作答：逐行照抄，带上图片左边的行号，不改错、不解题
+    static var transcribeSystem: String {
+        pick("""
+        你是手写识别助手。图片是学生的手写数学作答，左边的灰色数字是行号。
+        把手写内容逐行照抄成文字，每行开头写上它左边的行号和冒号，例如 “3: $f'(x)=3x^2-3$”。
+        - 数学式子用 LaTeX，包在 $...$ 里；文字照原样写。
+        - 只照抄，写错的也照抄，不要改正、不要补步骤、不要解题、不要评价。
+        - 看不清的字写成 [?]；划掉的内容写成 ~~划掉的内容~~。
+        - 同一行左边没有行号时，接在上一行后面。
+        - 只输出转写结果，不要任何其他说明。如果图片里没有手写内容，只输出“（空白）”。
+        """, """
+        You transcribe handwriting. The image is a student's handwritten math answer; the gray numbers on the left are line numbers.
+        Copy the handwriting line by line as text, starting each line with the line number to its left and a colon, e.g. "3: $f'(x)=3x^2-3$".
+        - Write math in LaTeX inside $...$; copy words as they are.
+        - Copy only. Copy mistakes as written; don't correct them, add steps, solve or comment.
+        - Write anything illegible as [?]; write crossed-out content as ~~crossed out~~.
+        - If a line has no line number on its left, append it to the previous line.
+        - Output only the transcription, nothing else. If there is no handwriting, output only "(blank)".
+        """)
+    }
+
+    /// 检查时附在作答前面：说明下面是转写，个别字可能认错
+    static func transcribedAnswer(_ text: String) -> String {
+        pick("""
+        【我的手写作答】（由识字程序逐行转写，每行开头是手写图片左边的行号；个别字符可能认错，[?] 表示看不清）
+        \(text)
+
+        如果某处更像是转写认错（例如 [?]、字形相近的 1/l、x/×、2/z 混淆）而不是我写错，不要因此判错；真看不清会影响判断时，在反馈里请我把那一处写清楚。
+        """, """
+        [My handwritten answer] (transcribed line by line by a text-recognition step; each line starts with the line number to the left of the handwriting; a character may be misread, and [?] means illegible)
+        \(text)
+
+        If something looks more like a transcription misread (e.g. [?], or look-alikes such as 1/l, x/×, 2/z) than my own mistake, don't judge wrong because of it; if it truly can't be read and that matters, ask me in the feedback to write that part more clearly.
+        """)
+    }
+
     /// 提示分三档，一档比一档具体
     static var hintLevels: [String] { [L("思路方向"), L("关键一步"), L("下一步写什么")] }
 
