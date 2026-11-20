@@ -8,10 +8,10 @@ struct ModelBrowser: View {
     @Binding var favorites: [String]
     /// 点“获取模型列表”时调用；为 nil 时不显示这个按钮
     var onFetch: (() async -> Void)?
-    /// 最上面推荐哪类模型：批改用快速看图的，整理笔记用上下文长、能力强的
-    var recommend: Recommend = .fastVision
+    /// 最上面推荐哪类模型：检查用推理强、能看图的，整理笔记用上下文长、能力强的
+    var recommend: Recommend = .checking
 
-    enum Recommend { case fastVision, longContext }
+    enum Recommend { case checking, longContext }
 
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
@@ -40,8 +40,8 @@ struct ModelBrowser: View {
     var body: some View {
         let list = filtered
         let favoriteRows = list.filter(favorites.contains)
-        // 快、能看图的模型单独放在最上面（批改手写作答最合适）；同一厂商版本新的靠前，最多 12 个
-        let score: (String) -> Int? = recommend == .longContext ? ModelInfo.longContextScore : ModelInfo.fastVisionScore
+        // 推荐的模型单独放在最上面（检查作答：推理强、能看图）；同一厂商版本新的靠前，最多 12 个
+        let score: (String) -> Int? = recommend == .longContext ? ModelInfo.longContextScore : ModelInfo.checkingScore
         let fastRows = list.filter { !favorites.contains($0) && score($0) != nil }
             .sorted { (score($0) ?? 0) > (score($1) ?? 0) }
             .prefix(12)
@@ -71,13 +71,13 @@ struct ModelBrowser: View {
                     if recommend == .longContext {
                         Label("推荐用来整理长资料", systemImage: "doc.text.magnifyingglass")
                     } else {
-                        Label("快速 · 能看图（推荐用来检查作答）", systemImage: "bolt.fill")
+                        Label("逻辑强 · 能看图（推荐用来检查作答）", systemImage: "checkmark.seal")
                     }
                 } footer: {
                     if recommend == .longContext {
                         Text("上下文长、归纳能力强的模型，生成的笔记更完整；能看图的排在前面（公式多的 PDF 会按图片发送）。这类模型比较慢、也更贵，只在生成笔记时用。")
                     } else {
-                        Text("根据模型名称推测（flash、haiku、mini 等）。检查手写作答用这类模型最快。")
+                        Text("推理能力强、能看图的旗舰模型，检查数学题不容易改错，越靠上越强。Haiku、Flash、mini 这类轻量模型虽然快，容易改错，不在推荐里。")
                     }
                 }
             }

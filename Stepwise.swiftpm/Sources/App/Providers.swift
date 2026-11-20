@@ -163,14 +163,17 @@ struct ModelCombo: Identifiable, Equatable {
 
     var summary: String {
         id == "advanced"
-            ? L("准确优先：讲解、出题和整理笔记用 Claude Opus 5.5，检查与提示用 Claude Sonnet 5.5")
-            : L("速度优先：讲解、出题和整理笔记用 Claude Sonnet 5.5，检查与提示用 Claude Haiku 5.5")
+            ? L("最准：讲解、检查、整理笔记用 Claude Opus 5.5，出新题和预先求解答案用推理最强的 Claude Fable 5.2")
+            : L("又快又准：讲解、检查、整理笔记用 Claude Sonnet 5.5，出新题和预先求解答案用 Claude Opus 5.5")
     }
 
-    static let advanced = ModelCombo(id: "advanced", main: "claude-opus-5-5", grading: "claude-sonnet-5-5",
-                                     question: "claude-opus-5-5", note: "claude-opus-5-5")
-    static let intermediate = ModelCombo(id: "intermediate", main: "claude-sonnet-5-5", grading: "claude-haiku-5-5",
-                                         question: "claude-sonnet-5-5", note: "claude-sonnet-5-5")
+    /// 检查答案不用 Haiku 这类轻量模型：数学题（尤其微积分）容易改错。FrontierMath 第 4 档（2026-11）：
+    /// Haiku 5.5 约 46%，Sonnet 5.5 约 80%，Opus 5.5 约 95%。
+    /// 出新题模型也用来在后台预先求解没有参考答案的题，检查时拿它对答案，所以选更强的一档
+    static let advanced = ModelCombo(id: "advanced", main: "claude-opus-5-5", grading: "claude-opus-5-5",
+                                     question: "claude-fable-5-2", note: "claude-opus-5-5")
+    static let intermediate = ModelCombo(id: "intermediate", main: "claude-sonnet-5-5", grading: "claude-sonnet-5-5",
+                                         question: "claude-opus-5-5", note: "claude-sonnet-5-5")
     static let all = [advanced, intermediate]
 
     /// 能用这些组合的服务商（按优先顺序）：只放模型名称核对过的
@@ -250,22 +253,31 @@ enum ModelInfo {
         return fast.contains { name.contains($0) }
     }
 
-    /// 批改手写作答的推荐顺序：又快、看图又准的放前面
-    private static let recommendedFastVision = [
-        "claude-haiku-5", "gemini-3-flash", "gemini-2.5-flash", "claude-haiku-4", "gpt-4.1-mini", "gpt-5-mini", "grok-4-fast",
-        "gpt-4o-mini", "qwen3-vl-flash", "doubao-seed-1.6-flash", "glm-4v-flash", "gemini-2.0-flash", "claude-3-5-haiku"
+    /// 检查作答的推荐顺序：逻辑推理强、能看图的旗舰模型（检查要准，宁可慢一点）。
+    /// 名称对过 Anthropic、AIHubMix、OpenRouter 的模型列表（2026-11）；前面的数学推理更强
+    private static let recommendedChecking = [
+        "claude-opus-5-5", "claude-sonnet-5-5", "gpt-6.2-astra", "gemini-4-neon", "gpt-6.2-sol", "gemini-4-argon",
+        "gemini-4-carbon", "claude-fable-5", "claude-opus-5", "claude-sonnet-5", "gpt-6", "gemini-4", "gemini-3.1-pro",
+        "gemini-3-pro", "claude-opus-4", "claude-sonnet-4-6", "gpt-5", "gemini-2.5-pro", "o3"
     ]
 
-    /// 适合批改手写作答：快、能看图；分数越高越推荐，nil 表示不适合
-    static func fastVisionScore(_ model: String) -> Int? {
-        guard likelyFast(model), likelyVision(model) else { return nil }
+    /// 轻量模型：快，但数学题（尤其微积分）容易改错，不推荐用来检查
+    static func isLight(_ model: String) -> Bool {
+        let name = baseName(model)
+        let light = ["haiku", "flash", "-mini", "nano", "lite", "-fast", "turbo", "air", "-8b", "-7b", "-small", "instant",
+                     "-speed", "hydrogen", "luna", "terra"]
+        return light.contains { name.contains($0) }
+    }
+
+    /// 适合检查作答：推理强、能看图；分数越高越推荐，nil 表示不推荐
+    static func checkingScore(_ model: String) -> Int? {
+        guard !isNonChat(model), !isLight(model), likelyVision(model) else { return nil }
         let name = baseName(model).replacingOccurrences(of: ".", with: "-")
-        guard let index = recommendedFastVision.firstIndex(where: { name.contains($0.replacingOccurrences(of: ".", with: "-")) }) else {
-            return 1
+        guard let index = recommendedChecking.firstIndex(where: { name.contains($0.replacingOccurrences(of: ".", with: "-")) }) else {
+            return nil
         }
         var score = 1000 - index * 10
-        // lite / nano 更快但看手写没那么准；带日期、preview 的通常是旧快照
-        if name.contains("lite") || name.contains("nano") { score -= 5 }
+        // 带日期、preview 的通常是旧快照
         if name.contains("preview") || name.range(of: #"\d{6,}"#, options: .regularExpression) != nil { score -= 3 }
         return score
     }
@@ -303,7 +315,7 @@ enum ModelInfo {
         case .anthropic: return !name.contains("instant") && !name.hasPrefix("claude-2")
         case .google: return name.hasPrefix("gemini")
         case .openai:
-            return name.hasPrefix("gpt-4o") || name.hasPrefix("gpt-4.1") || name.hasPrefix("gpt-4-turbo")
+            return name.hasPrefix("gpt-6") || name.hasPrefix("gpt-4o") || name.hasPrefix("gpt-4.1") || name.hasPrefix("gpt-4-turbo")
                 || name.hasPrefix("gpt-5") || name.hasPrefix("o3") || name.hasPrefix("o4") || name.hasPrefix("chatgpt-4o")
         case .xai: return name.hasPrefix("grok-4")
         case .meta: return name.contains("llama-4") || name.contains("llama4")

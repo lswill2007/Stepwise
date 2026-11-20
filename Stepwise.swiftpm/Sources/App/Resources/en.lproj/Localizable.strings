@@ -188,12 +188,12 @@
 "只看支持看图的模型" = "Vision models only";
 "常用" = "Favorites";
 "快" = "Fast";
-"快速 · 能看图（推荐用来检查作答）" = "Fast · vision (recommended for checking answers)";
+"逻辑强 · 能看图（推荐用来检查作答）" = "Strong reasoning · vision (recommended for checking answers)";
 "手动填写模型名称" = "Enter Model Name Manually";
 "推荐用来整理长资料" = "Recommended for long material";
 "搜索模型，例如 claude、gpt-5、qwen" = "Search models, e.g. claude, gpt-5, qwen";
 "显示绘图、语音、向量等模型" = "Show image, audio, embedding and other models";
-"根据模型名称推测（flash、haiku、mini 等）。检查手写作答用这类模型最快。" = "Guessed from the model name (flash, haiku, mini, etc.). These are the fastest for checking handwritten answers.";
+"推理能力强、能看图的旗舰模型，检查数学题不容易改错，越靠上越强。Haiku、Flash、mini 这类轻量模型虽然快，容易改错，不在推荐里。" = "Flagship models with strong reasoning and vision, which rarely mark math wrongly; stronger ones are listed first. Light models like Haiku, Flash or mini are faster but often mark answers wrongly, so they aren't recommended.";
 "没有符合条件的模型" = "No matching models";
 "看图" = "Vision";
 "获取模型列表" = "Fetch Model List";
@@ -452,7 +452,7 @@
 "发给 AI 的话" = "Message to the AI";
 "发送题目给 AI 服务商" = "Send Questions to AI Provider";
 "只删用量记录，填过的价格会保留。清空后不能恢复。" = "Only usage records are deleted; prices you entered are kept. This can't be undone.";
-"可以单独选一个反应快的模型专门检查答案和给提示，例如 deepseek-chat、Claude Haiku、Gemini Flash；看完整答案和继续对话仍使用当前模型。模型不支持快速检查时会自动按正常方式请求。" = "You can pick a fast model just for checking answers and giving hints, e.g. deepseek-chat, Claude Haiku or Gemini Flash; full solutions and chat still use the current model. If a model doesn't support quick checking, a normal request is sent automatically.";
+"可以单独选一个模型专门检查答案和给提示。检查要准，请选逻辑推理强的模型，例如 Claude Sonnet 5.5、Claude Opus 5.5；Haiku、Flash、mini 这类轻量模型虽然快，数学题（尤其微积分）容易改错，不建议用来检查。看完整答案和继续对话仍使用当前模型。模型不支持快速检查时会自动按正常方式请求。" = "You can pick a separate model just for checking answers and giving hints. Checking must be accurate, so choose a model with strong reasoning, such as Claude Sonnet 5.5 or Claude Opus 5.5. Light models like Haiku, Flash or mini are faster but often mark math (especially calculus) wrongly, so they aren't recommended for checking. Full answers and follow-up chat still use the current model. If a model doesn't support Quick Check, a normal request is sent instead.";
 "可以存到“文件”、隔空投送到另一台 iPad，或用其他 App 发送。在另一台设备上打开设置 → 导入题目和做题记录。" = "Save it to Files, AirDrop it to another iPad, or send it with another app. On the other device, open Settings → Import Questions and History.";
 "备份与迁移" = "Backup and Transfer";
 "复制并使用这个文件夹" = "Copy and Use This Folder";
@@ -694,7 +694,7 @@
 "推荐模型组合" = "Recommended Model Sets";
 "高级" = "Advanced";
 "中级" = "Intermediate";
-"准确优先：讲解、出题和整理笔记用 Claude Opus 5.5，检查与提示用 Claude Sonnet 5.5" = "Accuracy first: Claude Opus 5.5 for explanations, new questions and notes; Claude Sonnet 5.5 for checking and hints";
-"速度优先：讲解、出题和整理笔记用 Claude Sonnet 5.5，检查与提示用 Claude Haiku 5.5" = "Speed first: Claude Sonnet 5.5 for explanations, new questions and notes; Claude Haiku 5.5 for checking and hints";
-"点一下就设好当前模型、检查与提示、出新题和整理笔记四个模型，使用 %@。之后仍可以在“做题”“笔记”里单独改。" = "One tap sets the current model plus the Checking, New Question and Notes models, using %@. You can still change each one under Practice and Notes.";
+"最准：讲解、检查、整理笔记用 Claude Opus 5.5，出新题和预先求解答案用推理最强的 Claude Fable 5.2" = "Most accurate: Claude Opus 5.5 for explanations, checking and notes; Claude Fable 5.2, the strongest reasoner, for new questions and pre-solving answers";
+"又快又准：讲解、检查、整理笔记用 Claude Sonnet 5.5，出新题和预先求解答案用 Claude Opus 5.5" = "Fast and accurate: Claude Sonnet 5.5 for explanations, checking and notes; Claude Opus 5.5 for new questions and pre-solving answers";
+"点一下就设好当前模型、检查与提示、出新题和整理笔记四个模型，并打开“预先求解答案”（先用强模型解出答案，检查时对答案，不容易改错），使用 %@。之后仍可以在“做题”“笔记”里单独改。" = "One tap sets the current model plus the Checking, New Question and Notes models, and turns on Pre-solve Answers (a strong model solves each question first so checking compares against it), using %@. You can still change each one under Practice and Notes.";
 "先填写 Anthropic Claude、AIHubMix 或 OpenRouter 任意一个的 API Key，就可以一键选用。" = "Add an API key for Anthropic Claude, AIHubMix or OpenRouter to use these with one tap.";

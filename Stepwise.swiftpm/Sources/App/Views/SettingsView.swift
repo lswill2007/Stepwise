@@ -270,7 +270,7 @@ struct SettingsView: View {
             Text("推荐模型组合")
         } footer: {
             if let provider {
-                Text(String(localized: "点一下就设好当前模型、检查与提示、出新题和整理笔记四个模型，使用 \(provider.name)。之后仍可以在“做题”“笔记”里单独改。"))
+                Text(String(localized: "点一下就设好当前模型、检查与提示、出新题和整理笔记四个模型，并打开“预先求解答案”（先用强模型解出答案，检查时对答案，不容易改错），使用 \(provider.name)。之后仍可以在“做题”“笔记”里单独改。"))
             } else {
                 Text("先填写 Anthropic Claude、AIHubMix 或 OpenRouter 任意一个的 API Key，就可以一键选用。")
             }
@@ -302,13 +302,13 @@ struct SettingsView: View {
         } header: {
             Text("检查速度")
         } footer: {
-            Text("可以单独选一个反应快的模型专门检查答案和给提示，例如 deepseek-chat、Claude Haiku、Gemini Flash；看完整答案和继续对话仍使用当前模型。模型不支持快速检查时会自动按正常方式请求。")
+            Text("可以单独选一个模型专门检查答案和给提示。检查要准，请选逻辑推理强的模型，例如 Claude Sonnet 5.5、Claude Opus 5.5；Haiku、Flash、mini 这类轻量模型虽然快，数学题（尤其微积分）容易改错，不建议用来检查。看完整答案和继续对话仍使用当前模型。模型不支持快速检查时会自动按正常方式请求。")
         }
     }
 
     /// 单独给某项用途选模型：先选服务商，再选模型；不选则跟随当前模型
     private func modelOverride(_ title: String, providerID: Binding<String?>, model: Binding<String>,
-                               resolved: ProviderConfig?, recommend: ModelBrowser.Recommend = .fastVision) -> some View {
+                               resolved: ProviderConfig?, recommend: ModelBrowser.Recommend = .checking) -> some View {
         ModelOverrideRows(title: title, providerID: providerID, model: model, resolved: resolved, recommend: recommend)
     }
 
@@ -797,10 +797,10 @@ struct ModelOverrideRows: View {
     @Binding var providerID: String?
     @Binding var model: String
     let resolved: ProviderConfig?
-    var recommend: ModelBrowser.Recommend = .fastVision
+    var recommend: ModelBrowser.Recommend = .checking
 
     init(title: String, providerID: Binding<String?>, model: Binding<String>,
-         resolved: ProviderConfig?, recommend: ModelBrowser.Recommend = .fastVision) {
+         resolved: ProviderConfig?, recommend: ModelBrowser.Recommend = .checking) {
         self.title = title
         self._providerID = providerID
         self._model = model

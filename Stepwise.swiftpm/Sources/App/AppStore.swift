@@ -772,6 +772,8 @@ final class AppStore: ObservableObject {
         questionModel = id(combo.question)
         noteProviderID = p.id
         noteModel = id(combo.note)
+        // 先用强模型解出答案，检查时对答案，不容易改错
+        presolveAnswers = true
     }
 
     /// 现在的设置正好是哪个组合（任何一个模型改过就不算）

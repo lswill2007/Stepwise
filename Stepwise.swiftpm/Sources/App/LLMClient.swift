@@ -211,7 +211,10 @@ struct LLMClient {
             // 支持 effort 参数的 Claude 模型
             let prefixes = ["claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
                             "claude-sonnet-4-6", "claude-sonnet-5", "claude-haiku-5", "claude-fable", "claude-mythos"]
-            return prefixes.contains(where: m.hasPrefix) ? ["output_config": ["effort": "low"]] : [:]
+            guard prefixes.contains(where: m.hasPrefix) else { return [:] }
+            // Claude 5 系列在 low 下数学题常常不怎么想就下结论，容易改错：快速检查最低用 medium
+            let claude5 = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-5", "claude-fable", "claude-mythos"]
+            return ["output_config": ["effort": claude5.contains(where: m.hasPrefix) ? "medium" : "low"]]
         case .gemini:
             if m.contains("gemini-3") {
                 return ["generationConfig": ["thinkingConfig": ["thinkingLevel": "low"]]]
