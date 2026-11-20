@@ -170,7 +170,7 @@ extension Tutor {
         guard AILanguage.isEnglish else { return stuckInstructionZH(hasImage: hasImage, typed: typed) }
         var s = "I'm stuck and can't keep going."
         if hasImage {
-            s += " The attached image is my handwriting so far (the gray numbers on the left are line numbers)."
+            s += " My handwriting so far is attached too (the line numbers are only for you to locate things)."
         }
         if !typed.isEmpty {
             s += "\n[What I typed]\n\(clip(typed, 1500))"

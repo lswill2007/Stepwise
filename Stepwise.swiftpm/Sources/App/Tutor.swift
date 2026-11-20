@@ -225,6 +225,23 @@ enum Tutor {
         """)
     }
 
+    /// 提示、卡了、白板用：手写转写成的文字，个别字可能认错
+    static func handwritingTranscript(_ text: String, title: String? = nil) -> String {
+        pick("""
+        【\(title ?? "我的手写")】（由识字程序逐行转写，每行开头是行号；个别字符可能认错，[?] 表示看不清，遇到像是认错的地方按最合理的理解来看）
+        \(text)
+        """, """
+        [\(title ?? "My handwriting")] (transcribed line by line by a text-recognition step; each line starts with its line number; a character may be misread and [?] means illegible, so read anything that looks misread in the most sensible way)
+        \(text)
+        """)
+    }
+
+    /// 白板：框选的内容已经转写成文字，指令里说的“图片”就是这份转写
+    static var boardTranscriptNote: String {
+        pick("（我框选的手写已经逐行转写成上面的文字，下面说的“图片”就是指这份转写，行号是每行开头的数字。）",
+             "(The handwriting I selected has been transcribed line by line above; where the instructions below say \"image\", they mean this transcription, and the line numbers are the numbers at the start of each line.)")
+    }
+
     /// 检查时附在作答前面：说明下面是转写，个别字可能认错
     static func transcribedAnswer(_ text: String) -> String {
         pick("""
@@ -278,7 +295,7 @@ enum Tutor {
     static func stuckInstructionZH(hasImage: Bool, typed: String) -> String {
         var s = "我卡住了，写不下去。"
         if hasImage {
-            s += "附图是我到目前为止的手写（左边的灰色数字是行号）。"
+            s += "我到目前为止的手写也附上了（行号只给你定位用）。"
         }
         if !typed.isEmpty {
             s += "\n【我打的字】\n\(clip(typed, 1500))"

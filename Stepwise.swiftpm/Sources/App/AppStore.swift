@@ -761,6 +761,21 @@ final class AppStore: ObservableObject {
         return ModelCombo.providerIDs.lazy.compactMap { id in usable.first { $0.id == id } }.first
     }
 
+    /// 读手写用的模型（Claude Haiku 5.5）；没有能调 Claude 的服务商时为 nil
+    func handwritingReader() -> LLMClient? {
+        visionProvider.map { LLMClient(config: $0, apiKey: $0.apiKey) }
+    }
+
+    /// 让识图模型把手写图片逐行转写成文字；失败或空白时返回 nil
+    nonisolated static func transcribe(_ image: Data, with reader: LLMClient) async -> String? {
+        let text = try? await reader.complete(
+            system: Tutor.transcribeSystem,
+            messages: [LLMMessage(role: .user, parts: [.image(image), .text(Tutor.pick("请逐行转写。", "Transcribe it line by line."))])],
+            options: RequestOptions(fast: true))
+        let lines = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return lines.isEmpty ? nil : lines
+    }
+
     /// 图像识别（导入题目时读照片、扫描件、按图片发送的 PDF 页）一律用 Claude Haiku 5.5：只是把图上的题目抄下来，
     /// 快又便宜。用当前服务商（要能调 Claude），否则找已填 Key 的 Anthropic、AIHubMix、OpenRouter；都没有时用当前模型
     static let visionModel = "claude-haiku-5-5"
@@ -1079,7 +1094,7 @@ final class AppStore: ObservableObject {
         let message = ChatMessage(role: .user, kind: .hintRequest, text: L("卡了"),
                                   prompt: Tutor.stuckInstruction(hasImage: !imageIDs.isEmpty, typed: answer),
                                   imageIDs: imageIDs)
-        run(setID, qID, userMessage: message, replyKind: .hint, purpose: .hint) { [weak self] full in
+        run(setID, qID, userMessage: message, replyKind: .hint, purpose: .hint, waitingLabel: L("正在看你卡在哪…")) { [weak self] full in
             self?.mutate(setID, qID) { q in
                 var hint = ChatMessage(role: .assistant, kind: .hint, text: full)
                 hint.hintLevel = ChatMessage.stuckHintLevel
@@ -1087,7 +1102,6 @@ final class AppStore: ObservableObject {
                 _ = self?.countReviewRound(&q)
             }
         }
-        pending[qID]?.label = L("正在看你卡在哪…")
     }
 
     func requestSolution(_ setID: UUID, _ qID: UUID) {
@@ -1168,6 +1182,7 @@ final class AppStore: ObservableObject {
     /// 通用流程：追加用户消息 → 流式请求 → 完成后由 finish 写入回复
     private func run(_ setID: UUID, _ qID: UUID, userMessage: ChatMessage, replyKind: MessageKind,
                      purpose: RequestPurpose, inMargin: Bool = false, transcribe handwriting: Data? = nil,
+                     waitingLabel: String? = nil,
                      finish: @escaping (String) -> Void) {
         guard !isBusy(qID) else { return }
         let client: LLMClient
@@ -1189,11 +1204,20 @@ final class AppStore: ObservableObject {
             return history
         }
         let history = makeHistory(q, userMessage)
-        // 手写作答先交给识图模型（Haiku）逐行转写，检查模型只看文字
-        let reader = handwriting == nil ? nil : visionProvider.map { LLMClient(config: $0, apiKey: $0.apiKey) }
+        // 手写先交给识图模型（Haiku）逐行转写，检查、提示模型只看文字：
+        // 检查和“卡了”转写这次的手写；“求助”转写最近一次作答里还没转写过的手写
+        let target: ChatMessage? = {
+            guard purpose == .check || purpose == .hint else { return nil }
+            if !userMessage.imageIDs.isEmpty { return userMessage }
+            guard purpose == .hint, let last = q.messages.last(where: { $0.kind == .submission && $0.id != userMessage.id }),
+                  !last.imageIDs.isEmpty, last.transcript == nil else { return nil }
+            return last
+        }()
+        let targetImage = target.flatMap { $0.imageIDs.first }.flatMap(ImageStore.load) ?? handwriting
+        let reader = target == nil || targetImage == nil ? nil : handwritingReader()
         let options = RequestOptions(fast: purpose.isGrading && quickGrading)
         let modelName = client.config.model
-        pending[qID] = PendingReply(kind: replyKind, inMargin: inMargin, label: reader == nil ? nil : L("正在读手写…"))
+        pending[qID] = PendingReply(kind: replyKind, inMargin: inMargin, label: reader == nil ? waitingLabel : L("正在读手写…"))
         live(qID).text = ""
         let started = Date()
 
@@ -1202,25 +1226,24 @@ final class AppStore: ObservableObject {
             var lastFlush = Date.distantPast
             var history = history
             do {
-                if let reader, let handwriting {
-                    let text = try? await reader.complete(
-                        system: Tutor.transcribeSystem,
-                        messages: [LLMMessage(role: .user, parts: [.image(handwriting), .text(Tutor.pick("请逐行转写。", "Transcribe it line by line."))])],
-                        options: RequestOptions(fast: true))
+                if let reader, let target, let targetImage {
+                    let lines = await Self.transcribe(targetImage, with: reader)
                     try Task.checkCancellation()
-                    let lines = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    // 转写失败或空着：照旧把手写图片发给检查模型
-                    if let self, !lines.isEmpty {
-                        var current = userMessage
-                        let typed = userMessage.text.isEmpty ? "" : Tutor.pick("【打字作答】\n", "[Typed answer]\n") + userMessage.text + "\n\n"
-                        current.prompt = typed + Tutor.transcribedAnswer(lines) + "\n\n" + Tutor.checkInstruction(lineNumbers: true)
-                        current.transcribed = true
-                        self.mutate(setID, qID) { q in
-                            if let i = q.messages.firstIndex(where: { $0.id == userMessage.id }) { q.messages[i] = current }
+                    // 转写失败：照旧把手写图片发给检查模型
+                    if let self, let lines {
+                        var updated = target
+                        updated.transcript = lines
+                        if purpose == .check && target.id == userMessage.id {
+                            let typed = userMessage.text.isEmpty ? "" : Tutor.pick("【打字作答】\n", "[Typed answer]\n") + userMessage.text + "\n\n"
+                            updated.prompt = typed + Tutor.transcribedAnswer(lines) + "\n\n" + Tutor.checkInstruction(lineNumbers: true)
                         }
+                        self.mutate(setID, qID) { q in
+                            if let i = q.messages.firstIndex(where: { $0.id == target.id }) { q.messages[i] = updated }
+                        }
+                        let current = target.id == userMessage.id ? updated : userMessage
                         if let q = self.question(setID, qID) { history = makeHistory(q, current) }
                     }
-                    self?.pending[qID]?.label = nil
+                    self?.pending[qID]?.label = waitingLabel
                 }
                 for try await chunk in client.stream(system: system, messages: history, options: options) {
                     full += chunk
@@ -1287,18 +1310,28 @@ final class AppStore: ObservableObject {
         case .check:
             let blocks = [summary, summary == nil ? nil : Tutor.regradeNote, current.prompt ?? current.text]
             // 已经转写成文字的手写不再发图片
-            let answerImages = current.transcribed == true ? [] : images(current)
+            let answerImages = current.transcript != nil ? [] : images(current)
             result.append(LLMMessage(role: .user, parts: answerImages + [.text(blocks.compactMap { $0 }.joined(separator: "\n\n"))]))
         case .hint, .solution, .presolve, .split, .note:
             var blocks = [summary]
             var parts: [LLMContent] = []
             if purpose == .hint, !current.imageIDs.isEmpty {
-                // 点“卡了”：带的是现在的手写，作答说明已经写在这次的请求里
-                parts = images(current)
+                // 点“卡了”：带的是现在的手写（转写过就只带文字），作答说明已经写在这次的请求里
+                if let transcript = current.transcript {
+                    blocks.append(Tutor.handwritingTranscript(transcript))
+                } else {
+                    parts = images(current)
+                }
             } else if purpose == .hint, let last = earlier.last(where: { $0.kind == .submission }) {
-                parts = images(last)
-                blocks.append(Tutor.pick("【我最近一次的作答】\n", "[My latest answer]\n")
-                              + (last.text.isEmpty ? Tutor.pick("（见手写图片）", "(see the handwriting image)") : Tutor.clip(last.text, 1500)))
+                var answer = Tutor.pick("【我最近一次的作答】\n", "[My latest answer]\n")
+                if let transcript = last.transcript {
+                    if !last.text.isEmpty { answer += Tutor.clip(last.text, 1500) + "\n" }
+                    answer += Tutor.handwritingTranscript(transcript, title: Tutor.pick("手写部分", "Handwritten part"))
+                } else {
+                    parts = images(last)
+                    answer += last.text.isEmpty ? Tutor.pick("（见手写图片）", "(see the handwriting image)") : Tutor.clip(last.text, 1500)
+                }
+                blocks.append(answer)
             }
             blocks.append(current.prompt ?? current.text)
             result.append(LLMMessage(role: .user, parts: parts + [.text(blocks.compactMap { $0 }.joined(separator: "\n\n"))]))

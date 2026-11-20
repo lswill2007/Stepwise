@@ -146,14 +146,28 @@ extension AppStore {
         let system = Tutor.boardSystem()
         let instruction = question.map { Tutor.boardAskInstruction($0, lineCount: lines.count) }
             ?? Tutor.boardCheckInstruction(lineCount: lines.count)
-        let messages = [LLMMessage(role: .user, parts: [.image(image), .text(instruction)])]
+        var messages = [LLMMessage(role: .user, parts: [.image(image), .text(instruction)])]
         let options = RequestOptions(fast: purpose.isGrading && quickGrading)
         let modelName = client.config.model
+        // 检查：框选的手写先交给识图模型（Haiku）逐行转写，检查模型只看文字；转写失败时照旧发图片。
+        // 提问不转写：问的可能是图形、示意图，文字表达不了
+        let reader = question == nil ? handwritingReader() : nil
 
         boardTasks[boardID] = Task { [weak self] in
             var full = ""
             var lastFlush = Date.distantPast
             do {
+                if let reader {
+                    self?.mutateBoardNote(boardID, note.id) { $0.text = L("正在读手写…") }
+                    let lines = await AppStore.transcribe(image, with: reader)
+                    try Task.checkCancellation()
+                    self?.mutateBoardNote(boardID, note.id) { $0.text = "" }
+                    if let lines {
+                        let text = Tutor.handwritingTranscript(lines, title: Tutor.pick("我框选的手写", "The handwriting I selected"))
+                            + "\n\n" + Tutor.boardTranscriptNote + "\n\n" + instruction
+                        messages = [LLMMessage(role: .user, parts: [.text(text)])]
+                    }
+                }
                 for try await piece in client.stream(system: system, messages: messages, options: options) {
                     full += piece
                     if Date().timeIntervalSince(lastFlush) > 0.12 {
