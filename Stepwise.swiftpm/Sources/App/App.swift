@@ -3,10 +3,8 @@ import SwiftUI
 @main
 struct StepwiseApp: App {
     init() {
-        // 公式排版用的 WebKit 和 KaTeX 最慢，一启动就在后台准备
-        MathAssets.prewarm()
-        // 每次打开 App 都重新加载各家官网的模型价格（没网时用上次存的）
-        OnlinePrices.shared.refreshOnLaunch()
+        // 这里什么慢的都不做，让加载页尽快出来：
+        // 公式排版用的 WebKit 等加载页画出来再准备（见 LaunchCover），模型价格等第一页揭开后再加载（见 RootView.reveal）
     }
     @StateObject private var store = AppStore()
     @StateObject private var tracker = StudyTracker()
@@ -41,12 +39,48 @@ struct RootView: View {
     @State private var showImport = false
     @State private var showNoteImport = false
     @State private var showSettings = false
+    /// 第一页已经排好、能点了：加载页淡出
+    @State private var ready = false
+    @State private var coverGone = false
 
     var body: some View {
-        if store.isLoaded {
-            main
-        } else {
-            LaunchPlaceholder()
+        ZStack {
+            // 数据读完就在加载页下面开始排第一页（左栏、目录、题目），排好了加载页再淡出。
+            // 不排好就揭开的话，看到的是一页没排完、点了没反应的界面
+            if store.isLoaded {
+                main
+            }
+            if !coverGone {
+                LaunchCover(readingFolder: !store.isLoaded && DataLocation.isCustom)
+                    .opacity(ready ? 0 : 1)
+                    .allowsHitTesting(!ready)
+                    .zIndex(1)
+            }
+        }
+        // 万一第一页一直没报“排好了”，读完数据 3 秒后也揭开
+        .task(id: store.isLoaded) {
+            guard store.isLoaded else { return }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            reveal()
+        }
+    }
+
+    /// 揭开加载页；之后才弹出同意说明、引导去填 Key，免得弹窗盖在加载页上
+    private func reveal() {
+        guard !ready else { return }
+        withAnimation(.easeOut(duration: 0.3)) { ready = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { coverGone = true }
+        // 每次打开 App 都重新加载各家官网的模型价格（没网时用上次存的）。第一页用不到，等揭开后在后台做：
+        // 读上次存的价格表要解析几百 KB 的 JSON，刚开机冷启动时要大半秒，和打开 App 抢时间
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
+            OnlinePrices.shared.refreshOnLaunch()
+        }
+        if store.aiConsent == nil {
+            // 第一次打开：先说明数据会发送到哪里
+            store.showConsent = true
+        } else if !store.providers.contains(where: \.hasKey) {
+            // 还没有任何 Key 时，直接引导去设置
+            showSettings = true
         }
     }
 
@@ -327,31 +361,13 @@ struct RootView: View {
             Text(store.errorMessage ?? "")
         }
         .onAppear {
-            if store.aiConsent == nil {
-                // 第一次打开：先说明数据会发送到哪里
-                store.showConsent = true
-            } else if !store.providers.contains(where: \.hasKey) {
-                // 还没有任何 Key 时，直接引导去设置
-                showSettings = true
+            // 第一页排完、画出来之后主线程才空下来。再多等一轮：页面自己也在下一轮翻到上次那道题（见 NotebookView），
+            // 等它翻完再揭开，淡出时页面不会再排版、跳动
+            DispatchQueue.main.async {
+                DispatchQueue.main.async {
+                    reveal()
+                }
             }
-        }
-    }
-}
-
-/// 启动时数据还在后台读：先显示空白页，读得慢（例如 iCloud 正在下载）时才转圈
-private struct LaunchPlaceholder: View {
-    @State private var showSpinner = false
-
-    var body: some View {
-        ZStack {
-            Rectangle().fill(.background).ignoresSafeArea()
-            if showSpinner {
-                ProgressView("正在打开…")
-            }
-        }
-        .task {
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            showSpinner = true
         }
     }
 }

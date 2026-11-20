@@ -4,6 +4,7 @@
 "在左侧选择一个题集，或点击 + 导入题目文件" = "Choose a question set on the left, or tap + to import a question file";
 "好" = "OK";
 "正在打开…" = "Opening…";
+"正在读取储存文件夹…" = "Reading your storage folder…";
 "选择一个题集开始" = "Choose a question set to begin";
 "选择或导入题集" = "Choose or import a question set";
 "共 %lld 部分，其中第 %@ 部分没有识别成功，可能漏了题目。可以检查一下题目列表，必要时重新导入。" = "Of %lld parts, these could not be read: %@. Some questions may be missing; check the question list and import again if needed.";

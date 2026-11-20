@@ -5,5 +5,11 @@
 	<!-- 只使用系统提供的 HTTPS 加密，属于出口合规豁免，上传时不必每次手动回答 -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<!-- 系统启动画面用笔记本的纸色（和加载页一样，深色模式也跟着变），接到加载页时不会先白一下 -->
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
 </dict>
 </plist>

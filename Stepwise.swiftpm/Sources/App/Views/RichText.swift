@@ -211,7 +211,7 @@ enum MathAssets {
     /// 预热用的隐藏网页，题目显示出来之后就放掉
     @MainActor private static var warmView: WKWebView?
 
-    /// 启动时调用：后台把 KaTeX 写到本地（第一次启动要解压字体，不能卡住界面），
+    /// 加载页画出来后调用（见 LaunchCover）：后台把 KaTeX 写到本地（第一次启动要解压字体，不能卡住界面），
     /// 再开一个隐藏网页先把 WebKit 进程和 KaTeX 加载起来，题目里的公式就不用从头等
     @MainActor static func prewarm() {
         guard warmView == nil else { return }
