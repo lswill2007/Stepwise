@@ -180,7 +180,7 @@ struct LLMClient {
 
     /// 这些 Claude 模型可能因安全分类器拒答，开启服务端自动回退到其他模型。
     private static let anthropicFallbackModels: Set<String> = [
-        "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"
+        "claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"
     ]
 
     /// 快速模式下各家服务商用来减少思考的参数（会合并进请求体）。返回空表示这个模型没有可调的参数。

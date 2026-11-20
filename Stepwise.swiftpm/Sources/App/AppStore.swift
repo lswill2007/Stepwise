@@ -752,6 +752,40 @@ final class AppStore: ObservableObject {
         activeProviderID = id
     }
 
+    // MARK: - 模型组合
+
+    /// 套用模型组合时用哪个服务商：当前使用的能用就用它，否则按 Anthropic、AIHubMix、OpenRouter 的顺序找已填 Key 的
+    var comboProvider: ProviderConfig? {
+        let usable = providers.filter { ModelCombo.providerIDs.contains($0.id) && $0.hasKey }
+        if let active = usable.first(where: { $0.id == activeProviderID }) { return active }
+        return ModelCombo.providerIDs.lazy.compactMap { id in usable.first { $0.id == id } }.first
+    }
+
+    /// 一次设好当前模型、检查与提示、出新题和整理笔记四个模型
+    func applyCombo(_ combo: ModelCombo) {
+        guard let p = comboProvider else { return }
+        func id(_ m: String) -> String { ModelCombo.modelID(m, for: p.id) }
+        select(provider: p.id, model: id(combo.main))
+        gradingProviderID = p.id
+        gradingModel = id(combo.grading)
+        questionProviderID = p.id
+        questionModel = id(combo.question)
+        noteProviderID = p.id
+        noteModel = id(combo.note)
+    }
+
+    /// 现在的设置正好是哪个组合（任何一个模型改过就不算）
+    var currentCombo: ModelCombo? {
+        guard let p = activeProvider, ModelCombo.providerIDs.contains(p.id) else { return nil }
+        func id(_ m: String) -> String { ModelCombo.modelID(m, for: p.id) }
+        return ModelCombo.all.first { c in
+            p.model == id(c.main)
+                && gradingProviderID == p.id && gradingModel == id(c.grading)
+                && questionProviderID == p.id && questionModel == id(c.question)
+                && noteProviderID == p.id && noteModel == id(c.note)
+        }
+    }
+
     func deleteProvider(_ id: String) {
         Keychain.set("", for: id)
         providers.removeAll { $0.id == id }

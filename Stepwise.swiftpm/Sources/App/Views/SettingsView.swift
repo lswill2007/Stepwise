@@ -152,6 +152,7 @@ struct SettingsView: View {
             } footer: {
                 Text("点下面任意服务商，填写 API Key 并选择模型，再点“设为当前使用”。做题时也可以在右上角随时切换模型。")
             }
+            comboSection
             Section("模型服务商") {
                 ForEach(ProviderCatalog.displayOrder(store.providers)) { p in
                     NavigationLink(value: p.id) {
@@ -238,6 +239,42 @@ struct SettingsView: View {
                 p.favoriteModels = newValue
                 store.updateProvider(p)
             })
+    }
+
+    // MARK: - 模型组合
+
+    private var comboSection: some View {
+        let provider = store.comboProvider
+        let current = store.currentCombo
+        return Section {
+            ForEach(ModelCombo.all) { combo in
+                Button {
+                    store.applyCombo(combo)
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(combo.title).foregroundStyle(provider == nil ? Color.secondary : Color.primary)
+                            Text(combo.summary).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if current == combo {
+                            Image(systemName: "checkmark").foregroundStyle(.tint)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(provider == nil)
+            }
+        } header: {
+            Text("推荐模型组合")
+        } footer: {
+            if let provider {
+                Text(String(localized: "点一下就设好当前模型、检查与提示、出新题和整理笔记四个模型，使用 \(provider.name)。之后仍可以在“做题”“笔记”里单独改。"))
+            } else {
+                Text("先填写 Anthropic Claude、AIHubMix 或 OpenRouter 任意一个的 API Key，就可以一键选用。")
+            }
+        }
     }
 
     // MARK: - 批改速度

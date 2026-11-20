@@ -61,7 +61,7 @@ enum ProviderCatalog {
         ProviderConfig(
             id: "anthropic", name: "Anthropic Claude", apiProtocol: .anthropic,
             baseURL: "https://api.anthropic.com", model: "claude-opus-5-5",
-            presetModels: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"],
+            presetModels: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2"],
             note: L("platform.claude.com 获取 Key")),
         ProviderConfig(
             id: "gemini", name: "Google Gemini", apiProtocol: .gemini,
@@ -147,6 +147,44 @@ enum ProviderCatalog {
     }
 }
 
+/// 搭配好的模型组合：一次设好当前模型、检查与提示、出新题（也用来预先求解）和整理笔记四个模型。
+/// 模型名称已对过 Anthropic 官方、AIHubMix 和 OpenRouter 的模型列表（2026-11）
+struct ModelCombo: Identifiable, Equatable {
+    let id: String
+    /// 用 Anthropic 官方的模型名称写；在其他服务商那里用 `modelID(_:for:)` 换成它的写法
+    let main: String
+    let grading: String
+    let question: String
+    let note: String
+
+    var title: String {
+        id == "advanced" ? L("高级") : L("中级")
+    }
+
+    var summary: String {
+        id == "advanced"
+            ? L("准确优先：讲解、出题和整理笔记用 Claude Opus 5.5，检查与提示用 Claude Sonnet 5.5")
+            : L("速度优先：讲解、出题和整理笔记用 Claude Sonnet 5.5，检查与提示用 Claude Haiku 5.5")
+    }
+
+    static let advanced = ModelCombo(id: "advanced", main: "claude-opus-5-5", grading: "claude-sonnet-5-5",
+                                     question: "claude-opus-5-5", note: "claude-opus-5-5")
+    static let intermediate = ModelCombo(id: "intermediate", main: "claude-sonnet-5-5", grading: "claude-haiku-5-5",
+                                         question: "claude-sonnet-5-5", note: "claude-sonnet-5-5")
+    static let all = [advanced, intermediate]
+
+    /// 能用这些组合的服务商（按优先顺序）：只放模型名称核对过的
+    static let providerIDs = ["anthropic", "aihubmix", "openrouter"]
+
+    /// 同一个模型在不同服务商那里的名称：OpenRouter 写成 anthropic/claude-opus-5.5，Anthropic 官方和 AIHubMix 一样
+    static func modelID(_ model: String, for providerID: String) -> String {
+        guard providerID == "openrouter" else { return model }
+        // claude-opus-5-5 → anthropic/claude-opus-5.5（只把版本号之间的“-”换成“.”）
+        let fixed = model.replacingOccurrences(of: #"-(\d+)-(\d+)$"#, with: "-$1.$2", options: .regularExpression)
+        return "anthropic/" + fixed
+    }
+}
+
 /// 根据模型名称判断厂商、能否看图等（聚合平台里的模型名称各不相同，只能按名称推测）
 enum ModelInfo {
     enum Family: String, CaseIterable {
@@ -214,7 +252,7 @@ enum ModelInfo {
 
     /// 批改手写作答的推荐顺序：又快、看图又准的放前面
     private static let recommendedFastVision = [
-        "gemini-3-flash", "gemini-2.5-flash", "claude-haiku-4", "gpt-4.1-mini", "gpt-5-mini", "grok-4-fast",
+        "claude-haiku-5", "gemini-3-flash", "gemini-2.5-flash", "claude-haiku-4", "gpt-4.1-mini", "gpt-5-mini", "grok-4-fast",
         "gpt-4o-mini", "qwen3-vl-flash", "doubao-seed-1.6-flash", "glm-4v-flash", "gemini-2.0-flash", "claude-3-5-haiku"
     ]
 
@@ -234,7 +272,7 @@ enum ModelInfo {
 
     /// 整理长资料（生成笔记）的推荐顺序：上下文长、理解和归纳能力强；能看图的靠前（公式多的 PDF 按图片发送）
     private static let recommendedLongContext = [
-        "gemini-3-pro", "gemini-2.5-pro", "claude-sonnet-4-5", "claude-opus-4", "claude-sonnet-4", "gpt-5",
+        "claude-opus-5", "claude-sonnet-5", "gemini-3-pro", "gemini-2.5-pro", "claude-sonnet-4-5", "claude-opus-4", "claude-sonnet-4", "gpt-5",
         "gpt-4.1", "qwen3-vl-plus", "qwen-vl-max", "doubao-seed-1.6", "glm-4.5v", "kimi-k2", "kimi-latest",
         "qwen3-max", "qwen-long", "deepseek-v3", "deepseek-chat"
     ]
