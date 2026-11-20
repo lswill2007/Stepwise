@@ -224,13 +224,16 @@ struct GeneratingBadge: View {
 
     var body: some View {
         HStack(spacing: compact ? 8 : 10) {
+            // 地方不够时只缩短这段文字（末尾变成“…”），秒数和“停止”一直看得到
             shimmeringLabel
+                .layoutPriority(-1)
             if let startedAt, showTiming {
                 TimelineView(.periodic(from: startedAt, by: 1)) { context in
                     Text("\(max(0, Int(context.date.timeIntervalSince(startedAt)))) 秒")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(tint.opacity(0.5))
                 }
+                .fixedSize()
             }
             if let stop {
                 Rectangle().fill(tint.opacity(0.15)).frame(width: 1, height: compact ? 10 : 12)
@@ -242,13 +245,15 @@ struct GeneratingBadge: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("停止")
+                .fixedSize()
             }
         }
         .padding(.horizontal, compact ? 10 : 14)
         .padding(.vertical, compact ? 4 : 7)
         .background(tint.opacity(0.06), in: Capsule())
         .overlay(Capsule().strokeBorder(tint.opacity(0.12), lineWidth: 0.5))
-        .fixedSize()
+        // 宽度按内容，但不超过给的宽度：栏窄时不再撑出屏幕把“停止”挤出去
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// 文字本身底色淡，一道深一点的同色光从左到右匀速划过文字。

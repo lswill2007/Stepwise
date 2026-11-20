@@ -276,6 +276,8 @@ extension AppStore {
             for (index, _) in chunks.enumerated() {
                 guard let self, !Task.isCancelled else { break }
                 startBuffer(index)
+                // 下一部分同时开始写（最多两个请求），轮到它时已经写了一大半
+                startBuffer(index + 1)
                 guard let buffer = buffers[index] else { continue }
                 self.noteJobs[docID]?.label = chunks.count > 1 ? String(localized: "正在生成 第 \(index + 1)/\(chunks.count) 部分…") : L("正在生成笔记…")
                 self.live(docID).text = ""
