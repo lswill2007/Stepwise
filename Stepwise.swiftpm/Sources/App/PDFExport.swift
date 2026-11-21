@@ -104,7 +104,11 @@ final class PDFExporter: ObservableObject {
             options: RequestOptions(fast: true)) else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let blank = ["（空白）", "(空白)", "(blank)", "blank", "空白"]
-        return trimmed.isEmpty || blank.contains(trimmed) ? nil : trimmed
+        if trimmed.isEmpty || blank.contains(trimmed) { return nil }
+        // 只画了图、没写字（只有一句“（图：……）”）：转写没有用，只放图片
+        let figureOnly = #"^[（(]\s*(图|圖|Figure)\s*[：:][^\n]*[)）]$"#
+        if trimmed.range(of: figureOnly, options: [.regularExpression, .caseInsensitive]) != nil { return nil }
+        return trimmed
     }
 }
 
