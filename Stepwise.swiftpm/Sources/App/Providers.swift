@@ -176,7 +176,9 @@ struct ModelTiers: Equatable {
 
     static let byProvider: [String: ModelTiers] = [
         "anthropic": ModelTiers(low: "claude-haiku-5-5", mid: "claude-sonnet-5-5", high: "claude-opus-5-5"),
-        "aihubmix": ModelTiers(low: "claude-haiku-5-5", mid: "claude-sonnet-5-5", high: "claude-opus-5-5"),
+        // 中档用 gpt-6.1-terra：难题检查实测（54 次，含手写、繁体和英文 DSE 题）和 Sonnet 5.5 一样全对，
+        // 更快，每次请求的费用约是 Sonnet 5.5 的 30%
+        "aihubmix": ModelTiers(low: "claude-haiku-5-5", mid: "gpt-6.1-terra", high: "claude-opus-5-5"),
         "302ai": ModelTiers(low: "claude-haiku-5-5", mid: "claude-sonnet-5-5", high: "claude-opus-5-5"),
         "openrouter": ModelTiers(low: "anthropic/claude-haiku-5.5", mid: "anthropic/claude-sonnet-5.5", high: "anthropic/claude-opus-5.5"),
         // $0.1/$0.5、$1/$5、$2/$10
