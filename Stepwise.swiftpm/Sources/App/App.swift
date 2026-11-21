@@ -36,6 +36,10 @@ struct RootView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     /// 手指向左拽中间栏时它跟着走的距离（≤ 0）
     @State private var listDrag: CGFloat = 0
+    /// 宽屏三栏这会儿的总宽度（见 sideBySide）
+    @State private var layoutWidth: CGFloat = 0
+    /// 浮着的中间栏收起来了（只在 listFloats 时用，不改用户自己收起中间栏的选择 listHidden）
+    @State private var listTucked = true
     @State private var showImport = false
     @State private var showNoteImport = false
     @State private var showSettings = false
@@ -99,6 +103,7 @@ struct RootView: View {
     // 宽屏不用系统的 NavigationSplitView：它在新系统上把左栏做成浮在页面上的玻璃板，
     // 从收起（全屏）拉出左栏时页面不让位、也不重新排版，中间栏被压在左栏下面、字从左栏透出来，页面右边被挤出屏幕。
     // 现在自己排三栏：左栏 | 中间栏 | 页面，一个挨一个，谁收起谁就滑走，旁边的跟着变宽。
+    // 竖屏放不下三栏时左栏和中间栏只露一个（isNarrow）；连中间栏和页面都放不下时中间栏浮在页面上（listFloats）。
     // 窄屏（分屏多任务）还用系统的，会自动叠成一层层推进去
 
     /// 左栏的宽度
@@ -201,6 +206,59 @@ struct RootView: View {
             }
             .frame(maxWidth: .infinity)
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { layoutWidth = $0 }
+        // 屏幕窄时在左栏点开题集、笔记、错题本：左栏让开，露出目录和页面
+        .onChange(of: store.selectedSetID) { collapseSidebarIfNarrow() }
+        .onChange(of: store.selectedNoteID) { collapseSidebarIfNarrow() }
+        // 浮着的中间栏里点了一道题、笔记目录里点了一节：收起来，露出整页
+        .onChange(of: store.selectedQuestionID) { hideFloatingList() }
+        .onChange(of: store.noteJump) { if store.noteJump != nil { hideFloatingList() } }
+    }
+
+    /// 页面至少要这么宽，题目和手写区才排得开
+    private let minPageWidth: CGFloat = 480
+
+    /// 左栏、中间栏、页面三个并排放不下（竖着拿的 iPad mini、iPad、11 英寸 Air / Pro，13 英寸竖屏也算）：
+    /// 这时左栏和中间栏只露一个，左栏开着时中间栏先让开
+    private var isNarrow: Bool {
+        layoutWidth > 0 && layoutWidth < sidebarWidth + listWidth + minPageWidth
+    }
+
+    /// 中间栏因为屏幕窄、左栏开着，暂时让开了（不改用户自己收起中间栏的选择）
+    private var listYieldsToSidebar: Bool { isNarrow && !store.sidebarHidden }
+
+    /// 中间栏和页面并排也放不下（竖着拿的 iPad mini）：中间栏浮在页面上，页面不让位，选了题就收起
+    private var listFloats: Bool { isNarrow && layoutWidth - listWidth < minPageWidth }
+
+    private func hideFloatingList() {
+        guard listFloats, listShown else { return }
+        hideList()
+    }
+
+    private func collapseSidebarIfNarrow() {
+        guard isNarrow, !store.sidebarHidden, !store.isFullScreen, hasList else { return }
+        // 中间栏浮在页面上时（iPad mini 竖屏）不弹出来：打开题集会翻到第一道没做完的题，直接露出整页
+        setSidebarHidden(true)
+    }
+
+    /// 把中间栏拉出来；屏幕窄时左栏一起收起，给中间栏让位
+    private func showList() {
+        if listYieldsToSidebar { setSidebarHidden(true) }
+        if listFloats {
+            listDrag = 0
+            withAnimation(.snappy(duration: 0.28)) { listTucked = false }
+        } else {
+            setListHidden(false)
+        }
+    }
+
+    /// 收起中间栏：浮着的只是暂时收起，并排的记住用户的选择
+    private func hideList() {
+        if listFloats {
+            withAnimation(.snappy(duration: 0.28)) { listTucked = true }
+        } else {
+            setListHidden(true)
+        }
     }
 
     private func setSidebarHidden(_ hidden: Bool) {
@@ -218,16 +276,27 @@ struct RootView: View {
     private let listWidth: CGFloat = 340
 
     /// 中间栏这会儿露在外面（全屏做题时和左栏一起藏起来）
-    private var listShown: Bool { hasList && !store.listHidden && !store.isFullScreen }
+    private var listShown: Bool {
+        guard hasList, !store.isFullScreen, !listYieldsToSidebar else { return false }
+        return listFloats ? !listTucked : !store.listHidden
+    }
 
     private var listAndPage: some View {
         ZStack(alignment: .leading) {
             detail
-                .padding(.leading, listShown ? listWidth : 0)
+                .padding(.leading, listShown && !listFloats ? listWidth : 0)
                 // 收起后，从页面最左边向右拽拉回来
                 .overlay(alignment: .leading) {
-                    if hasList && store.listHidden && !store.isFullScreen { edgePull { setListHidden(false) } }
+                    if hasList && !listShown && !store.isFullScreen { edgePull { showList() } }
                 }
+            // 中间栏浮在页面上时，点页面空白处收起
+            if listShown && listFloats {
+                Color.black.opacity(0.12)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { hideList() }
+                    .transition(.opacity)
+            }
             // 收起时也留着，挪到屏幕外面：拿掉再放回来要重建整个目录，拉出来时会卡一下
             if hasList {
                 list
@@ -236,6 +305,7 @@ struct RootView: View {
                     .overlay(alignment: .trailing) {
                         Rectangle().fill(Ink.separator).frame(width: 0.5)
                     }
+                    .shadow(color: .black.opacity(listShown && listFloats ? 0.15 : 0), radius: 12)
                     .offset(x: listShown ? listDrag : -listWidth - 1)
                     // 向左拽：栏跟着手指走，松手拽够了就收起，不够就弹回去
                     .simultaneousGesture(listSwipe)
@@ -247,10 +317,10 @@ struct RootView: View {
         // 栏被手指拽开时，露出来的是纸色，不是一条灰缝
         .background(Ink.paper)
         .toolbar {
-            if hasList && store.listHidden && !store.isFullScreen {
+            if hasList && !listShown && !store.isFullScreen {
                 ToolbarItem(placement: .navigation) {
                     Button {
-                        setListHidden(false)
+                        showList()
                     } label: {
                         Label("显示列表", systemImage: "list.bullet.indent")
                     }
@@ -272,7 +342,7 @@ struct RootView: View {
                 guard listDrag != 0 else { return }
                 let flung = value.predictedEndTranslation.width < -listWidth / 2
                 if listDrag < -listWidth / 3 || flung {
-                    setListHidden(true)
+                    hideList()
                 } else {
                     withAnimation(.snappy(duration: 0.25)) { listDrag = 0 }
                 }
