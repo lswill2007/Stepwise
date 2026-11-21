@@ -40,7 +40,7 @@ extension Tutor {
         7. If a figure in a question cannot be transcribed, describe its role in one sentence, e.g. "(See figure: right triangle $ABC$, $\\angle C=90^\\circ$)".
         """
         if hasImages {
-            s += "\n8. The content is given as images. Set the page attribute to the number of the image that contains the question's stem (the first image is 1). If the question has a figure, table or circuit diagram that cannot be fully expressed in text, add figure=\"1\"."
+            s += "\n8. The content is given as images. Set the page attribute to the number of the image that contains the question's stem (the first image is 1). If the question has a figure, table or circuit diagram that cannot be fully expressed in text, add a figure attribute giving where it is on the image: figure=\"left,top,right,bottom\", where the four numbers are the edges of the figure's bounding box as percentages of the image's width and height (0–100, top-left corner is 0,0). Include the whole figure with its letters and labels, but not the question text. If the figure is on a different image from the stem, prefix the image number and a colon, e.g. figure=\"2:10,5,60,40\". Separate several figures in one question with semicolons, e.g. figure=\"55,20,95,45;10,60,50,85\". If the answer choices are pictures, box all of them together."
         }
         if multiPart {
             s += "\n9. This is only part of the file, and it overlaps the neighboring parts by one page: output only the questions whose stem is visible in this part. If a question's answer or solution appears in this part (including pages after the stem), include it in <answer>. If this part contains no question stems, output only <title></title>."

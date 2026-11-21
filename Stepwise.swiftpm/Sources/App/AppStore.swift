@@ -1344,7 +1344,7 @@ final class AppStore: ObservableObject {
         var result: [LLMMessage] = []
         let questionImages = q.imageIDs.compactMap(ImageStore.load).map(LLMContent.image)
         if !questionImages.isEmpty {
-            result.append(LLMMessage(role: .user, parts: questionImages + [.text(Tutor.pick("（以上是题目原图，题目中的图形、表格以图片为准）", "(Above are the original images of the question; for figures and tables, go by the images.)"))]))
+            result.append(LLMMessage(role: .user, parts: questionImages + [.text(Tutor.pick("（以上是题目中的图，图形、表格以图片为准）", "(Above are the figures from the question; for figures and tables, go by the images.)"))]))
         }
 
         switch purpose {
@@ -1498,15 +1498,13 @@ final class AppStore: ObservableObject {
                     if item.content.count > questions[existing].content.count {
                         questions[existing].content = item.content
                     }
+                    // 先拆到的那份没认出图，这一份认出来了
+                    if questions[existing].imageIDs.isEmpty {
+                        questions[existing].imageIDs = await Self.figureImages(for: item, in: chunk.images).map(ImageStore.save)
+                    }
                     continue
                 }
-                var imageIDs: [String] = []
-                if item.hasFigure, !chunk.images.isEmpty {
-                    let page = item.page ?? (chunk.images.count == 1 ? 1 : nil)
-                    if let page, chunk.images.indices.contains(page - 1) {
-                        imageIDs = [ImageStore.save(chunk.images[page - 1])]
-                    }
-                }
+                let imageIDs = await Self.figureImages(for: item, in: chunk.images).map(ImageStore.save)
                 questions.append(Question(label: item.label, content: item.content,
                                           referenceAnswer: item.answer, imageIDs: imageIDs))
                 keys.append(key)
@@ -1526,6 +1524,32 @@ final class AppStore: ObservableObject {
 }
 
 extension AppStore {
+    /// 题目的图：按模型给的位置从页面里截出图形；没给位置、或位置不对时附上整页
+    nonisolated static func figureImages(for item: Tutor.SplitItem, in pages: [Data]) async -> [Data] {
+        guard item.hasFigure, !pages.isEmpty else { return [] }
+        let stemPage = item.page ?? (pages.count == 1 ? 1 : nil)
+        return await Task.detached(priority: .userInitiated) {
+            var result: [Data] = []
+            var wholePages: Set<Int> = []
+            func addWhole(_ page: Int?) {
+                guard let page, pages.indices.contains(page - 1), wholePages.insert(page).inserted else { return }
+                result.append(pages[page - 1])
+            }
+            if item.figures.isEmpty { addWhole(stemPage) }
+            for box in item.figures {
+                // 写了图片序号但超出范围时，可能是按整个文件数的页码，退回题干那一页
+                let page = box.page.flatMap { pages.indices.contains($0 - 1) ? $0 : nil } ?? stemPage
+                guard let page, pages.indices.contains(page - 1) else { continue }
+                if let crop = FigureCrop.crop(pages[page - 1], box: box) {
+                    result.append(crop)
+                } else {
+                    addWhole(page)
+                }
+            }
+            return result
+        }.value
+    }
+
     /// 拆一部分：边收边数已经写出来的题，写完检查选择题有没有漏选项
     fileprivate func splitChunk(_ index: Int, _ chunk: SplitChunk, count: Int, client: LLMClient, requirement: String,
                                 tracker: SplitTracker) async throws -> (title: String?, items: [Tutor.SplitItem]) {

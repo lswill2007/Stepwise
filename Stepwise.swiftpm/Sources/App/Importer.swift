@@ -74,7 +74,10 @@ enum Importer {
         switch mode {
         case .images: useImages = true
         case .text: useImages = looksScanned
-        case .auto: useImages = looksScanned || (looksFormulaHeavy(texts) && pages.count <= maxPDFPagesAsImages)
+        case .auto:
+            // 公式多、或者有图形（按文字导入会把图丢掉）的，页数不多时按图片
+            useImages = looksScanned || (pages.count <= maxPDFPagesAsImages
+                                         && (looksFormulaHeavy(texts) || pages.contains(where: FigureCrop.pageHasFigure)))
         }
 
         if useImages {

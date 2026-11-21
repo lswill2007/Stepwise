@@ -31,7 +31,7 @@ enum Tutor {
         7. 题目中的图形无法照录时，用一句话描述它在题中的作用，如“（见图：直角三角形 $ABC$，$\\angle C=90^\\circ$）”。
         """
         if hasImages {
-            s += "\n8. 内容以图片给出，page 属性填写该题题干所在图片的序号（第一张图片为 1）；如果题目含有无法用文字完整表达的图形、表格或电路图，加上 figure=\"1\"。"
+            s += "\n8. 内容以图片给出，page 属性填写该题题干所在图片的序号（第一张图片为 1）。如果题目含有无法用文字完整表达的图形、表格或电路图，加上 figure 属性标出图在图片上的位置：figure=\"左,上,右,下\"，四个数依次是图形外框的左边、上边、右边、下边在图片上的位置，用占图片宽、高的百分比表示（0–100，图片左上角为 0,0），框住整个图形连同图上的字母和标注，不要框进题干文字。图不在题干那张图片上时，前面加图片序号和冒号，如 figure=\"2:10,5,60,40\"；一道题有几个图就用分号隔开，如 figure=\"55,20,95,45;10,60,50,85\"。选项是图形的，把所有选项图一起框进去。"
         }
         if multiPart {
             s += "\n9. 这只是文件的一部分，与相邻部分有一页重叠：只输出在本部分中能看到题干的题目；题目的答案或解析如果出现在本部分（包括题干后面的页），一并放进 <answer>。本部分没有任何题干时，只输出 <title></title>。"
@@ -70,6 +70,8 @@ enum Tutor {
         var answer: String?
         var page: Int?
         var hasFigure = false
+        /// 图形在页面上的大致位置；只写了 figure="1" 时为空，附上整页
+        var figures: [FigureBox] = []
     }
 
     /// 题号归一化（“Problem 7”“第7题”“7.”都视为同一题），用于合并重叠页中的重复题目
@@ -96,9 +98,10 @@ enum Tutor {
             guard !content.isEmpty else { continue }
             let label = displayLabel(block.attributes["label"].flatMap { $0.isEmpty ? nil : $0 } ?? "\(index + 1)")
             let answer = tag("answer", in: block.body).flatMap { $0.isEmpty ? nil : $0 }
+            let figure = FigureCrop.parse(block.attributes["figure"])
             items.append(SplitItem(label: label, content: stripLeadingLabel(content, label: label), answer: answer,
-                                   page: block.attributes["page"].flatMap { Int($0) },
-                                   hasFigure: block.attributes["figure"] == "1"))
+                                   page: block.attributes["page"].flatMap { Int($0.filter(\.isNumber)) },
+                                   hasFigure: figure.hasFigure, figures: figure.boxes))
         }
         if !items.isEmpty { return (title, items) }
         if text.contains("<title") && !text.contains("<question") { return (title, []) }
