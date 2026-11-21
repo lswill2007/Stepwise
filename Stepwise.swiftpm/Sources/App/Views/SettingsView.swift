@@ -210,6 +210,7 @@ struct SettingsView: View {
                 importerKind = .folder
                 showImporter = true
             }
+            pdfSection
             backupSection
         case .privacy:
             Section {
@@ -344,6 +345,21 @@ struct SettingsView: View {
             Text("备份与迁移")
         } footer: {
             Text("导出的文件包含题目、参考答案、作答和对话记录、笔记、图片和手写笔迹，可以存到“文件”或隔空投送到另一台 iPad，再在那里导入。不包含 API Key 和设置。导入只会新增题集，不会覆盖本机已有的内容。")
+        }
+    }
+
+    private var pdfSection: some View {
+        Section {
+            NavigationLink {
+                PDFExportView(notes: store.selectedNoteID.map { [$0] } ?? [],
+                              sets: store.selectedSetID.flatMap { id in store.questionSets.contains { $0.id == id } ? [id] : nil } ?? [])
+            } label: {
+                Label("导出 PDF", systemImage: "doc.richtext")
+            }
+        } header: {
+            Text("PDF")
+        } footer: {
+            Text("把笔记和题集排成一份 PDF，可以打印、发给同学或老师。也可以在左栏笔记或题集的“…”菜单里导出。")
         }
     }
 
@@ -890,7 +906,7 @@ struct StorageLocationSection: View {
 
     struct Change {
         /// nil 表示改回 App 内默认位置
-        var folder: URL?
+        var folder: DataLocation.Target?
         var mode: AppStore.LocationChange
         var confirm: String
     }
@@ -934,7 +950,7 @@ struct StorageLocationSection: View {
         } header: {
             Text("文件储存位置")
         } footer: {
-            Text("默认存在 App 内，删除 App 时会一起删掉。可以选一个“文件”App 里的文件夹（iCloud 云盘或“我的 iPad”），题目、笔记、图片和手写笔迹都存在那里；更新或重新安装 App 后，重新选同一个文件夹就能读到原来的数据。选空文件夹会把现在的数据复制过去；选已有 Stepwise 数据的文件夹会改用那份数据。原来位置的数据不会删除。API Key、服务商、选的模型和常用模型、学习时间和周报、其他设置也会存在这个文件夹里（settings.json，API Key 没有加密，请不要把文件夹分享给别人）。")
+            Text("默认存在“我的 iPad › Stepwise Files”：点“选择文件夹”，在左边点“我的 iPad”，再点“打开”。Stepwise 会在那里找 Stepwise Files 文件夹，没有就新建一个，然后自动读取里面的数据；里面还没有数据时，把现在的数据复制进去。也可以选 iCloud 云盘。更新或重新安装 App 后，重新选同一个位置就能读到原来的数据。原来位置的数据不会删除。API Key、服务商、选的模型和常用模型、学习时间和周报、其他设置也会存在这个文件夹里（settings.json，API Key 没有加密，请不要把文件夹分享给别人）。")
         }
         .onChange(of: pick) {
             guard let p = pick else { return }
@@ -958,6 +974,7 @@ struct StorageLocationSection: View {
         String(localized: "\(store.questionSets.count) 个题集、\(store.notes.count) 篇笔记")
     }
 
+    /// 选好文件夹就自动读取：在里面找或新建 Stepwise Files，有数据就用那份，没有就把现在的数据复制进去
     private func picked(_ result: Result<URL, Error>) {
         let folder: URL
         switch result {
@@ -966,33 +983,20 @@ struct StorageLocationSection: View {
             dialog = Dialog(title: L("没能打开文件夹"), message: error.localizedDescription)
             return
         }
-        if DataLocation.isSame(folder, DataLocation.root) {
-            dialog = Dialog(title: L("已经在用这个文件夹"), message: String(localized: "数据现在就存在“\(DataLocation.describe(folder))”。"))
-            return
-        }
         if store.hasBackgroundWork {
             dialog = Dialog(title: L("稍等一下"), message: L("AI 正在回复或生成笔记，等它完成后再换储存位置。"))
             return
         }
-        let name = DataLocation.describe(folder)
         working = true
         Task {
-            let contents = await Task.detached(priority: .userInitiated) { DataLocation.inspect(folder) }.value
-            working = false
-            switch contents {
-            case .empty:
-                dialog = Dialog(title: String(localized: "把现在的数据复制到“\(name)”？"),
-                                message: String(localized: "现在的\(currentSummary)，连同图片、手写笔迹、学习时间、API Key 和各项设置，会复制到这个文件夹，之后都存在那里。原来位置的那份保留不动，可以随时改回来。"),
-                                change: Change(folder: folder, mode: .copyCurrent, confirm: L("复制并使用这个文件夹")))
-            case .stepwise(let summary):
-                dialog = Dialog(title: String(localized: "“\(name)”里已经有 Stepwise 数据"),
-                                message: String(localized: "里面有\(summary.text)。改用这个文件夹后，App 显示的是那份数据，不会用现在的数据覆盖它。现在的\(currentSummary)留在原来的位置，不会删除，改回原来的位置就能看到。"),
-                                change: Change(folder: folder, mode: .useExisting, confirm: L("使用文件夹里的数据")))
-            case .otherFiles(let names):
-                let list = names.prefix(3).joined(separator: L("、")) + (names.count > 3 ? L(" 等") : "")
-                dialog = Dialog(title: L("这个文件夹里有其他文件"),
-                                message: String(localized: "“\(name)”里有\(list)。为了不弄乱你的文件，Stepwise 只存在空文件夹里：请在选择时新建一个文件夹（例如“Stepwise 数据”），再选它。"))
+            do {
+                let message = try await store.useFolder(folder)
+                current = DataLocation.customFolder
+                dialog = Dialog(title: L("储存位置已更改"), message: message)
+            } catch {
+                dialog = Dialog(title: L("没能更改储存位置"), message: error.localizedDescription + L("\n数据仍然存在原来的位置。"))
             }
+            working = false
         }
     }
 

@@ -20,13 +20,22 @@ enum DataLocation {
 
     /// 选定的文件夹存成 bookmark 放在 UserDefaults；重装 App 后会清空，需要重新选
     static let bookmarkKey = "dataFolderBookmark"
+    /// 数据放在选定文件夹下的哪个子文件夹（选的是“我的 iPad”这类上一级时，数据在里面的 Stepwise Files）；没有时数据就在选定的文件夹里
+    static let subfolderKey = "dataFolderSubfolder"
+    /// 第一次打开时问过“储存在哪里”了（选了或者暂时不选），不再自动弹出
+    static let promptedKey = "dataFolderPrompted"
+
+    /// 默认的储存文件夹：“我的 iPad › Stepwise Files”。选了上一级文件夹时在里面找这个名字的文件夹，没有就新建
+    static let defaultFolderName = "Stepwise Files"
 
     static let defaultRoot = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
     private struct State {
         var root: URL
-        /// 用户选的文件夹（正在访问中）；nil 表示用 App 内默认位置
+        /// 储存文件夹（数据就在这里）；nil 表示用 App 内默认位置
         var custom: URL?
+        /// 用户在文件选择器里选的那个文件夹（正在访问中）：custom 本身，或者 custom 的上一级
+        var scope: URL?
         var bootstrapped = false
         /// 启动时没能打开之前选的文件夹（提示用户重新选择）
         var problem: String?
@@ -55,20 +64,34 @@ enum DataLocation {
         guard !done, let bookmark = UserDefaults.standard.data(forKey: bookmarkKey) else { return }
         do {
             var stale = false
-            let folder = try URL(resolvingBookmarkData: bookmark, options: bookmarkResolveOptions,
-                                 relativeTo: nil, bookmarkDataIsStale: &stale)
-            let accessing = folder.startAccessingSecurityScopedResource()
+            let scope = try URL(resolvingBookmarkData: bookmark, options: bookmarkResolveOptions,
+                                relativeTo: nil, bookmarkDataIsStale: &stale)
+            let accessing = scope.startAccessingSecurityScopedResource()
             var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDir), isDir.boolValue else {
-                if accessing { folder.stopAccessingSecurityScopedResource() }
+            guard FileManager.default.fileExists(atPath: scope.path, isDirectory: &isDir), isDir.boolValue else {
+                if accessing { scope.stopAccessingSecurityScopedResource() }
                 throw LocationError(message: accessing ? L("文件夹不存在") : L("没有访问权限"))
             }
             // 文件夹被移动或改名后 bookmark 过期：用新位置重新存一份
-            if stale, let fresh = try? folder.bookmarkData(options: bookmarkCreateOptions, includingResourceValuesForKeys: nil, relativeTo: nil) {
+            if stale, let fresh = try? scope.bookmarkData(options: bookmarkCreateOptions, includingResourceValuesForKeys: nil, relativeTo: nil) {
                 UserDefaults.standard.set(fresh, forKey: bookmarkKey)
             }
-            state.withLock { $0.root = folder; $0.custom = folder }
-            startDownloading(folder)
+            var folder = scope
+            if let sub = UserDefaults.standard.string(forKey: subfolderKey), !sub.isEmpty {
+                folder = scope.appendingPathComponent(sub, isDirectory: true)
+                // Stepwise Files 被删掉或挪走了：照原样新建一个
+                if !FileManager.default.fileExists(atPath: folder.path) {
+                    do {
+                        try createFolder(folder)
+                    } catch {
+                        if accessing { scope.stopAccessingSecurityScopedResource() }
+                        throw error
+                    }
+                }
+            }
+            let root = folder
+            state.withLock { $0.root = root; $0.custom = root; $0.scope = scope }
+            startDownloading(root)
         } catch {
             // 打不开就先用 App 内的位置，bookmark 留着，下次启动再试（例如 iCloud 暂时不可用）
             state.withLock { $0.problem = String(localized: "找不到之前选的储存文件夹（\(error.localizedDescription)）。这次先用 App 内的位置，这里的数据和那个文件夹里的不是同一份。请到“设置 › 文件储存位置”重新选择那个文件夹。") }
@@ -93,34 +116,90 @@ enum DataLocation {
 
     // MARK: - 切换
 
+    /// 选好的储存位置：scope 是在文件选择器里选的文件夹，数据存在 scope 下的 subfolder 里（subfolder 为 nil 时就存在 scope 里）
+    struct Target {
+        var scope: URL
+        var subfolder: String?
+        var folder: URL { subfolder.map { scope.appendingPathComponent($0, isDirectory: true) } ?? scope }
+    }
+
+    /// 选了一个文件夹后，数据放在哪里：
+    /// 选的就是 Stepwise Files，或者里面已经有 Stepwise 数据（以前选的“Stepwise 数据”之类）→ 就用它；
+    /// 否则（例如选的是“我的 iPad”）→ 用里面的 Stepwise Files，没有就新建一个。在后台调用
+    static func resolve(_ picked: URL) throws -> Target {
+        let accessing = picked.startAccessingSecurityScopedResource()
+        defer { if accessing { picked.stopAccessingSecurityScopedResource() } }
+        if picked.lastPathComponent.compare(defaultFolderName, options: .caseInsensitive) == .orderedSame {
+            return Target(scope: picked)
+        }
+        if case .stepwise = inspect(picked) { return Target(scope: picked) }
+        let target = Target(scope: picked, subfolder: defaultFolderName)
+        if !FileManager.default.fileExists(atPath: target.folder.path) {
+            try createFolder(target.folder)
+        }
+        return target
+    }
+
+    /// 新建文件夹（“我的 iPad”、iCloud 云盘里的要协调写入）
+    private static func createFolder(_ url: URL) throws {
+        var result: Result<Void, Error> = .success(())
+        var coordError: NSError?
+        NSFileCoordinator().coordinate(writingItemAt: url, options: [], error: &coordError) { actual in
+            result = Result { try FileManager.default.createDirectory(at: actual, withIntermediateDirectories: true) }
+        }
+        if let coordError { throw LocationError(message: String(localized: "没能新建“\(url.lastPathComponent)”文件夹：\(coordError.localizedDescription)")) }
+        do { try result.get() } catch {
+            throw LocationError(message: String(localized: "没能新建“\(url.lastPathComponent)”文件夹：\(error.localizedDescription)"))
+        }
+    }
+
     /// 改用选定的文件夹（调用方已经处理好数据：复制过去，或者文件夹里本来就有）
-    static func adopt(_ folder: URL) throws {
+    static func adopt(_ target: Target) throws {
+        let scope = target.scope
         // 从文件选择器拿到的地址要先开始访问才能存 bookmark；之后一直访问到切走为止
-        let accessing = folder.startAccessingSecurityScopedResource()
+        let accessing = scope.startAccessingSecurityScopedResource()
         do {
-            let bookmark = try folder.bookmarkData(options: bookmarkCreateOptions, includingResourceValuesForKeys: nil, relativeTo: nil)
+            let bookmark = try scope.bookmarkData(options: bookmarkCreateOptions, includingResourceValuesForKeys: nil, relativeTo: nil)
             UserDefaults.standard.set(bookmark, forKey: bookmarkKey)
+            if let sub = target.subfolder {
+                UserDefaults.standard.set(sub, forKey: subfolderKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: subfolderKey)
+            }
+            UserDefaults.standard.set(true, forKey: promptedKey)
         } catch {
-            if accessing { folder.stopAccessingSecurityScopedResource() }
+            if accessing { scope.stopAccessingSecurityScopedResource() }
             throw LocationError(message: String(localized: "无法记住这个文件夹：\(error.localizedDescription)"))
         }
         let old = state.withLock { s -> URL? in
-            let old = s.custom
-            s.root = folder; s.custom = folder; s.problem = nil
+            let old = s.scope
+            s.root = target.folder; s.custom = target.folder; s.scope = scope; s.problem = nil
             return old
         }
-        if let old, old.standardizedFileURL != folder.standardizedFileURL { old.stopAccessingSecurityScopedResource() }
+        if let old, accessing || old.standardizedFileURL != scope.standardizedFileURL { old.stopAccessingSecurityScopedResource() }
     }
 
     /// 改回 App 内默认位置
     static func resetToDefault() {
         UserDefaults.standard.removeObject(forKey: bookmarkKey)
+        UserDefaults.standard.removeObject(forKey: subfolderKey)
         let old = state.withLock { s -> URL? in
-            let old = s.custom
-            s.root = defaultRoot; s.custom = nil; s.problem = nil
+            let old = s.scope
+            s.root = defaultRoot; s.custom = nil; s.scope = nil; s.problem = nil
             return old
         }
         old?.stopAccessingSecurityScopedResource()
+    }
+
+    /// 还没选过储存文件夹，也没问过：第一次打开时请用户选“我的 iPad”，在那里找或新建 Stepwise Files
+    static var shouldPromptForFolder: Bool {
+        !isCustom && launchProblem == nil
+            && UserDefaults.standard.data(forKey: bookmarkKey) == nil
+            && !UserDefaults.standard.bool(forKey: promptedKey)
+    }
+
+    static func markPrompted() {
+        UserDefaults.standard.set(true, forKey: promptedKey)
     }
 
     static func isSame(_ a: URL, _ b: URL) -> Bool {
@@ -131,7 +210,7 @@ enum DataLocation {
 
     /// 设置里显示的位置，例如“iCloud 云盘 › Stepwise 数据”
     static func describe(_ folder: URL?) -> String {
-        guard let folder else { return L("App 内（默认）") }
+        guard let folder else { return L("App 内") }
         let path = folder.standardizedFileURL.path
         if let range = path.range(of: "/Mobile Documents/com~apple~CloudDocs") {
             let rest = path[range.upperBound...].split(separator: "/").joined(separator: " › ")

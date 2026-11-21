@@ -28,6 +28,14 @@ struct SidebarView: View {
     @State private var deletingFolder: Folder?
     @State private var deletingNote: NoteDoc?
     @State private var deletingBoard: Whiteboard?
+    /// 从笔记或题集的菜单里点了“导出 PDF”
+    @State private var pdfRequest: PDFRequest?
+
+    struct PDFRequest: Identifiable {
+        let id = UUID()
+        var notes: Set<UUID> = []
+        var sets: Set<UUID> = []
+    }
 
     var body: some View {
         List(selection: selectionBinding) {
@@ -53,7 +61,8 @@ struct SidebarView: View {
             }
             Section {
                 ForEach(store.notes) { doc in
-                    NoteRow(doc: doc, rename: { startEdit(.renameNote(doc.id)) }, delete: { deletingNote = doc })
+                    NoteRow(doc: doc, rename: { startEdit(.renameNote(doc.id)) }, delete: { deletingNote = doc },
+                            exportPDF: { pdfRequest = PDFRequest(notes: [doc.id]) })
                 }
                 Button {
                     showNoteImport = true
@@ -121,6 +130,11 @@ struct SidebarView: View {
             TextField("名称", text: $nameText)
             Button("取消", role: .cancel) { nameEdit = nil }
             Button("确定") { commitName() }
+        }
+        .sheet(item: $pdfRequest) { request in
+            NavigationStack {
+                PDFExportView(notes: request.notes, sets: request.sets, inSheet: true)
+            }
         }
         .confirmationDialog(
             "删除文件夹“\(deletingFolder?.name ?? "")”？",
@@ -200,7 +214,8 @@ struct SidebarView: View {
     }
 
     private var actions: SidebarActions {
-        SidebarActions(edit: startEdit, deleteFolder: { deletingFolder = $0 }, drop: drop)
+        SidebarActions(edit: startEdit, deleteFolder: { deletingFolder = $0 }, drop: drop,
+                       exportPDF: { pdfRequest = PDFRequest(sets: [$0]) })
     }
 
     private var alertTitle: String {
@@ -259,6 +274,8 @@ struct SidebarActions {
     let edit: (SidebarView.NameEdit) -> Void
     let deleteFolder: (Folder) -> Void
     let drop: ([String], UUID?) -> Bool
+    /// 把这个题集导出成 PDF
+    let exportPDF: (UUID) -> Void
 }
 
 /// 一个文件夹（或最外层）里的内容：子文件夹在前，题集在后
@@ -379,6 +396,7 @@ struct NoteRow: View {
     let doc: NoteDoc
     let rename: () -> Void
     let delete: () -> Void
+    let exportPDF: () -> Void
 
     var body: some View {
         HStack(alignment: .top) {
@@ -419,6 +437,7 @@ struct NoteRow: View {
         MoveMenu(excluding: nil, current: store.folder(doc.folderID)?.id) { folderID in
             store.mutateNote(doc.id) { $0.folderID = folderID }
         }
+        Button("导出 PDF…", systemImage: "doc.richtext", action: exportPDF)
         Button("删除", systemImage: "trash", role: .destructive, action: delete)
     }
 }
@@ -458,6 +477,7 @@ struct SetRow: View {
     private var menuItems: some View {
         Button("重命名", systemImage: "pencil") { actions.edit(.renameSet(set.id)) }
         MoveMenu(excluding: nil, current: set.folderID) { store.moveSet(set.id, to: $0) }
+        Button("导出 PDF…", systemImage: "doc.richtext") { actions.exportPDF(set.id) }
         Button("删除", systemImage: "trash", role: .destructive) { store.deleteSet(set.id) }
     }
 }

@@ -265,6 +265,90 @@ enum MathAssets {
 // MARK: - 页面模板
 
 enum MathTemplate {
+    /// Markdown + 公式排版（md、math 等函数）：页面里的显示和导出 PDF 共用，排出来一模一样。
+    /// 用到全局的 READY（KaTeX 已加载）和 katex
+    static let markdownJS = #"""
+    function esc(s) {
+      return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    // 模型常把表格列格式里的竖线写成 \|（Markdown 表格里转义竖线的习惯），KaTeX 不认，整段会报错变红：改回 |
+    function fixTex(tex) {
+      return tex.replace(/\\begin\{(array|tabular)\}\{([^}]*)\}/g, function (m, env, spec) {
+        return "\\begin{" + env + "}{" + spec.replace(/\\\|/g, "|") + "}";
+      });
+    }
+
+    function math(tex, display) {
+      if (READY && window.katex) {
+        try {
+          return katex.renderToString(fixTex(tex), { displayMode: display, throwOnError: false, strict: "ignore", output: "html" });
+        } catch (e) {}
+      }
+      return '<span class="tex">' + esc(display ? "$$" + tex + "$$" : "$" + tex + "$") + "</span>";
+    }
+
+    function inline(s) {
+      return s
+        .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+        .replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>");
+    }
+
+    function md(src) {
+      var codes = [], maths = [];
+      src = String(src).replace(/\r\n?/g, "\n");
+      src = src.replace(/```[^\n]*\n?([\s\S]*?)```/g, function (m, c) {
+        codes.push(c); return "\n\u0001" + (codes.length - 1) + "\u0001\n";
+      });
+      // 行内公式用 \u0002 标记，独立公式用 \u0003 标记（独立公式两侧不再额外换行）
+      function put(t, d) { maths.push([t, d]); var k = d ? "\u0003" : "\u0002"; return k + (maths.length - 1) + k; }
+      src = src
+        .replace(/\$\$([\s\S]+?)\$\$/g, function (m, t) { return put(t, true); })
+        .replace(/\\\[([\s\S]+?)\\\]/g, function (m, t) { return put(t, true); })
+        .replace(/\\\(([\s\S]+?)\\\)/g, function (m, t) { return put(t, false); })
+        .replace(/\$([^$\n]+?)\$/g, function (m, t) { return put(t, false); })
+        // 最后处理没有包在 $ 里的 \begin{...}\end{...}（行内公式里的矩阵等已在上一步取走）
+        .replace(/\\begin\{([a-zA-Z*]+)\}[\s\S]*?\\end\{\1\}/g, function (m) { return put(m, true); });
+      src = esc(src);
+
+      var lines = src.split("\n"), out = [], para = [], list = null;
+      function flushPara() { if (para.length) { out.push("<p>" + para.map(inline).join("<br>") + "</p>"); para = []; } }
+      function flushList() { if (list) { out.push("<ul>" + list.map(function (x) { return "<li>" + inline(x) + "</li>"; }).join("") + "</ul>"); list = null; } }
+      function cells(row) { return row.replace(/^\||\|$/g, "").split("|").map(function (c) { return inline(c.trim()); }); }
+
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i], t = line.trim(), m;
+        if (!t) { flushPara(); flushList(); continue; }
+        if (/^\u0001\d+\u0001$/.test(t)) { flushPara(); flushList(); out.push(t); continue; }
+        if ((m = t.match(/^#{1,6}\s+(.*)$/))) { flushPara(); flushList(); out.push("<h4>" + inline(m[1]) + "</h4>"); continue; }
+        if (/^(-{3,}|\*{3,})$/.test(t)) { flushPara(); flushList(); out.push("<hr>"); continue; }
+        if (t.charAt(0) === "|" && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
+          flushPara(); flushList();
+          var head = cells(t), body = [];
+          i += 2;
+          while (i < lines.length && lines[i].trim().charAt(0) === "|") { body.push(cells(lines[i].trim())); i++; }
+          i--;
+          var h = "<table><tr>" + head.map(function (c) { return "<th>" + c + "</th>"; }).join("") + "</tr>";
+          body.forEach(function (r) { h += "<tr>" + r.map(function (c) { return "<td>" + c + "</td>"; }).join("") + "</tr>"; });
+          out.push(h + "</table>");
+          continue;
+        }
+        if ((m = line.match(/^\s*[-*•]\s+(.*)$/))) { flushPara(); (list = list || []).push(m[1]); continue; }
+        flushList();
+        para.push(t);
+      }
+      flushPara(); flushList();
+
+      return out.join("")
+        .replace(/(?:<br>)?\u0003(\d+)\u0003(?:<br>)?/g, function (m, k) { return math(maths[k][0], true); })
+        .replace(/\u0002(\d+)\u0002([，。、；：！？）」』”’,.;:!?)\]]*)/g, function (m, k, p) {
+          return '<span class="im">' + math(maths[k][0], false) + p + "</span>";
+        })
+        .replace(/\u0001(\d+)\u0001/g, function (m, k) { return "<pre><code>" + esc(codes[k]) + "</code></pre>"; });
+    }
+
+    """#
+
     /// 优先加载同目录下的本地 KaTeX；本地失败时依次尝试国内外 CDN 镜像。
     static let html = #"""
     <!doctype html>
@@ -363,85 +447,7 @@ enum MathTemplate {
       })(0);
     }
 
-    function esc(s) {
-      return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-
-    // 模型常把表格列格式里的竖线写成 \|（Markdown 表格里转义竖线的习惯），KaTeX 不认，整段会报错变红：改回 |
-    function fixTex(tex) {
-      return tex.replace(/\\begin\{(array|tabular)\}\{([^}]*)\}/g, function (m, env, spec) {
-        return "\\begin{" + env + "}{" + spec.replace(/\\\|/g, "|") + "}";
-      });
-    }
-
-    function math(tex, display) {
-      if (READY && window.katex) {
-        try {
-          return katex.renderToString(fixTex(tex), { displayMode: display, throwOnError: false, strict: "ignore", output: "html" });
-        } catch (e) {}
-      }
-      return '<span class="tex">' + esc(display ? "$$" + tex + "$$" : "$" + tex + "$") + "</span>";
-    }
-
-    function inline(s) {
-      return s
-        .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-        .replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>");
-    }
-
-    function md(src) {
-      var codes = [], maths = [];
-      src = String(src).replace(/\r\n?/g, "\n");
-      src = src.replace(/```[^\n]*\n?([\s\S]*?)```/g, function (m, c) {
-        codes.push(c); return "\n\u0001" + (codes.length - 1) + "\u0001\n";
-      });
-      // 行内公式用 \u0002 标记，独立公式用 \u0003 标记（独立公式两侧不再额外换行）
-      function put(t, d) { maths.push([t, d]); var k = d ? "\u0003" : "\u0002"; return k + (maths.length - 1) + k; }
-      src = src
-        .replace(/\$\$([\s\S]+?)\$\$/g, function (m, t) { return put(t, true); })
-        .replace(/\\\[([\s\S]+?)\\\]/g, function (m, t) { return put(t, true); })
-        .replace(/\\\(([\s\S]+?)\\\)/g, function (m, t) { return put(t, false); })
-        .replace(/\$([^$\n]+?)\$/g, function (m, t) { return put(t, false); })
-        // 最后处理没有包在 $ 里的 \begin{...}\end{...}（行内公式里的矩阵等已在上一步取走）
-        .replace(/\\begin\{([a-zA-Z*]+)\}[\s\S]*?\\end\{\1\}/g, function (m) { return put(m, true); });
-      src = esc(src);
-
-      var lines = src.split("\n"), out = [], para = [], list = null;
-      function flushPara() { if (para.length) { out.push("<p>" + para.map(inline).join("<br>") + "</p>"); para = []; } }
-      function flushList() { if (list) { out.push("<ul>" + list.map(function (x) { return "<li>" + inline(x) + "</li>"; }).join("") + "</ul>"); list = null; } }
-      function cells(row) { return row.replace(/^\||\|$/g, "").split("|").map(function (c) { return inline(c.trim()); }); }
-
-      for (var i = 0; i < lines.length; i++) {
-        var line = lines[i], t = line.trim(), m;
-        if (!t) { flushPara(); flushList(); continue; }
-        if (/^\u0001\d+\u0001$/.test(t)) { flushPara(); flushList(); out.push(t); continue; }
-        if ((m = t.match(/^#{1,6}\s+(.*)$/))) { flushPara(); flushList(); out.push("<h4>" + inline(m[1]) + "</h4>"); continue; }
-        if (/^(-{3,}|\*{3,})$/.test(t)) { flushPara(); flushList(); out.push("<hr>"); continue; }
-        if (t.charAt(0) === "|" && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
-          flushPara(); flushList();
-          var head = cells(t), body = [];
-          i += 2;
-          while (i < lines.length && lines[i].trim().charAt(0) === "|") { body.push(cells(lines[i].trim())); i++; }
-          i--;
-          var h = "<table><tr>" + head.map(function (c) { return "<th>" + c + "</th>"; }).join("") + "</tr>";
-          body.forEach(function (r) { h += "<tr>" + r.map(function (c) { return "<td>" + c + "</td>"; }).join("") + "</tr>"; });
-          out.push(h + "</table>");
-          continue;
-        }
-        if ((m = line.match(/^\s*[-*•]\s+(.*)$/))) { flushPara(); (list = list || []).push(m[1]); continue; }
-        flushList();
-        para.push(t);
-      }
-      flushPara(); flushList();
-
-      return out.join("")
-        .replace(/(?:<br>)?\u0003(\d+)\u0003(?:<br>)?/g, function (m, k) { return math(maths[k][0], true); })
-        .replace(/\u0002(\d+)\u0002([，。、；：！？）」』”’,.;:!?)\]]*)/g, function (m, k, p) {
-          return '<span class="im">' + math(maths[k][0], false) + p + "</span>";
-        })
-        .replace(/\u0001(\d+)\u0001/g, function (m, k) { return "<pre><code>" + esc(codes[k]) + "</code></pre>"; });
-    }
-
+    """# + markdownJS + #"""
     var HL = "";
     // 临时荧光笔：在排版后的文字里找到这句话包上 <mark>；找不到就把整块淡淡地标一下
     function applyHL() {

@@ -43,6 +43,8 @@ struct RootView: View {
     @State private var showImport = false
     @State private var showNoteImport = false
     @State private var showSettings = false
+    /// 第一次打开：请用户选“我的 iPad”，数据存在那里的 Stepwise Files
+    @State private var showFolderPrompt = false
     /// 第一页已经排好、能点了：加载页淡出
     @State private var ready = false
     @State private var coverGone = false
@@ -79,6 +81,16 @@ struct RootView: View {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
             OnlinePrices.shared.refreshOnLaunch()
         }
+        if DataLocation.shouldPromptForFolder {
+            // 第一次打开：先定好数据存在哪里（重装后选回同一个文件夹，API Key 和设置也一起回来）
+            showFolderPrompt = true
+        } else {
+            continueOnboarding()
+        }
+    }
+
+    /// 选好储存位置之后：第一次打开先说明数据会发送到哪里，还没有 Key 时引导去设置
+    private func continueOnboarding() {
         if store.aiConsent == nil {
             // 第一次打开：先说明数据会发送到哪里
             store.showConsent = true
@@ -418,6 +430,12 @@ struct RootView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showFolderPrompt, onDismiss: {
+            DataLocation.markPrompted()
+            continueOnboarding()
+        }) {
+            FolderPromptView()
         }
         .sheet(isPresented: $store.showConsent, onDismiss: {
             // 同意后如果还没有填写任何 Key，接着引导去设置

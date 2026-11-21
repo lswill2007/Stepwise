@@ -524,13 +524,17 @@ final class AppStore: ObservableObject {
 
     /// 换储存位置；folder 为 nil 表示改回 App 内默认位置。
     /// 两种方式都只复制或改读，不删除、不覆盖原来位置的数据，改回去就能看到。
-    func changeDataLocation(to folder: URL?, mode: LocationChange) async throws {
+    func changeDataLocation(to destination: DataLocation.Target?, mode: LocationChange) async throws {
         guard !hasBackgroundWork else {
             throw LocationError(message: L("AI 正在回复或生成笔记，等它完成后再换储存位置。"))
         }
         let source = DataLocation.root
-        let target = folder ?? DataLocation.defaultRoot
+        let target = destination?.folder ?? DataLocation.defaultRoot
         guard !DataLocation.isSame(source, target) else { return }
+        // 数据在选的文件夹下面的 Stepwise Files 里时，要访问选的那一层才能读写里面
+        let scope = destination?.scope
+        let accessing = scope?.startAccessingSecurityScopedResource() ?? false
+        defer { if accessing { scope?.stopAccessingSecurityScopedResource() } }
         // 先把最近的改动写进原来的位置
         saveNow()
         if mode == .copyCurrent {
@@ -544,8 +548,8 @@ final class AppStore: ObservableObject {
         // 从换位置到新数据读完，什么都不写，免得把旧数据写进新位置
         loading = true
         do {
-            if let folder {
-                try DataLocation.adopt(folder)
+            if let destination {
+                try DataLocation.adopt(destination)
             } else {
                 DataLocation.resetToDefault()
             }
@@ -557,7 +561,7 @@ final class AppStore: ObservableObject {
         let snapshot = await Task.detached(priority: .userInitiated) { AppStore.readDisk() }.value
         apply(snapshot)
         // API Key 和设置：改用已有数据时套用文件夹里的；复制过去（或文件夹里还没有）时写一份进去
-        if folder != nil {
+        if destination != nil {
             if mode == .copyCurrent || !applySettings(snapshot.settings) { writeSettingsFile() }
         } else {
             settingsFileBlocked = false
@@ -570,6 +574,37 @@ final class AppStore: ObservableObject {
         noteGuides = [:]
         activeNoteGuide = nil
         selectRecent()
+    }
+
+    /// 在文件选择器里选了一个文件夹：找到或新建里面的 Stepwise Files，然后自动读取——
+    /// 里面已经有 Stepwise 数据就改用那份；没有就把现在的数据复制进去。原来位置的数据都不删。返回给用户看的结果
+    func useFolder(_ picked: URL) async throws -> String {
+        guard !hasBackgroundWork else {
+            throw LocationError(message: L("AI 正在回复或生成笔记，等它完成后再换储存位置。"))
+        }
+        let (target, contents) = try await Task.detached(priority: .userInitiated) { () throws -> (DataLocation.Target, DataLocation.Contents) in
+            let target = try DataLocation.resolve(picked)
+            let accessing = target.scope.startAccessingSecurityScopedResource()
+            defer { if accessing { target.scope.stopAccessingSecurityScopedResource() } }
+            return (target, DataLocation.inspect(target.folder))
+        }.value
+        let place = DataLocation.describe(target.folder)
+        if DataLocation.isSame(target.folder, DataLocation.root) {
+            return String(localized: "数据现在就存在“\(place)”。")
+        }
+        let before = String(localized: "\(questionSets.count) 个题集、\(notes.count) 篇笔记")
+        let hadData = !questionSets.isEmpty || !notes.isEmpty || !boards.isEmpty
+        if case .stepwise = contents {
+            try await changeDataLocation(to: target, mode: .useExisting)
+            let now = String(localized: "\(questionSets.count) 个题集、\(notes.count) 篇笔记")
+            var message = String(localized: "已读取“\(place)”里的数据：\(now)。")
+            if hadData { message += String(localized: "原来位置的\(before)没有删除，改回原来的位置就能看到。") }
+            return message
+        }
+        try await changeDataLocation(to: target, mode: .copyCurrent)
+        return hadData
+            ? String(localized: "“\(place)”里还没有数据，已把现在的\(before)复制进去，之后都存在那里。")
+            : String(localized: "之后题目、笔记和设置都存在“\(place)”。")
     }
 
     private func loadProviders() {
@@ -669,7 +704,7 @@ final class AppStore: ObservableObject {
 
     /// 上面单独存过的模型设置、储存位置本身不放进 preferences
     private static let excludedPreferenceKeys: Set<String> = [
-        DataLocation.bookmarkKey, "providers", "activeProvider", "gradingProvider", "gradingModel",
+        DataLocation.bookmarkKey, DataLocation.subfolderKey, DataLocation.promptedKey, "providers", "activeProvider", "gradingProvider", "gradingModel",
         "questionProvider", "questionModel", "noteProvider", "noteModel", "quickGrading"
     ]
 
