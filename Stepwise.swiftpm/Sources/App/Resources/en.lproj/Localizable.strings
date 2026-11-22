@@ -797,3 +797,5 @@
 "添加知识点，例如：洛必达法则" = "Add a topic, e.g. L'Hôpital's rule";
 "还没学过的知识点" = "Topics I Haven't Learned";
 "AI 检查、提示、写下一步和给答案时不用这些知识点，改用你学过的方法。在 AI 回复下面点“没学过”会自动加到这里；学过以后向左滑删掉。" = "When checking, giving hints, writing the next step or giving solutions, the AI won't use these topics and will use methods you've learned instead. Tapping “Not Learned” under an AI reply adds the topic here; swipe left to remove it once you've learned it.";
+"收起 AI 批注" = "Hide AI Notes";
+"展开 AI 批注" = "Show AI Notes";

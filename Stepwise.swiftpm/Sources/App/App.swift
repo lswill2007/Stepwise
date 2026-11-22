@@ -40,6 +40,8 @@ struct RootView: View {
     @State private var layoutWidth: CGFloat = 0
     /// 浮着的中间栏收起来了（只在 listFloats 时用，不改用户自己收起中间栏的选择 listHidden）
     @State private var listTucked = true
+    /// 笔记全屏时点左上角“目录”拉出来的目录（浮在页面上，页面不让位）
+    @State private var fullScreenOutline = false
     @State private var showImport = false
     @State private var showNoteImport = false
     @State private var showSettings = false
@@ -224,7 +226,8 @@ struct RootView: View {
         .onChange(of: store.selectedNoteID) { collapseSidebarIfNarrow() }
         // 浮着的中间栏里点了一道题、笔记目录里点了一节：收起来，露出整页
         .onChange(of: store.selectedQuestionID) { hideFloatingList() }
-        .onChange(of: store.noteJump) { if store.noteJump != nil { hideFloatingList() } }
+        // 看传进来的新值：笔记页翻过去后马上把 noteJump 清掉，这里再读 store 时可能已经是 nil
+        .onChange(of: store.noteJump) { _, jump in if jump != nil { hideFloatingList() } }
     }
 
     /// 页面至少要这么宽，题目和手写区才排得开
@@ -243,7 +246,7 @@ struct RootView: View {
     private var listFloats: Bool { isNarrow && layoutWidth - listWidth < minPageWidth }
 
     private func hideFloatingList() {
-        guard listFloats, listShown else { return }
+        guard listOverlays, listShown else { return }
         hideList()
     }
 
@@ -266,7 +269,9 @@ struct RootView: View {
 
     /// 收起中间栏：浮着的只是暂时收起，并排的记住用户的选择
     private func hideList() {
-        if listFloats {
+        if store.isFullScreen {
+            withAnimation(.snappy(duration: 0.28)) { fullScreenOutline = false }
+        } else if listFloats {
             withAnimation(.snappy(duration: 0.28)) { listTucked = true }
         } else {
             setListHidden(true)
@@ -287,22 +292,27 @@ struct RootView: View {
     /// 中间栏的宽度
     private let listWidth: CGFloat = 340
 
-    /// 中间栏这会儿露在外面（全屏做题时和左栏一起藏起来）
+    /// 中间栏这会儿露在外面（全屏做题时和左栏一起藏起来；笔记全屏时点左上角“目录”浮出来）
     private var listShown: Bool {
-        guard hasList, !store.isFullScreen, !listYieldsToSidebar else { return false }
+        guard hasList else { return false }
+        if store.isFullScreen { return store.selectedNoteID != nil && fullScreenOutline }
+        guard !listYieldsToSidebar else { return false }
         return listFloats ? !listTucked : !store.listHidden
     }
+
+    /// 中间栏浮在页面上（页面不让位）：iPad mini 竖屏，或者全屏时拉出来的笔记目录
+    private var listOverlays: Bool { listFloats || store.isFullScreen }
 
     private var listAndPage: some View {
         ZStack(alignment: .leading) {
             detail
-                .padding(.leading, listShown && !listFloats ? listWidth : 0)
+                .padding(.leading, listShown && !listOverlays ? listWidth : 0)
                 // 收起后，从页面最左边向右拽拉回来
                 .overlay(alignment: .leading) {
                     if hasList && !listShown && !store.isFullScreen { edgePull { showList() } }
                 }
             // 中间栏浮在页面上时，点页面空白处收起
-            if listShown && listFloats {
+            if listShown && listOverlays {
                 Color.black.opacity(0.12)
                     .ignoresSafeArea()
                     .contentShape(Rectangle())
@@ -317,7 +327,7 @@ struct RootView: View {
                     .overlay(alignment: .trailing) {
                         Rectangle().fill(Ink.separator).frame(width: 0.5)
                     }
-                    .shadow(color: .black.opacity(listShown && listFloats ? 0.15 : 0), radius: 12)
+                    .shadow(color: .black.opacity(listShown && listOverlays ? 0.15 : 0), radius: 12)
                     .offset(x: listShown ? listDrag : -listWidth - 1)
                     // 向左拽：栏跟着手指走，松手拽够了就收起，不够就弹回去
                     .simultaneousGesture(listSwipe)
@@ -338,7 +348,21 @@ struct RootView: View {
                     }
                 }
             }
+            // 笔记全屏：左上角的目录按钮，点一下目录浮出来，再点一下（或点页面、选一节）收起
+            if store.isFullScreen && store.selectedNoteID != nil && store.selectedBoardID == nil {
+                ToolbarItem(placement: .navigation) {
+                    Button {
+                        listDrag = 0
+                        withAnimation(.snappy(duration: 0.28)) { fullScreenOutline.toggle() }
+                    } label: {
+                        Label("目录", systemImage: "list.bullet.indent")
+                    }
+                }
+            }
         }
+        // 退出全屏、换了笔记：全屏时拉出来的目录收起
+        .onChange(of: store.isFullScreen) { fullScreenOutline = false }
+        .onChange(of: store.selectedNoteID) { fullScreenOutline = false }
     }
 
     private var listSwipe: some Gesture {

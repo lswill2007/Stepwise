@@ -502,6 +502,16 @@ struct NoteDocView: View {
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     TopBarClock()
+                    // 页边的 AI 批注一键收起 / 展开：收起后正文回到页面中间，批注变成挂在每块右边的小图标
+                    if commentMargin != nil, !(doc.comments ?? []).isEmpty {
+                        let open = (doc.comments ?? []).contains { !$0.minimized }
+                        Button {
+                            setAllComments(minimized: open)
+                        } label: {
+                            Label(open ? L("收起 AI 批注") : L("展开 AI 批注"),
+                                  systemImage: open ? "rectangle.rightthird.inset.filled" : "rectangle")
+                        }
+                    }
                     Button {
                         store.setFullScreen(!store.isFullScreen)
                     } label: {
@@ -583,6 +593,17 @@ struct NoteDocView: View {
         guard commentMargin != nil else { return false }
         if askingBlock != nil || store.activeNoteGuide?.noteID == noteID { return true }
         return (doc.comments ?? []).contains { !$0.minimized }
+    }
+
+    /// 页边的批注全部收起（正文回中）或全部展开
+    private func setAllComments(minimized: Bool) {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            store.mutateNote(noteID) { doc in
+                guard var comments = doc.comments else { return }
+                for i in comments.indices { comments[i].minimized = minimized }
+                doc.comments = comments
+            }
+        }
     }
 
     /// 页边批注的宽度；页面不够宽时为 nil，批注写在这一块下面
