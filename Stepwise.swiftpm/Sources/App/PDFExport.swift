@@ -399,7 +399,8 @@ struct PDFDocumentBuilder {
             for row in firstRow...lastRow {
                 let bottom = RuledPaper.top(ofRow: row) + spacing - top
                 UIColor(red: 0.62, green: 0.72, blue: 0.86, alpha: 0.5).setFill()
-                context.fill(CGRect(x: gutter, y: bottom - 0.5, width: area.width, height: 1))
+                // fill(_:) 默认是 copy 混合，半透明颜色会变成很深的线；要 normal 才是浅色横线
+                context.fill(CGRect(x: gutter, y: bottom - 0.5, width: area.width, height: 1), blendMode: .normal)
                 let label = "\(row)" as NSString
                 let labelSize = label.size(withAttributes: attributes)
                 label.draw(at: CGPoint(x: gutter - 8 - labelSize.width, y: bottom - spacing / 2 - labelSize.height / 2),
