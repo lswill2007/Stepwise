@@ -685,6 +685,20 @@ struct ProviderEditView: View {
     @State private var fetching = false
     @State private var testing = false
     @State private var testResult: String?
+    /// 刚打开时的 Key 和模型：这次改过才在离开时问要不要切换
+    @State private var startKey = ""
+    @State private var startModel = ""
+    @State private var askSwitch = false
+
+    /// 填好了 Key 和模型却没点“设为当前使用”：很多人以为填完就切换了，返回时问一下
+    private var shouldAskToSwitch: Bool {
+        guard let config, store.activeProviderID != providerID else { return false }
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = config.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty, !model.isEmpty else { return false }
+        let changed = key != startKey || model != startModel
+        return changed || store.activeProvider?.hasKey != true
+    }
 
     var body: some View {
         Form {
@@ -693,11 +707,34 @@ struct ProviderEditView: View {
             }
         }
         .navigationTitle(config?.name ?? "")
+        .navigationBarBackButtonHidden(shouldAskToSwitch)
+        .toolbar {
+            if shouldAskToSwitch {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { askSwitch = true } label: {
+                        Image(systemName: "chevron.backward")
+                    }
+                    .accessibilityLabel(L("返回"))
+                }
+            }
+        }
+        .alert(String(localized: "要改用 \(config?.name ?? "") 吗？"), isPresented: $askSwitch) {
+            Button(L("设为当前使用")) {
+                persist()
+                store.activeProviderID = providerID
+                dismiss()
+            }
+            Button(L("不切换"), role: .cancel) { dismiss() }
+        } message: {
+            Text(String(localized: "只填好 Key 还不会切换。做题、导入题目现在用的还是 \(store.activeProvider?.name ?? "")，点“设为当前使用”才会改用 \(config?.name ?? "")。"))
+        }
         .onAppear {
             // 从模型选择页返回时不能用旧数据覆盖刚改的内容
             if config == nil {
                 config = store.providers.first { $0.id == providerID }
                 apiKey = Keychain.get(providerID) ?? ""
+                startKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                startModel = config?.model.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             }
         }
         .onChange(of: config) { persist() }
@@ -785,6 +822,10 @@ struct ProviderEditView: View {
                 Label(store.activeProviderID == providerID ? L("正在使用") : L("设为当前使用"), systemImage: "checkmark.circle")
             }
             .disabled(store.activeProviderID == providerID)
+            if store.activeProviderID != providerID {
+                Text(String(localized: "填好 Key 不会自动切换：点“设为当前使用”后，做题、导入题目才会用 \(c.wrappedValue.name)。"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
 
             Button {
                 test()
