@@ -930,6 +930,10 @@ struct MarginNotes: View {
                     note(current, in: q)
                         // 新批注到了，像用荧光笔轻轻划过一下
                         .background(Self.tint(current).opacity(flash ? 0.1 : 0))
+                    // 对这条回复有疑问、里面有没学过的知识点：直接在下面追问
+                    if canFollowUp(current) {
+                        ReplyFollowUpButtons(setID: setID, qID: qID, reply: current)
+                    }
                 }
                 if mistakeMode { reviewOutcome }
                 if items.isEmpty && pending == nil && wide && q.status != .passed {
@@ -962,10 +966,20 @@ struct MarginNotes: View {
             switch m.kind {
             case .hint: return m
             case .verdictCorrect, .verdictWrong: return lastSubmission.map { i > $0 } == true ? m : nil
-            case .chat: return m.role == .assistant && m.region != nil ? m : nil
+            case .chat: return m.role == .assistant && (m.region != nil || m.about != nil) ? m : nil
             case .solution: return solutionInMargin && i == lastSolution ? m : nil
             default: return nil
             }
+        }
+    }
+
+    /// 哪些批注下面放“有疑问 / 没学过”：盖住的答案、收起的“对了”说明先不放
+    private func canFollowUp(_ m: ChatMessage) -> Bool {
+        switch m.kind {
+        case .verdictWrong, .hint, .chat: return true
+        case .verdictCorrect: return showCorrectDetail
+        case .solution: return store.openSolutionQuestion == qID
+        default: return false
         }
     }
 
@@ -1031,7 +1045,9 @@ struct MarginNotes: View {
             if m.isNextStep { return L("下一步") }
             let n = before.filter(\.isLeveledHint).count + 1
             return "\(n) " + Tutor.hintLevelShortName(m.hintLevel ?? n)
-        case .chat: return String(localized: "问 \(before.filter { $0.kind == .chat }.count + 1)")
+        case .chat:
+            if m.about?.kind == .unlearned { return L("换方法") }
+            return String(localized: "问 \(before.filter { $0.kind == .chat }.count + 1)")
         case .solution: return L("答案")
         default: return ""
         }
@@ -1143,11 +1159,16 @@ struct MarginNotes: View {
         case .chat:
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("问这一步").font(.caption.weight(.semibold)).foregroundStyle(Ink.blue)
+                    Text(message.about?.kind == .unlearned ? L("换成学过的方法")
+                         : message.about != nil ? L("我的疑问") : L("问这一步"))
+                        .font(.caption.weight(.semibold)).foregroundStyle(Ink.blue)
                     Spacer()
                     timing(message)
                 }
-                if let asked = request(before: message, in: q) {
+                if message.about?.kind == .unlearned {
+                    Text(message.note.map { String(localized: "我还没学过：\($0)") } ?? L("这里有我没学过的知识点"))
+                        .font(.callout).foregroundStyle(.secondary)
+                } else if let asked = request(before: message, in: q) {
                     Text(asked.text).font(.callout).foregroundStyle(.secondary)
                 }
                 RichText(message.text, scale: 0.92)
@@ -1329,8 +1350,11 @@ struct QuestionNotes: View {
                     DisclosureGroup(isExpanded: Binding(
                         get: { store.openSolutionQuestion == qID },
                         set: { store.openSolutionQuestion = $0 ? qID : nil })) {
-                        RichText(solution.text)
-                            .padding(.top, 8)
+                        VStack(alignment: .leading, spacing: 4) {
+                            RichText(solution.text)
+                            ReplyFollowUpButtons(setID: setID, qID: qID, reply: solution)
+                        }
+                        .padding(.top, 8)
                     } label: {
                         HStack {
                             Text("完整答案")
@@ -1379,7 +1403,7 @@ struct QuestionNotes: View {
         var result: [(String, ChatMessage)] = []
         var lastQuestion: String?
         // 圈出一步来问的写在页边
-        for m in q.messages where m.kind == .chat && m.region == nil {
+        for m in q.messages where m.kind == .chat && m.region == nil && m.about == nil {
             if m.role == .user {
                 lastQuestion = store.followUps.first { $0.prompt == m.text }?.title ?? m.text
             } else {
@@ -1473,4 +1497,91 @@ enum NextStepNudge {
 final class ActivityClock {
     private(set) var last = Date()
     func touch() { last = Date() }
+}
+
+// MARK: - 追问一条回复
+
+/// AI 回复下面的两个小按钮：有疑问（直接写下哪里不明白）、没学过（换成学过的方法重讲）
+struct ReplyFollowUpButtons: View {
+    @EnvironmentObject var store: AppStore
+    let setID: UUID
+    let qID: UUID
+    let reply: ChatMessage
+    @State private var asking: ReplyFollowUp.Kind?
+    @State private var text = ""
+
+    var body: some View {
+        HStack(spacing: 18) {
+            Button { open(.doubt) } label: { Label(L("有疑问"), systemImage: "questionmark.bubble") }
+                .accessibilityHint(L("写下对这条回复哪里不明白"))
+            Button { open(.unlearned) } label: { Label(L("没学过"), systemImage: "graduationcap") }
+                .accessibilityHint(L("里面有还没学过的知识点，换成学过的方法重讲"))
+        }
+        .labelStyle(.titleAndIcon)
+        .buttonStyle(InkTextButtonStyle(color: .secondary))
+        .font(.caption)
+        .disabled(store.isBusy(qID))
+        .popover(isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } })) {
+            if let asking { popover(asking) }
+        }
+    }
+
+    private func open(_ kind: ReplyFollowUp.Kind) {
+        text = ""
+        asking = kind
+    }
+
+    @ViewBuilder
+    private func popover(_ kind: ReplyFollowUp.Kind) -> some View {
+        switch kind {
+        case .doubt:
+            FollowUpPopover(title: L("对这条回复有疑问"), prompt: L("哪里不明白？例如：这一步为什么要两边平方"),
+                            footnote: nil, text: $text, button: L("发送"), allowsEmpty: false) {
+                store.askAboutReply(setID, qID, about: reply, text: text)
+                asking = nil
+            }
+        case .unlearned:
+            FollowUpPopover(title: L("里面有没学过的知识点"), prompt: L("哪个知识点？例如：洛必达法则（说不出名字可以空着）"),
+                            footnote: L("AI 会换成你学过的方法重讲。这个知识点会记下来，以后检查、提示和答案都不再用它；学过以后可以在设置 → 做题里删掉。"),
+                            text: $text, button: L("换成学过的方法"), allowsEmpty: true) {
+                store.reexplainWithoutTopic(setID, qID, about: reply, topic: text)
+                asking = nil
+            }
+        }
+    }
+}
+
+private struct FollowUpPopover: View {
+    let title: String
+    let prompt: String
+    let footnote: String?
+    @Binding var text: String
+    let button: String
+    let allowsEmpty: Bool
+    let send: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.headline)
+            TextField(prompt, text: $text, axis: .vertical)
+                .lineLimit(2...6)
+                .focused($focused)
+                .padding(10)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+            if let footnote {
+                Text(footnote).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button(action: send) {
+                Text(button).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Ink.pen)
+            .disabled(!allowsEmpty && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(18)
+        .frame(width: 380)
+        .onAppear { focused = true }
+    }
 }

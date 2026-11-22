@@ -110,7 +110,7 @@ extension Tutor {
 
         \(answerSection)
 
-        Tutoring principles: encourage the student to think independently. Until the student has passed this question (answered it correctly or already viewed the full solution), do not give away the final answer.
+        Tutoring principles: encourage the student to think independently. Until the student has passed this question (answered it correctly or already viewed the full solution), do not give away the final answer.\(unlearnedRule)
 
         When the student asks you for a new question: use the student's work on this question so that the new question tests where they went wrong before. First explain in a sentence or two what the question tests, then give it in the format below (you may give several, one set of tags each). Put the new question's answer only inside <answer>, never outside the tags:
         <new_question>
@@ -212,6 +212,35 @@ extension Tutor {
         5. Write only this step. Don't carry the calculation further, and don't write the final answer (unless this step is itself the last step).
         6. The line numbers are only for you to locate things; I can't see them, so don't say "line 3". Keep it short, like a teacher adding one line to my page.
         """
+        return s
+    }
+
+    static func doubtInstruction(about m: ChatMessage, question: String, done: Bool) -> String {
+        guard AILanguage.isEnglish else { return doubtInstructionZH(about: m, question: question, done: done) }
+        var s = quotedReply(m) + "\n\n[My question about this reply] \(question)\n\n"
+        s += "Please answer my question: first respond directly to the point I asked about (whether I misunderstood something or you didn't explain it clearly; if you actually got it wrong before, say so plainly and correct it), then explain that point clearly, writing out expressions where needed."
+        if !done && m.kind != .solution {
+            s += " I haven't finished this question yet: don't use this as a chance to give the final answer or the full solution."
+        }
+        return s + " Keep it short, a few sentences at most."
+    }
+
+    static func unlearnedInstruction(about m: ChatMessage, topic: String, done: Bool) -> String {
+        guard AILanguage.isEnglish else { return unlearnedInstructionZH(about: m, topic: topic, done: done) }
+        var s = quotedReply(m) + "\n\nThis reply uses something I haven't learned yet"
+        s += topic.isEmpty ? " (I can't name it; please work out which one it is, usually a theorem, formula or method beyond my current level)." : ": \(topic)."
+        s += """
+
+        Please explain the content of this reply again without it, using more basic methods I have learned:
+        - In the first sentence, say which method you're switching to.
+        - If the question really can't be done without it, say so, then explain the bit that's needed in the most intuitive way, without turning it into a whole theory.
+        """
+        if m.kind == .solution || done {
+            s += "\n- The original was the full solution, so write out the full working and final answer with the new method."
+        } else {
+            s += "\n- Keep to the scope of the original reply: if it was a hint, give only a hint; if it was the next step, write only one step. I haven't finished this question, so don't give the final answer."
+        }
+        s += "\n- On a separate last line, write <topic>a short name for this topic</topic> (only for the app to record; I won't see it), e.g. <topic>L'Hôpital's rule</topic>."
         return s
     }
 

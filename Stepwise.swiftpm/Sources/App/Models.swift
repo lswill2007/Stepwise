@@ -51,6 +51,21 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var region: InkRegion?
     /// 手写图片由识图模型（Haiku）逐行转写出的文字；有了它，检查、提示只发文字，不再发手写图片
     var transcript: String?
+    /// 对某条 AI 回复的追问（有疑问、没学过）：问题和回答都记着是针对哪一条，回答贴在页边
+    var about: ReplyFollowUp?
+}
+
+/// 对一条 AI 回复（检查反馈、提示、下一步、完整答案……）追问
+struct ReplyFollowUp: Codable, Equatable {
+    enum Kind: String, Codable {
+        /// 直接写下哪里有疑问
+        case doubt
+        /// 里面有还没学过的知识点：换成学过的方法重讲
+        case unlearned
+    }
+    /// 被追问的那条回复
+    var id: UUID
+    var kind: Kind
 }
 
 /// 批改标出的一处错误：第几行（手写区的横线行，从 1 开始）、一句短评

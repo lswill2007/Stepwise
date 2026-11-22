@@ -150,7 +150,7 @@ enum Tutor {
 
         \(answerSection)
 
-        辅导原则：鼓励学生独立思考；学生通过这道题（做对或已看过完整答案）之前，不要直接给出最终答案。
+        辅导原则：鼓励学生独立思考；学生通过这道题（做对或已看过完整答案）之前，不要直接给出最终答案。\(unlearnedRule)
 
         当学生请你出一道新题时：参考学生在这道题上的作答记录，让新题能检验他之前出错的地方。先用一两句话说明这道题考查什么，然后按下面的格式给出新题（一次可以出多道，每道一组标签），新题的答案只写在 <answer> 里，不要写在标签外面：
         <new_question>
@@ -343,6 +343,98 @@ enum Tutor {
         return s
     }
 
+    // MARK: - 追问一条回复
+
+    /// 学生标记过“还没学”的知识点：检查、提示、下一步、答案都不用
+    static var unlearnedTopics: [String] {
+        (UserDefaults.standard.stringArray(forKey: unlearnedTopicsKey) ?? []).filter { !$0.isEmpty }
+    }
+    static let unlearnedTopicsKey = "unlearnedTopics"
+
+    /// 附在系统提示词“辅导原则”后面；没有标记过时为空
+    static var unlearnedRule: String {
+        let topics = unlearnedTopics
+        guard !topics.isEmpty else { return "" }
+        return pick("""
+
+
+        【学生还没学过的知识点】\(topics.joined(separator: "、"))
+        讲解、提示、写下一步、给完整答案时都不要用这些知识点，改用学生学过的更基础的方法。题目确实绕不开时，先用一句话说明，再用最直观的方式把用到的那一点讲明白。学生自己的作答用了这些知识点并且用对了，照常认可。
+        """, """
+
+
+        [Topics the student hasn't learned yet] \(topics.joined(separator: ", "))
+        When explaining, giving hints, writing the next step or giving the full solution, don't use these topics; use more basic methods the student has learned. If the question really can't be done without one, say so in one sentence, then explain the bit that's needed in the most intuitive way. If the student's own work uses one of these topics correctly, accept it as usual.
+        """)
+    }
+
+    /// 被追问的那条回复是什么（检查反馈、提示、下一步……）
+    static func replyTitle(_ m: ChatMessage) -> String {
+        switch m.kind {
+        case .verdictCorrect, .verdictWrong: return pick("检查反馈", "checking feedback")
+        case .hint:
+            if m.isNextStep { return pick("替我写出的下一步", "the next step you wrote for me") }
+            if m.isStuckHelp { return pick("卡住时的点拨", "your help when I was stuck") }
+            return pick("提示", "hint")
+        case .solution: return pick("完整答案", "full solution")
+        default: return pick("回答", "answer")
+        }
+    }
+
+    static func quotedReply(_ m: ChatMessage) -> String {
+        var text = m.text
+        if let marks = m.marks, !marks.isEmpty {
+            text += "\n" + marks.enumerated().map { "\(circled($0.offset + 1)) \($0.element.note)" }.joined(separator: "\n")
+        }
+        return pick("【你之前的这条回复】（\(replyTitle(m))）\n", "[Your earlier reply] (\(replyTitle(m)))\n") + clip(text, 2500)
+    }
+
+    static func circled(_ n: Int) -> String {
+        let digits = Array("①②③④⑤⑥⑦⑧⑨")
+        return (1...digits.count).contains(n) ? String(digits[n - 1]) : "(\(n))"
+    }
+
+    /// 有疑问：学生直接写下哪里不明白
+    static func doubtInstructionZH(about m: ChatMessage, question: String, done: Bool) -> String {
+        var s = quotedReply(m) + "\n\n【我对这条回复的疑问】\(question)\n\n"
+        s += "请针对我的疑问回答：先直接回应我问的那一处（是我哪里理解错了，还是你之前没讲清楚；如果确实是你之前讲错了，直接承认并改正），再把那一处讲明白，需要式子就写出来。"
+        if !done && m.kind != .solution {
+            s += "这道题我还没做完：不要借机给出最终答案或完整解法。"
+        }
+        return s + "简洁，控制在几句话以内。"
+    }
+
+    /// 没学过：换成学过的方法重讲这条回复。topic 为空：学生说不出名字，让 AI 判断
+    static func unlearnedInstructionZH(about m: ChatMessage, topic: String, done: Bool) -> String {
+        var s = quotedReply(m) + "\n\n这条回复里用到了我还没学过的知识点"
+        s += topic.isEmpty ? "（我说不出名字，请你判断是哪一个，通常是超出我目前程度的定理、公式或方法）。" : "：\(topic)。"
+        s += """
+
+        请不用这个知识点，改用更基础、我学过的方法，重新讲这条回复的内容：
+        - 第一句话说明换成了什么方法。
+        - 这道题确实绕不开这个知识点时，说明这一点，再用最直观的方式把需要的那一点讲明白，不要展开成整套理论。
+        """
+        if m.kind == .solution || done {
+            s += "\n- 原来是完整答案，就用新方法写出完整过程和最终答案。"
+        } else {
+            s += "\n- 保持原来那条回复的分寸：原来是提示就只给提示，原来是下一步就只写一步。这道题我还没做完，不要给出最终答案。"
+        }
+        s += "\n- 最后单独一行写 <topic>这个知识点的简短名字</topic>（只给程序记下来用，我看不到），例如 <topic>洛必达法则</topic>。"
+        return s
+    }
+
+    /// 取出回复最后的 <topic>…</topic>，返回去掉标签的正文和知识点名字
+    static func extractTopic(_ text: String) -> (text: String, topic: String?) {
+        guard let start = text.range(of: "<topic>"),
+              let end = text.range(of: "</topic>", range: start.upperBound..<text.endIndex) else {
+            return (text, nil)
+        }
+        let topic = text[start.upperBound..<end.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        var rest = text
+        rest.removeSubrange(start.lowerBound..<end.upperBound)
+        return (rest.trimmingCharacters(in: .whitespacesAndNewlines), topic.isEmpty ? nil : topic)
+    }
+
     /// 用笔圈出一步来提问
     static func stepQuestionZH(_ text: String, done: Bool) -> String {
         // 点的是常用问题：换成具体的问法；“详细过程”这类不限几句话
@@ -511,6 +603,7 @@ enum Tutor {
     static func hideUnfinishedTags(_ text: String) -> String {
         var shown = extractMarks(extractNewQuestions(text).display).text
         if let r = shown.range(of: "<mark") { shown = String(shown[..<r.lowerBound]) }
+        if let r = shown.range(of: "<topic") { shown = String(shown[..<r.lowerBound]) }
         if let r = shown.range(of: "<new_question") {
             return String(shown[..<r.lowerBound]) + "\n\n" + L("（正在出题…）")
         }

@@ -204,6 +204,7 @@ struct SettingsView: View {
             gradingSection
             followUpSection
             answerSection
+            unlearnedSection
         case .notes:
             noteSection
         case .storage:
@@ -290,6 +291,34 @@ struct SettingsView: View {
                 Text("先填写 Anthropic、OpenAI、Gemini、xAI、通义千问、豆包或 AIHubMix、OpenRouter、302.AI 的 API Key，就可以一键选用。Kimi、DeepSeek、智谱、硅基流动等服务商的模型实测检查数学题会判错或太慢，暂时没有推荐组合。")
             }
         }
+    }
+
+    // MARK: - 还没学过的知识点
+
+    @State private var newTopic = ""
+
+    private var unlearnedSection: some View {
+        Section {
+            ForEach(store.unlearnedTopics, id: \.self) { topic in
+                Text(topic)
+            }
+            .onDelete { store.unlearnedTopics.remove(atOffsets: $0) }
+            HStack {
+                TextField(L("添加知识点，例如：洛必达法则"), text: $newTopic)
+                    .onSubmit(addTopic)
+                Button("添加", action: addTopic)
+                    .disabled(newTopic.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        } header: {
+            Text("还没学过的知识点")
+        } footer: {
+            Text("AI 检查、提示、写下一步和给答案时不用这些知识点，改用你学过的方法。在 AI 回复下面点“没学过”会自动加到这里；学过以后向左滑删掉。")
+        }
+    }
+
+    private func addTopic() {
+        store.addUnlearnedTopic(newTopic)
+        newTopic = ""
     }
 
     // MARK: - 批改速度

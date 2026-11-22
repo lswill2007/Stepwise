@@ -224,6 +224,17 @@ final class AppStore: ObservableObject {
         didSet { UserDefaults.standard.set(noteModel, forKey: "noteModel"); saveSettingsFile() }
     }
 
+    /// 学生标记过“还没学”的知识点：AI 讲解时不用（写进每次请求的系统提示词）
+    @Published var unlearnedTopics: [String] = UserDefaults.standard.stringArray(forKey: Tutor.unlearnedTopicsKey) ?? [] {
+        didSet { UserDefaults.standard.set(unlearnedTopics, forKey: Tutor.unlearnedTopicsKey); saveSettingsFile() }
+    }
+
+    func addUnlearnedTopic(_ topic: String) {
+        let topic = topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !topic.isEmpty, !unlearnedTopics.contains(where: { $0.caseInsensitiveCompare(topic) == .orderedSame }) else { return }
+        unlearnedTopics.append(topic)
+    }
+
     /// 导入后在后台预先求解没有参考答案的题
     @Published var presolveAnswers: Bool = UserDefaults.standard.object(forKey: "presolveAnswers") as? Bool ?? true {
         didSet { UserDefaults.standard.set(presolveAnswers, forKey: "presolveAnswers") }
@@ -754,6 +765,7 @@ final class AppStore: ObservableObject {
         showTiming = d.object(forKey: "showTiming") as? Bool ?? showTiming
         keyboardAnswer = d.bool(forKey: "keyboardAnswer")
         presolveAnswers = d.object(forKey: "presolveAnswers") as? Bool ?? presolveAnswers
+        unlearnedTopics = d.stringArray(forKey: Tutor.unlearnedTopicsKey) ?? unlearnedTopics
         if let saved = d.data(forKey: "followUps"), let list = try? JSONDecoder().decode([FollowUpAction].self, from: saved) {
             followUps = list
         }
@@ -1234,6 +1246,49 @@ final class AppStore: ObservableObject {
                 var reply = ChatMessage(role: .assistant, kind: .chat, text: full)
                 reply.region = region
                 q.messages.append(reply)
+            }
+        }
+    }
+
+    /// 对一条 AI 回复有疑问：直接写下哪里不明白，回答贴在页边
+    func askAboutReply(_ setID: UUID, _ qID: UUID, about reply: ChatMessage, text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let q = question(setID, qID) else { return }
+        let follow = ReplyFollowUp(id: reply.id, kind: .doubt)
+        var message = ChatMessage(role: .user, kind: .chat, text: text,
+                                  prompt: Tutor.doubtInstruction(about: reply, question: text, done: q.status.isDone))
+        message.about = follow
+        run(setID, qID, userMessage: message, replyKind: .chat, purpose: .chat, inMargin: true,
+            waitingLabel: L("正在想你问的…")) { [weak self] full in
+            self?.mutate(setID, qID) { q in
+                var answer = ChatMessage(role: .assistant, kind: .chat, text: full)
+                answer.about = follow
+                q.messages.append(answer)
+            }
+        }
+    }
+
+    /// 回复里有没学过的知识点：换成学过的方法重讲，并记下这个知识点，以后都不用。
+    /// topic 为空：学生说不出名字，由 AI 判断，名字从回复里的 <topic> 取
+    func reexplainWithoutTopic(_ setID: UUID, _ qID: UUID, about reply: ChatMessage, topic: String) {
+        let topic = topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let q = question(setID, qID) else { return }
+        let follow = ReplyFollowUp(id: reply.id, kind: .unlearned)
+        var message = ChatMessage(role: .user, kind: .chat,
+                                  text: topic.isEmpty ? L("这里有我没学过的知识点") : String(localized: "我还没学过：\(topic)"),
+                                  prompt: Tutor.unlearnedInstruction(about: reply, topic: topic, done: q.status.isDone))
+        message.about = follow
+        message.note = topic.isEmpty ? nil : topic
+        if !topic.isEmpty { addUnlearnedTopic(topic) }
+        run(setID, qID, userMessage: message, replyKind: .chat, purpose: .chat, inMargin: true,
+            waitingLabel: L("正在换成你学过的方法…")) { [weak self] full in
+            let (text, named) = Tutor.extractTopic(full)
+            if topic.isEmpty, let named { self?.addUnlearnedTopic(named) }
+            self?.mutate(setID, qID) { q in
+                var answer = ChatMessage(role: .assistant, kind: .chat, text: text, prompt: full)
+                answer.about = follow
+                answer.note = topic.isEmpty ? named : topic
+                q.messages.append(answer)
             }
         }
     }
