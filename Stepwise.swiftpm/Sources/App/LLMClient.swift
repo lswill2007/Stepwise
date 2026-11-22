@@ -14,6 +14,8 @@ struct LLMMessage {
 struct RequestOptions {
     /// 快速模式：让模型少思考（用于检查答案、给提示）
     var fast = false
+    /// 只是照抄图上的字（手写转写）：不用想，思考压到最低。只在 fast 时起作用
+    var transcribing = false
 }
 
 struct LLMError: LocalizedError {
@@ -51,17 +53,17 @@ struct LLMClient {
                     let normalized = Self.normalized(messages)
                     let fastKey = "\(config.id)|\(model)"
                     // 这个模型之前拒绝过快速模式参数，就不再带
-                    var useFast = options.fast && !FastModeMemory.isUnsupported(fastKey) && !fastParameters().isEmpty
+                    var useFast = options.fast && !FastModeMemory.isUnsupported(fastKey) && !fastParameters(transcribing: options.transcribing).isEmpty
                     // OpenAI 兼容接口要请求了才在最后报用量；之前拒绝过这个参数的服务商就不再带
                     var useUsage = config.apiProtocol == .openAI && !UsageOptionMemory.isUnsupported(config.id)
-                    var request = try makeChatRequest(system: system, messages: normalized, fast: useFast, usage: useUsage)
+                    var request = try makeChatRequest(system: system, messages: normalized, fast: useFast, transcribing: options.transcribing, usage: useUsage)
                     var (bytes, response) = try await Self.session.bytes(for: request)
                     var status = (response as? HTTPURLResponse)?.statusCode ?? 0
                     // 参数不被接受：先去掉报用量的参数重试，还不行再去掉快速模式参数；重试成功才记下是哪个参数不被接受
                     var dropped: String?
                     while (status == 400 || status == 422) && (useUsage || useFast) {
                         if useUsage { useUsage = false; dropped = "usage" } else { useFast = false; dropped = "fast" }
-                        request = try makeChatRequest(system: system, messages: normalized, fast: useFast, usage: useUsage)
+                        request = try makeChatRequest(system: system, messages: normalized, fast: useFast, transcribing: options.transcribing, usage: useUsage)
                         (bytes, response) = try await Self.session.bytes(for: request)
                         status = (response as? HTTPURLResponse)?.statusCode ?? 0
                     }
@@ -184,12 +186,13 @@ struct LLMClient {
     ]
 
     /// 快速模式下各家服务商用来减少思考的参数（会合并进请求体）。返回空表示这个模型没有可调的参数。
-    func fastParameters() -> [String: Any] {
+    /// transcribing：只是照抄手写，不受检查数学题时“最低 medium”的限制，压到最低
+    func fastParameters(transcribing: Bool = false) -> [String: Any] {
         let m = model.lowercased()
         switch config.apiProtocol {
         case .openAI:
             if config.id != "openrouter" && config.isAggregator {
-                return Self.aggregatorFastParameters(model: model)
+                return Self.aggregatorFastParameters(model: model, transcribing: transcribing)
             }
             switch config.id {
             case "openai":
@@ -214,10 +217,10 @@ struct LLMClient {
             guard prefixes.contains(where: m.hasPrefix) else { return [:] }
             // Claude 5 系列在 low 下数学题常常不怎么想就下结论，容易改错：快速检查最低用 medium
             let claude5 = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-5", "claude-fable", "claude-mythos"]
-            return ["output_config": ["effort": claude5.contains(where: m.hasPrefix) ? "medium" : "low"]]
+            return ["output_config": ["effort": claude5.contains(where: m.hasPrefix) && !transcribing ? "medium" : "low"]]
         case .gemini:
             if m.contains("gemini-4") {
-                return ["generationConfig": ["thinkingConfig": ["thinkingLevel": "medium"]]]
+                return ["generationConfig": ["thinkingConfig": ["thinkingLevel": transcribing ? "low" : "medium"]]]
             }
             if m.contains("gemini-3") {
                 return ["generationConfig": ["thinkingConfig": ["thinkingLevel": "low"]]]
@@ -233,7 +236,7 @@ struct LLMClient {
     }
 
     /// 聚合平台（OpenAI 兼容格式）：按模型所属厂商带上对应的少思考参数；平台不接受时会自动去掉重试
-    static func aggregatorFastParameters(model: String) -> [String: Any] {
+    static func aggregatorFastParameters(model: String, transcribing: Bool = false) -> [String: Any] {
         let name = ModelInfo.baseName(model)
         switch ModelInfo.family(model) {
         case .openai:
@@ -241,7 +244,7 @@ struct LLMClient {
             return reasoning ? ["reasoning_effort": "low"] : [:]
         case .google:
             // Gemini 的 OpenAI 兼容接口接受 reasoning_effort；Gemini 4 检查数学题最低用 medium
-            if name.contains("gemini-4") { return ["reasoning_effort": "medium"] }
+            if name.contains("gemini-4") { return ["reasoning_effort": transcribing ? "low" : "medium"] }
             return (name.contains("2.5") || name.contains("gemini-3")) ? ["reasoning_effort": "low"] : [:]
         case .qwen:
             return (name.hasPrefix("qwen3") || name.hasPrefix("qwq") || name.contains("plus") || name.contains("max"))
@@ -255,7 +258,7 @@ struct LLMClient {
         }
     }
 
-    private func makeChatRequest(system: String, messages: [LLMMessage], fast: Bool = false, usage: Bool = false) throws -> URLRequest {
+    private func makeChatRequest(system: String, messages: [LLMMessage], fast: Bool = false, transcribing: Bool = false, usage: Bool = false) throws -> URLRequest {
         guard !apiKey.isEmpty else { throw LLMError(message: String(localized: "还没有填写 \(config.name) 的 API Key，请到设置里填写。")) }
         guard !model.isEmpty else { throw LLMError(message: String(localized: "还没有选择 \(config.name) 的模型，请到设置里选择。")) }
         // 选了粤语回答：所有请求的系统提示词最后都加上粤语要求
@@ -339,7 +342,7 @@ struct LLMClient {
         }
 
         if fast {
-            for (key, value) in fastParameters() { body[key] = value }
+            for (key, value) in fastParameters(transcribing: transcribing) { body[key] = value }
         }
 
         request.httpMethod = "POST"

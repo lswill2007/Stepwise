@@ -1093,14 +1093,15 @@ final class HandwritingModel: ObservableObject {
             for row in firstRow...lastRow {
                 let bottom = RuledPaper.top(ofRow: row) + spacing - top
                 UIColor(red: 0.62, green: 0.72, blue: 0.86, alpha: 0.6).setFill()
-                context.fill(CGRect(x: gutter, y: bottom - 0.5, width: area.width, height: 1))
+                // fill(_:) 默认是 copy 混合，半透明颜色会变成很深的线；要 normal 才是浅色横线
+                context.fill(CGRect(x: gutter, y: bottom - 0.5, width: area.width, height: 1), blendMode: .normal)
                 let label = "\(row)" as NSString
                 let labelSize = label.size(withAttributes: attributes)
                 label.draw(at: CGPoint(x: gutter - 8 - labelSize.width, y: bottom - spacing / 2 - labelSize.height / 2),
                            withAttributes: attributes)
             }
             UIColor.gray.withAlphaComponent(0.4).setFill()
-            context.fill(CGRect(x: gutter - 2, y: 0, width: 1, height: size.height))
+            context.fill(CGRect(x: gutter - 2, y: 0, width: 1, height: size.height), blendMode: .normal)
             ink.draw(in: CGRect(x: gutter, y: 0, width: area.width, height: area.height))
             if let highlight {
                 let box = UIBezierPath(roundedRect: highlight.offsetBy(dx: gutter - left, dy: -top), cornerRadius: 8)
@@ -1110,8 +1111,11 @@ final class HandwritingModel: ObservableObject {
             }
         }
         guard let cg = image.cgImage else { return nil }
-        // 1280 像素足够看清手写，图片更小，上传和识别都更快
-        return ImageUtil.jpeg(cg).flatMap { ImageUtil.normalizedJPEG($0, maxPixel: 1280) }
+        // 宽不超过 1280 像素就够看清手写；写得多（图很高）时高度放宽到 2400，不然整张缩小后每行的字太小。
+        // 识别时高的图会切成几段同时转写（ImageUtil.horizontalStrips），每段都不大
+        let fit = min(1, 1280 / CGFloat(cg.width), 2400 / CGFloat(cg.height))
+        let maxPixel = Int((CGFloat(max(cg.width, cg.height)) * fit).rounded(.down))
+        return ImageUtil.jpeg(cg).flatMap { ImageUtil.normalizedJPEG($0, maxPixel: maxPixel) }
     }
 }
 

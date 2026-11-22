@@ -265,7 +265,8 @@ enum BoardExport {
             }
             if gutter > 0 {
                 UIColor.gray.withAlphaComponent(0.4).setFill()
-                context.fill(CGRect(x: gutter - 2, y: 0, width: 1, height: size.height))
+                // fill(_:) 默认是 copy 混合，半透明会变成深色竖线
+                context.fill(CGRect(x: gutter - 2, y: 0, width: 1, height: size.height), blendMode: .normal)
             }
             ink.draw(in: CGRect(x: gutter, y: 0, width: area.width, height: area.height))
         }

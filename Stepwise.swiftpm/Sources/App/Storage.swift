@@ -136,6 +136,81 @@ enum ImageUtil {
         ctx.draw(image, in: rect)
         return ctx.makeImage() ?? image
     }
+
+    /// 写得多的手写图片切成上下几段，分头同时识别：识别时间主要花在模型逐字写出转写上，一段长的要等很久，
+    /// 几段一起写快得多。只在整排像素都没有笔迹的空白处切（切不到字、分式、大括号），每段带着自己左边的行号；
+    /// 笔迹不到 minBands 块（大约几行）或找不到空白时原样返回一张
+    static func horizontalStrips(_ data: Data, maxStrips: Int = 4, bandsPerStrip: Int = 3, minBands: Int = 8) -> [Data] {
+        guard maxStrips > 1, let image = cgImage(from: data) else { return [data] }
+        let width = image.width, height = image.height
+        guard width > 0, height > 0,
+              let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue),
+              let raw = ctx.data else { return [data] }
+        let rect = CGRect(x: 0, y: 0, width: width, height: height)
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(rect)
+        ctx.draw(image, in: rect)
+        let pixels = raw.bindMemory(to: UInt8.self, capacity: width * height * 4)
+        // 哪些像素算“笔迹”：三个颜色里最暗的一个够暗才算（黄色、红色笔也算；浅蓝横线、浅灰竖线不算）。
+        // 位图第一排就是图片最上面一排
+        var dark = [Bool](repeating: false, count: width * height)
+        var column = [Int](repeating: 0, count: width)
+        for y in 0..<height {
+            let row = pixels + y * width * 4
+            for x in 0..<width {
+                let p = row + x * 4
+                if min(p[0], p[1], p[2]) < 160 {
+                    dark[y * width + x] = true
+                    column[x] += 1
+                }
+            }
+        }
+        // 从上到下贯穿大半张图的竖线（行号旁的分隔线；旧图片里是深色的）不算笔迹，不然每排都“有字”，找不到空白
+        let rule = column.map { $0 > height / 2 }
+        var ink = [Int](repeating: 0, count: height)
+        for y in 0..<height {
+            var count = 0
+            for x in 0..<width where dark[y * width + x] && !rule[x] { count += 1 }
+            ink[y] = count
+        }
+        // 连在一起有笔迹的几排是一块（一行字连同它的行号）；空白太窄的缝不切，免得切到挨得很近的上下标
+        let minGap = max(4, height / 300)
+        var bands: [(top: Int, bottom: Int, mass: Int)] = []
+        var y = 0
+        while y < height {
+            guard ink[y] > 1 else { y += 1; continue }
+            var end = y, mass = 0
+            while end < height && ink[end] > 1 { mass += ink[end]; end += 1 }
+            if let last = bands.last, y - last.bottom < minGap {
+                bands[bands.count - 1] = (last.top, end, last.mass + mass)
+            } else {
+                bands.append((y, end, mass))
+            }
+            y = end
+        }
+        // 只有一两排像素高的是横线（旧图片里横线是深色的），不算一行字
+        let lines = bands.filter { $0.bottom - $0.top > 3 }.count
+        guard lines >= minBands else { return [data] }
+        let count = min(maxStrips, max(2, lines / bandsPerStrip))
+        // 按笔迹多少平均分：每段要写出的字差不多，几段差不多同时写完
+        let total = bands.reduce(0) { $0 + $1.mass }
+        var cuts: [Int] = [0]
+        var sum = 0
+        for i in 0..<(bands.count - 1) {
+            sum += bands[i].mass
+            let target = Double(total) * Double(cuts.count) / Double(count)
+            if cuts.count < count && Double(sum) >= target {
+                cuts.append((bands[i].bottom + bands[i + 1].top) / 2)
+            }
+        }
+        cuts.append(height)
+        guard cuts.count > 2 else { return [data] }
+        let strips = zip(cuts, cuts.dropFirst()).compactMap { top, bottom -> Data? in
+            image.cropping(to: CGRect(x: 0, y: top, width: width, height: bottom - top)).flatMap { jpeg($0, quality: 0.85) }
+        }
+        return strips.count == cuts.count - 1 ? strips : [data]
+    }
 }
 
 /// 每道题写了一半的手写笔迹（PencilKit 数据），保存在本机，切题或退出 App 都不会丢

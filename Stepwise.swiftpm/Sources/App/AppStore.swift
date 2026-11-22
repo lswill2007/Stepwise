@@ -808,12 +808,36 @@ final class AppStore: ObservableObject {
 
     /// 让识图模型把手写图片逐行转写成文字；失败或空白时返回 nil
     nonisolated static func transcribe(_ image: Data, with reader: LLMClient) async -> String? {
-        let text = try? await reader.complete(
-            system: Tutor.transcribeSystem,
-            messages: [LLMMessage(role: .user, parts: [.image(image), .text(Tutor.pick("请逐行转写。", "Transcribe it line by line."))])],
-            options: RequestOptions(fast: true))
-        let lines = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return lines.isEmpty ? nil : lines
+        let blank: Set<String> = ["（空白）", "(空白)", "(blank)", "blank", "空白"]
+        let strips = ImageUtil.horizontalStrips(image)
+        let parts = await transcribeStrips(strips) { strip in
+            let text = try? await reader.complete(
+                system: Tutor.transcribeSystem,
+                messages: [LLMMessage(role: .user, parts: [.image(strip), .text(Tutor.pick("请逐行转写。", "Transcribe it line by line."))])],
+                options: RequestOptions(fast: true, transcribing: true))
+            let lines = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return lines.isEmpty ? nil : lines
+        }
+        guard let parts else { return nil }
+        // 分了段时，空白的那几段不要
+        let kept = parts.count > 1 ? parts.filter { !blank.contains($0) } : parts
+        return kept.isEmpty ? parts.first : kept.joined(separator: "\n")
+    }
+
+    /// 几段手写图片同时转写，按上下顺序返回；有一段失败就当整个失败（调用的地方会照旧发图片）
+    nonisolated static func transcribeStrips(_ strips: [Data], _ one: @escaping (Data) async -> String?) async -> [String]? {
+        if strips.count == 1 { return await one(strips[0]).map { [$0] } }
+        return await withTaskGroup(of: (Int, String?).self) { group in
+            for (i, strip) in strips.enumerated() {
+                group.addTask { (i, await one(strip)) }
+            }
+            var results = [String?](repeating: nil, count: strips.count)
+            for await (i, text) in group {
+                guard let text else { group.cancelAll(); return nil }
+                results[i] = text
+            }
+            return results.compactMap { $0 }
+        }
     }
 
     /// 图像识别（手写作答、导入题目时的照片、扫描件、按图片发送的 PDF 页）一律用服务商的低档模型：只是把图上的字抄下来，

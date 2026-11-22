@@ -98,13 +98,19 @@ final class PDFExporter: ObservableObject {
             - Write [?] for anything illegible; describe a drawing in one short phrase (Figure: ...).
             - Output only the transcription. If there is no handwriting, output only "(blank)".
             """)
-        guard let text = try? await reader.complete(
-            system: system,
-            messages: [LLMMessage(role: .user, parts: [.image(image), .text(Tutor.pick("请转写。", "Transcribe it."))])],
-            options: RequestOptions(fast: true)) else { return nil }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let blank = ["（空白）", "(空白)", "(blank)", "blank", "空白"]
-        if trimmed.isEmpty || blank.contains(trimmed) { return nil }
+        // 写得多时切成几段同时转写（见 ImageUtil.horizontalStrips），空白的段不要
+        let parts = await AppStore.transcribeStrips(ImageUtil.horizontalStrips(image)) { strip in
+            guard let text = try? await reader.complete(
+                system: system,
+                messages: [LLMMessage(role: .user, parts: [.image(strip), .text(Tutor.pick("请转写。", "Transcribe it."))])],
+                options: RequestOptions(fast: true, transcribing: true)) else { return nil }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return blank.contains(trimmed) ? "" : trimmed
+        }
+        guard let parts else { return nil }
+        let trimmed = parts.filter { !$0.isEmpty }.joined(separator: "\n")
+        if trimmed.isEmpty { return nil }
         // 只画了图、没写字（只有一句“（图：……）”）：转写没有用，只放图片
         let figureOnly = #"^[（(]\s*(图|圖|Figure)\s*[：:][^\n]*[)）]$"#
         if trimmed.range(of: figureOnly, options: [.regularExpression, .caseInsensitive]) != nil { return nil }
