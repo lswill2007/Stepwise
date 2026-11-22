@@ -251,9 +251,35 @@ struct NoteImportView: View {
 
 // MARK: - 笔记目录
 
-/// 中间一栏：笔记的小标题和练习题，点哪里翻到哪里
+/// 笔记页上现在看得见哪几块：目录里把这几行加深。
+/// 单独放一个对象，不放进 AppStore：滚动时一块进出屏幕就要改一次，放进 AppStore 会让整个 App 跟着重算界面
+@MainActor
+final class NoteViewport: ObservableObject {
+    static let shared = NoteViewport()
+    @Published private(set) var noteID: UUID?
+    @Published private(set) var visible: Set<UUID> = []
+
+    func set(_ blockID: UUID, visible isVisible: Bool, in note: UUID) {
+        if noteID != note {
+            noteID = note
+            visible = []
+        }
+        if isVisible {
+            if !visible.contains(blockID) { visible.insert(blockID) }
+        } else if visible.contains(blockID) {
+            visible.remove(blockID)
+        }
+    }
+
+    func isVisible(_ blockID: UUID, in note: UUID) -> Bool {
+        noteID == note && visible.contains(blockID)
+    }
+}
+
+/// 中间一栏：笔记的小标题和练习题，点哪里翻到哪里；页面上正在显示的几节加深
 struct NoteOutlineView: View {
     @EnvironmentObject var store: AppStore
+    @ObservedObject private var viewport = NoteViewport.shared
     let noteID: UUID
 
     struct Item: Identifiable {
@@ -269,21 +295,33 @@ struct NoteOutlineView: View {
             List {
                 Section {
                     ForEach(Self.outline(doc, store: store)) { item in
+                        let shown = viewport.isVisible(item.blockID, in: noteID)
                         Button {
                             store.noteJump = item.blockID
                         } label: {
                             HStack(spacing: 8) {
                                 if let icon = item.icon {
-                                    Image(systemName: icon).font(.caption).foregroundStyle(.secondary)
+                                    Image(systemName: icon).font(.caption)
+                                        .foregroundStyle(shown ? Color.primary : Color.secondary)
                                 }
                                 Text(item.title)
                                     .font(item.level <= 2 ? .subheadline.weight(.semibold) : .subheadline)
-                                    .foregroundStyle(item.level <= 2 ? Color.primary : Color.secondary)
+                                    .foregroundStyle(item.level <= 2 || shown ? Color.primary : Color.secondary)
                                     .lineLimit(2)
                             }
                             .padding(.leading, CGFloat(max(item.level - 2, 0)) * 14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        // 页面上正在显示的这几节：底色加深，像选中一样
+                        .listRowBackground(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(shown ? Color.primary.opacity(0.1) : Color.clear)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 1)
+                        )
+                        .animation(.easeInOut(duration: 0.2), value: shown)
                     }
                 } header: {
                     if store.noteJobs[noteID] != nil {
@@ -379,6 +417,14 @@ struct NoteDocView: View {
                         ForEach(doc.blocks) { block in
                             blockView(block, in: doc)
                                 .id(block.id)
+                                // 这一块在不在屏幕上（露出来一点点不算）：目录里把正在显示的几节加深
+                                .onGeometryChange(for: Bool.self) { proxy in
+                                    let frame = proxy.frame(in: .scrollView)
+                                    let height = proxy.bounds(of: .scrollView)?.height ?? 0
+                                    return height > 0 && frame.maxY > 40 && frame.minY < height - 80
+                                } action: { [noteID] isVisible in
+                                    NoteViewport.shared.set(block.id, visible: isVisible, in: noteID)
+                                }
                                 // 记下每一块的位置：空白处的笔迹跟着它上面那一块挪
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.pageSpace)) } action: { [scale = paperScale(doc)] frame in
                                     pageInk.blockFrames[block.id] = (frame, scale)

@@ -232,16 +232,25 @@ final class PadCanvasView: PKCanvasView {
 
     /// visible 为 false：先藏着，PencilKit 重画好之前又落笔了才露出来。
     /// 截图和画布上的字叠在一起会画两遍（边缘发硬、对不准时像重影，看起来就是别的字一下变模糊），
-    /// 所以只在真的需要它补位的时候才露出来：写完一笔整理笔锋时，PencilKit 不清空画布，直接换笔迹没有空白的一帧
-    func coverWhileRedrawing(visible: Bool = true) {
+    /// 所以只在真的需要它补位的时候才露出来：写完一笔整理笔锋时，PencilKit 不清空画布，直接换笔迹没有空白的一帧。
+    ///
+    /// changed / becoming：要换成的笔迹（纸的坐标）和变了的那一块。截图拍的是换之前的样子，
+    /// 整理笔锋前后这一笔的粗细、位置都不一样，叠在画布上整理后的笔画下面，写下一笔时这一笔就毛毛的、像糊了，
+    /// 一抬笔截图拿掉才又清楚。所以截图上这一块挖掉，换成照着新笔迹画的图，和画布上的一模一样
+    func coverWhileRedrawing(visible: Bool = true, changed: CGRect? = nil, becoming newDrawing: PKDrawing? = nil) {
         guard window != nil, let superview, bounds.width > 1, bounds.height > 1,
-              let cover = snapshotView(afterScreenUpdates: false) else { return }
+              let snapshot = snapshotView(afterScreenUpdates: false) else { return }
         if !redrawCovers.isEmpty, contentOffset != coverOffset || zoomScale != coverZoom { removeRedrawCover() }
+        // 截图装在一层里：这一层和画布一样大、一样的位置。
         // 画布在正文的缩放里（scaleEffect）：frame 在有变换时不可靠，照着 bounds / center / transform 放，才和画布严丝合缝
-        cover.bounds = bounds
+        let cover = UIView()
+        cover.bounds = CGRect(origin: .zero, size: bounds.size)
         cover.center = center
         cover.transform = transform
         cover.isUserInteractionEnabled = false
+        snapshot.frame = cover.bounds
+        cover.addSubview(snapshot)
+        if let changed, let newDrawing { patch(snapshot, in: cover, at: changed, with: newDrawing) }
         cover.isHidden = !visible && !isStroking
         superview.insertSubview(cover, belowSubview: self)
         redrawCovers.append(cover)
@@ -249,6 +258,39 @@ final class PadCanvasView: PKCanvasView {
         coverOffset = contentOffset
         coverZoom = zoomScale
         armCoverDeadline()
+    }
+
+    /// 截图上 changed 这一块（纸的坐标）挖掉，放上照着新笔迹画的这一块
+    private func patch(_ snapshot: UIView, in cover: UIView, at changed: CGRect, with newDrawing: PKDrawing) {
+        guard !changed.isNull, !changed.isInfinite, !changed.isEmpty else { return }
+        // 纸的坐标 → 画布笔迹的坐标：笔画边上留一点，抗锯齿的毛边也挖干净
+        let rect = changed.offsetBy(dx: overflow, dy: overflow).insetBy(dx: -4, dy: -4).integral
+        let zoom = zoomScale
+        // 在画布看得见的这一块里的位置
+        let local = CGRect(x: rect.minX * zoom - contentOffset.x, y: rect.minY * zoom - contentOffset.y,
+                           width: rect.width * zoom, height: rect.height * zoom)
+        guard local.intersects(cover.bounds) else { return }
+        // 屏幕上实际放大了多少（正文的 scaleEffect 也算上），图按这个清晰度画
+        let onScreen = convert(CGRect(x: 0, y: 0, width: 100, height: 100), to: nil).width / 100
+        let scale = (window?.screen.scale ?? 2) * zoom * min(max(onScreen, 0.25), 4)
+        let canvasDrawing = PKDrawing(strokes: newDrawing.strokes.map { stroke in
+            var moved = stroke
+            moved.transform = stroke.transform.concatenating(toCanvas)
+            return moved
+        })
+        var image = UIImage()
+        // 深色模式下 PencilKit 会把墨水颜色反过来画，图也按画布的深浅画
+        traitCollection.performAsCurrent { image = canvasDrawing.image(from: rect, scale: scale) }
+        let mask = CAShapeLayer()
+        mask.frame = snapshot.layer.bounds
+        let path = UIBezierPath(rect: mask.bounds)
+        path.append(UIBezierPath(rect: local.offsetBy(dx: mask.bounds.minX, dy: mask.bounds.minY)))
+        mask.path = path.cgPath
+        mask.fillRule = .evenOdd
+        snapshot.layer.mask = mask
+        let piece = UIImageView(image: image)
+        piece.frame = local
+        cover.addSubview(piece)
     }
 
     /// PencilKit 没报告画完也不一直垫着；笔还在纸上就接着等
@@ -1354,8 +1396,10 @@ struct NotebookCanvas: UIViewRepresentable {
         private func replace(_ canvasView: PadCanvasView, with drawing: PKDrawing, undoTo previous: PKDrawing,
                              droppingPencilKitUndo: Bool = false) {
             let undoManager = canvasView.undoManager
-            // 换之前垫一张截图（先藏着）：PencilKit 重画好之前又落笔写下一笔时露出来，刚写的字也不会消失
-            canvasView.coverWhileRedrawing(visible: false)
+            // 换之前垫一张截图（先藏着）：PencilKit 重画好之前又落笔写下一笔时露出来，刚写的字也不会消失。
+            // 变了的那几笔在截图上换成新的样子，露出来时和画布上的对得上，不会糊
+            canvasView.coverWhileRedrawing(visible: false, changed: Self.changedBounds(canvasView.paperDrawing, drawing),
+                                           becoming: drawing)
             applying = true
             canvasView.paperDrawing = drawing
             if droppingPencilKitUndo, let undoManager, undoManager.canUndo {
@@ -1367,6 +1411,20 @@ struct NotebookCanvas: UIViewRepresentable {
             undoManager?.registerUndo(withTarget: self) { coordinator in
                 coordinator.replace(canvasView, with: previous, undoTo: drawing)
             }
+        }
+
+        /// 两份笔迹里不一样的笔画占的地方（前面一样的笔画跳过）；变的太多就不算（返回 nil）
+        static func changedBounds(_ old: PKDrawing, _ new: PKDrawing) -> CGRect? {
+            func same(_ a: PKStroke, _ b: PKStroke) -> Bool {
+                a.renderBounds == b.renderBounds && a.path.creationDate == b.path.creationDate
+                    && a.path.count == b.path.count && a.ink.inkType == b.ink.inkType && a.ink.color == b.ink.color
+            }
+            let a = old.strokes, b = new.strokes
+            var start = 0
+            while start < a.count, start < b.count, same(a[start], b[start]) { start += 1 }
+            let changed = a[start...] + b[start...]
+            guard !changed.isEmpty, changed.count <= 40 else { return nil }
+            return changed.reduce(CGRect.null) { $0.union($1.renderBounds) }
         }
 
         /// 按笔的手感参数重新生成最后一笔
