@@ -121,7 +121,7 @@ enum ProviderCatalog {
             id: "aihubmix", name: L("AIHubMix (聚合)"), apiProtocol: .openAI,
             baseURL: "https://aihubmix.com/v1", model: "",
             presetModels: [],
-            note: L("一个 Key 调用 GPT、Claude、Gemini、DeepSeek 等，点“获取模型列表”选择")),
+            note: L("中国大陆需要开 VPN 才能连上，不开 VPN 可以改用通义千问或豆包。一个 Key 调用 GPT、Claude、Gemini、DeepSeek 等，点“获取模型列表”选择")),
         ProviderConfig(
             id: "302ai", name: L("302.AI (聚合)"), apiProtocol: .openAI,
             baseURL: "https://api.302.ai/v1", model: "",

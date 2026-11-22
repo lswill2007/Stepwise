@@ -400,7 +400,7 @@
 "platform.moonshot.cn 获取 Key" = "platform.moonshot.cn 取得 Key";
 "platform.openai.com 获取 Key" = "platform.openai.com 取得 Key";
 "一个 Key 用几乎所有模型，点“获取模型列表”选择" = "一個 Key 用幾乎所有模型，點「取得模型列表」選擇";
-"一个 Key 调用 GPT、Claude、Gemini、DeepSeek 等，点“获取模型列表”选择" = "一個 Key 使用 GPT、Claude、Gemini、DeepSeek 等，點「取得模型列表」選擇";
+"中国大陆需要开 VPN 才能连上，不开 VPN 可以改用通义千问或豆包。一个 Key 调用 GPT、Claude、Gemini、DeepSeek 等，点“获取模型列表”选择" = "中國內地需要開 VPN 才能連上，不開 VPN 可以改用通義千問或豆包。一個 Key 使用 GPT、Claude、Gemini、DeepSeek 等，點「取得模型列表」選擇";
 "不支持图片：手写作答和图片题请换用其他模型" = "不支援圖片：手寫作答和圖片題請換用其他模型";
 "任何兼容 OpenAI 接口的服务：其他聚合平台、OneAPI / NewAPI 中转、本地部署等" = "任何相容 OpenAI 介面的服務：其他聚合平台、OneAPI / NewAPI 中轉、本地部署等";
 "国内聚合平台，点“获取模型列表”选择" = "國內聚合平台，點「取得模型列表」選擇";
