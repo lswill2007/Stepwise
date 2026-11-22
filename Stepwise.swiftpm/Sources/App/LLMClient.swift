@@ -16,6 +16,9 @@ struct RequestOptions {
     var fast = false
     /// 只是照抄图上的字（手写转写）：不用想，思考压到最低。只在 fast 时起作用
     var transcribing = false
+    /// 最多等服务器多少秒开始回应（收到响应头为止）；超过就当连不上。nil 不限（正式请求：推理模型可能想很久）。
+    /// 只管“连上之前”，连上以后模型想多久都不受影响
+    var responseTimeout: TimeInterval? = nil
 }
 
 struct LLMError: LocalizedError {
@@ -48,6 +51,8 @@ struct LLMClient {
 
     func stream(system: String, messages: [LLMMessage], options: RequestOptions = RequestOptions()) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
+            let gate = ResponseGate()
+            let host = URL(string: base)?.host ?? base
             let task = Task {
                 do {
                     let normalized = Self.normalized(messages)
@@ -58,6 +63,8 @@ struct LLMClient {
                     var useUsage = config.apiProtocol == .openAI && !UsageOptionMemory.isUnsupported(config.id)
                     var request = try makeChatRequest(system: system, messages: normalized, fast: useFast, transcribing: options.transcribing, usage: useUsage)
                     var (bytes, response) = try await Self.session.bytes(for: request)
+                    // 等太久已经放弃了：不再往下走
+                    guard gate.markResponded() else { throw CancellationError() }
                     var status = (response as? HTTPURLResponse)?.statusCode ?? 0
                     // 参数不被接受：先去掉报用量的参数重试，还不行再去掉快速模式参数；重试成功才记下是哪个参数不被接受
                     var dropped: String?
@@ -93,10 +100,20 @@ struct LLMClient {
                     }
                     continuation.finish()
                 } catch {
-                    continuation.finish(throwing: error)
+                    continuation.finish(throwing: gate.timedOut ? Self.unreachableError(host: host) : Self.friendlyError(error, host: host))
                 }
             }
-            continuation.onTermination = { _ in task.cancel() }
+            // 等服务器回应的时限：到点还没收到响应头就停掉请求，报“连不上”
+            let watchdog = options.responseTimeout.map { seconds in
+                Task {
+                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    if !Task.isCancelled, gate.markTimedOut() { task.cancel() }
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+                watchdog?.cancel()
+            }
         }
     }
 
@@ -121,7 +138,14 @@ struct LLMClient {
             request = URLRequest(url: try url(base + "/models?pageSize=1000"))
             request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         }
-        let (data, response) = try await Self.session.data(for: request)
+        let host = request.url?.host ?? base
+        let (data, response) = try await Self.withDeadline(Self.quickTimeout, host: host) { [request] in
+            do {
+                return try await Self.session.data(for: request)
+            } catch {
+                throw Self.friendlyError(error, host: host)
+            }
+        }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else {
             throw LLMError(message: Self.describeError(status: status, body: String(decoding: data, as: UTF8.self)))
@@ -439,6 +463,42 @@ struct LLMClient {
         return result
     }
 
+    // MARK: - 连不上时的提示
+
+    /// 测试连接、获取模型列表最多等服务器多少秒：连得上的话几秒内就有回应，不用让人干等
+    static let quickTimeout: TimeInterval = 20
+
+    /// 在时限内做完 operation，否则报“连不上”
+    static func withDeadline<T>(_ seconds: TimeInterval, host: String,
+                                _ operation: @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw unreachableError(host: host)
+            }
+            defer { group.cancelAll() }
+            return try await group.next()!
+        }
+    }
+
+    static func unreachableError(host: String) -> LLMError {
+        LLMError(message: String(localized: "连不上 \(host)：服务器一直没有回应。可以先在 Safari 里打开这个网址试试；打不开就是当前网络到不了这个服务商，可以换个网络，或到服务商后台查有没有别的接口地址。"))
+    }
+
+    /// 把系统的网络错误（“请求超时。”这类）换成说得清原因和办法的提示；其他错误原样返回
+    static func friendlyError(_ error: Error, host: String) -> Error {
+        guard let urlError = error as? URLError else { return error }
+        switch urlError.code {
+        case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff:
+            return LLMError(message: L("没有连上网络。如果别的 App 能上网，请在 iPad 的“设置”里找到 Stepwise，允许它使用无线数据。"))
+        case .timedOut, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed, .secureConnectionFailed:
+            return unreachableError(host: host)
+        default:
+            return error
+        }
+    }
+
     static func describeError(status: Int, body: String) -> String {
         var detail = body.trimmingCharacters(in: .whitespacesAndNewlines)
         if let data = body.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) {
@@ -461,6 +521,30 @@ struct LLMClient {
         default: hint = ""
         }
         return String(localized: "请求失败（HTTP \(status)）\(hint)\n\(detail)")
+    }
+}
+
+/// 请求和“等太久”的计时器谁先到：先收到响应头就算连上了，先到时限就算连不上，只有一个能成
+private final class ResponseGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var state = 0  // 0 还在等，1 已回应，2 已超时
+
+    var timedOut: Bool { lock.withLock { state == 2 } }
+
+    /// 收到回应；已经超时放弃了就返回 false
+    func markResponded() -> Bool {
+        lock.withLock {
+            if state == 0 { state = 1 }
+            return state == 1
+        }
+    }
+
+    /// 到时限；已经回应过了就返回 false
+    func markTimedOut() -> Bool {
+        lock.withLock {
+            if state == 0 { state = 2 }
+            return state == 2
+        }
     }
 }
 

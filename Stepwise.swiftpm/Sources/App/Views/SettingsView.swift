@@ -851,7 +851,8 @@ struct ProviderEditView: View {
             do {
                 let reply = try await LLMClient(config: config, apiKey: apiKey).complete(
                     system: Tutor.pick("你是一个助手。", "You are an assistant."),
-                    messages: [LLMMessage(role: .user, parts: [.text(Tutor.pick("请只回复四个字：连接成功", "Reply with exactly two words: Connection successful"))])])
+                    messages: [LLMMessage(role: .user, parts: [.text(Tutor.pick("请只回复四个字：连接成功", "Reply with exactly two words: Connection successful"))])],
+                    options: RequestOptions(responseTimeout: LLMClient.quickTimeout))
                 testResult = "✅ " + reply.trimmingCharacters(in: .whitespacesAndNewlines)
             } catch {
                 testResult = "❌ " + error.localizedDescription
