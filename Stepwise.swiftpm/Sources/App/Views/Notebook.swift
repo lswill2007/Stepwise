@@ -241,6 +241,13 @@ struct QuestionBlock: View {
     @State private var showStepAsk = false
     /// 完整答案放大到题目下方（全宽显示），不放在页边
     @AppStorage("solutionBelow") private var solutionBelow = false
+    /// 停笔多久（分钟）后提醒可以看下一步；0 表示不提醒
+    @AppStorage(NextStepNudge.storageKey) private var nudgeMinutes = NextStepNudge.defaultMinutes
+    @Environment(\.scenePhase) private var scenePhase
+    /// 上次写字、打字或收到回复的时间。不放进 @State 的值里：写字时每一笔都会改它，放进去整道题会跟着重算
+    @State private var activity = ActivityClock()
+    /// 停笔太久：在按钮下面提醒可以让 AI 写出下一步
+    @State private var showNudge = false
 
     /// 完整答案放在页边：页面够宽、且没有选择放大到题目下方
     private var solutionInMargin: Bool { wide && !solutionBelow }
@@ -259,6 +266,10 @@ struct QuestionBlock: View {
                 let work = VStack(alignment: .leading, spacing: 12) {
                     writingArea(q)
                     actionRow(q)
+                    if showNudge && q.status != .passed && !store.isBusy(qID) {
+                        nextStepNudge(q)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
                     // 做错了或者不会：笔记里有相关的知识点，先引导去看笔记
                     if q.status != .passed, let guide = store.noteGuides[qID] {
                         NoteGuideBanner(guide: guide)
@@ -285,8 +296,24 @@ struct QuestionBlock: View {
             .onAppear { onAppear(q) }
             #if os(iOS)
             // 开始写这道题时先和检查用的服务商建好连接，写完点“检查”时不用再等握手
-            .onReceive(model.tools.writingBegan) { store.warmUpGrading() }
+            .onReceive(model.tools.writingBegan) {
+                store.warmUpGrading()
+                noteActivity()
+            }
             #endif
+            // 停笔太久就提醒可以看下一步：每隔一会儿看一眼离上次动笔过了多久
+            .task(id: nudgeMinutes) {
+                activity.touch()
+                guard nudgeMinutes > 0 else { showNudge = false; return }
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    checkIdle()
+                }
+            }
+            .onChange(of: scenePhase) { noteActivity() }
+            .onChange(of: store.selectedQuestionID) { noteActivity() }
+            .onChange(of: q.messages.count) { noteActivity() }
             .onDisappear {
                 saveDraft()
                 model.saveNow()
@@ -298,6 +325,7 @@ struct QuestionBlock: View {
             }
             // 打字停顿 1 秒自动保存
             .onChange(of: draft) {
+                noteActivity()
                 draftSaveTask?.cancel()
                 draftSaveTask = Task {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -549,14 +577,18 @@ struct QuestionBlock: View {
         // 侧栏、笔记栏都打开时这一栏会很窄：先收紧间距，还放不下就把“看答案”收进“⋯”。
         // 每个按钮的字都不换行
         ViewThatFits(in: .horizontal) {
-            actionButtons(q, spacing: 20, collapse: false)
-            actionButtons(q, spacing: 12, collapse: false)
-            actionButtons(q, spacing: 12, collapse: true)
+            actionButtons(q, spacing: 20, collapse: .none)
+            actionButtons(q, spacing: 12, collapse: .none)
+            actionButtons(q, spacing: 12, collapse: .solution)
+            actionButtons(q, spacing: 12, collapse: .both)
         }
         .buttonStyle(InkTextButtonStyle())
     }
 
-    private func actionButtons(_ q: Question, spacing: CGFloat, collapse: Bool) -> some View {
+    /// 放不下时收进“⋯”的按钮
+    private enum Collapse { case none, solution, both }
+
+    private func actionButtons(_ q: Question, spacing: CGFloat, collapse: Collapse) -> some View {
         let busy = store.isBusy(qID)
         let empty = model.isEmpty && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return HStack(spacing: spacing) {
@@ -579,20 +611,33 @@ struct QuestionBlock: View {
                 .disabled(busy)
                 .accessibilityHint(L("还没写时给下一档提示；写了一些时找出卡在哪一步"))
 
-                if q.status != .revealed {
-                    if collapse {
-                        Menu {
-                            Button(L("看答案"), systemImage: "eye") { store.requestSolution(setID, qID) }
-                        } label: {
-                            Image(systemName: "ellipsis.circle").imageScale(.large)
-                        }
-                        .disabled(busy)
-                    } else {
-                        Button { store.requestSolution(setID, qID) } label: {
-                            Text("看答案").lineLimit(1).fixedSize()
-                        }
-                        .disabled(busy)
+                // 下一步：卡太久写不下去，让 AI 接着写出一步
+                if collapse != .both {
+                    Button { requestNextStep() } label: {
+                        Text("下一步").lineLimit(1).fixedSize()
                     }
+                    .disabled(busy)
+                    .accessibilityHint(L("AI 接着你写的，直接写出下一步"))
+                }
+
+                let solutionInMenu = collapse != .none && q.status != .revealed
+                if collapse == .both || solutionInMenu {
+                    Menu {
+                        if collapse == .both {
+                            Button(L("下一步"), systemImage: "arrow.turn.down.right") { requestNextStep() }
+                        }
+                        if solutionInMenu {
+                            Button(L("看答案"), systemImage: "eye") { store.requestSolution(setID, qID) }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle").imageScale(.large)
+                    }
+                    .disabled(busy)
+                } else if q.status != .revealed {
+                    Button { store.requestSolution(setID, qID) } label: {
+                        Text("看答案").lineLimit(1).fixedSize()
+                    }
+                    .disabled(busy)
                 }
             } else if let nextID {
                 // 做对了：“检查”的位置换成“下一题”，刚点完检查的地方就能接着往下做
@@ -634,6 +679,57 @@ struct QuestionBlock: View {
         saveDraft()
         model.saveNow()
         store.reportStuck(setID, qID, answer: draft, handwriting: model.exportJPEG())
+    }
+
+    private func requestNextStep() {
+        withAnimation(.easeOut(duration: 0.2)) { showNudge = false }
+        saveDraft()
+        model.saveNow()
+        store.requestNextStep(setID, qID, answer: draft, handwriting: model.exportJPEG())
+    }
+
+    // MARK: 停笔太久
+
+    /// 写字、打字、收到回复、换题、App 回到前台：重新计时，收起提醒
+    private func noteActivity() {
+        activity.touch()
+        if showNudge { withAnimation(.easeOut(duration: 0.2)) { showNudge = false } }
+    }
+
+    private func checkIdle() {
+        guard !showNudge, nudgeMinutes > 0, scenePhase == .active,
+              store.selectedQuestionID == qID, !store.isBusy(qID),
+              let q = store.question(setID, qID), q.status != .passed,
+              Date().timeIntervalSince(activity.last) >= Double(nudgeMinutes) * 60 else { return }
+        withAnimation(.easeOut(duration: 0.25)) { showNudge = true }
+    }
+
+    private func nextStepNudge(_ q: Question) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "pencil.and.outline").foregroundStyle(Ink.pen)
+            Text(model.isEmpty && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                 ? L("好一会儿没动笔了。不知道怎么开始的话，可以让 AI 写出第一步。")
+                 : L("停在这里好一会儿了。写不下去的话，可以让 AI 接着写出一步。"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button(L("写出下一步")) { requestNextStep() }
+                .buttonStyle(InkTextButtonStyle())
+                .lineLimit(1)
+                .fixedSize()
+            Button {
+                noteActivity()
+            } label: {
+                Image(systemName: "xmark").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(L("不用"))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Ink.note)
+        .shadow(color: .black.opacity(0.06), radius: 2, x: 0, y: 1)
     }
 
     private var askPopover: some View {
@@ -932,7 +1028,8 @@ struct MarginNotes: View {
         case .verdictWrong: return L("检查")
         case .hint:
             if m.isStuckHelp { return L("卡了") }
-            let n = before.filter { $0.kind == .hint && !$0.isStuckHelp }.count + 1
+            if m.isNextStep { return L("下一步") }
+            let n = before.filter(\.isLeveledHint).count + 1
             return "\(n) " + Tutor.hintLevelShortName(m.hintLevel ?? n)
         case .chat: return String(localized: "问 \(before.filter { $0.kind == .chat }.count + 1)")
         case .solution: return L("答案")
@@ -946,7 +1043,7 @@ struct MarginNotes: View {
     private func hintLevel(_ m: ChatMessage, in q: Question) -> Int {
         if let level = m.hintLevel { return level }
         guard let i = q.messages.firstIndex(where: { $0.id == m.id }) else { return 1 }
-        return q.messages[...i].filter { $0.kind == .hint && !$0.isStuckHelp }.count
+        return q.messages[...i].filter(\.isLeveledHint).count
     }
 
     /// 这条回复前面学生说的话（提问、提示时的补充说明）
@@ -1027,7 +1124,9 @@ struct MarginNotes: View {
             // 便签：方角、淡淡的影子，像贴在页边
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text(message.isStuckHelp ? L("卡住的地方") : L("提示 · ") + Tutor.hintLevelName(hintLevel(message, in: q)))
+                    Text(message.isStuckHelp ? L("卡住的地方")
+                         : message.isNextStep ? L("下一步 · AI 写的")
+                         : L("提示 · ") + Tutor.hintLevelName(hintLevel(message, in: q)))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -1361,4 +1460,17 @@ struct NoteGuideBanner: View {
         .padding(.vertical, 4)
         .marginRule(Ink.blue)
     }
+}
+
+/// 停笔多久后提醒看下一步
+enum NextStepNudge {
+    static let storageKey = "nextStepNudgeMinutes"
+    static let defaultMinutes = 3
+    static let choices = [0, 2, 3, 5, 10]
+}
+
+/// 记下上次动笔的时间。是个引用，写字时改它不会让界面重算
+final class ActivityClock {
+    private(set) var last = Date()
+    func touch() { last = Date() }
 }

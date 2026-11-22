@@ -301,7 +301,7 @@ struct PDFDocumentBuilder {
             switch m.kind {
             case .verdictCorrect: title = L("检查：对了")
             case .verdictWrong: title = L("检查：找到要改的地方")
-            case .hint: title = m.isStuckHelp ? L("卡住的地方") : L("提示")
+            case .hint: title = m.isStuckHelp ? L("卡住的地方") : m.isNextStep ? L("AI 写的下一步") : L("提示")
             case .chat: title = m.role == .user ? L("我问") : L("AI 回答")
             case .solution:
                 // 答案已经放在“参考答案”里，或者选了不带答案

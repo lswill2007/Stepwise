@@ -190,6 +190,31 @@ extension Tutor {
         return s
     }
 
+    static func nextStepInstruction(hasImage: Bool, typed: String) -> String {
+        guard AILanguage.isEnglish else { return nextStepInstructionZH(hasImage: hasImage, typed: typed) }
+        var s = "I've been stuck here for a long time and can't write the next step."
+        if hasImage {
+            s += " My handwriting so far is attached too (the line numbers are only for you to locate things)."
+        }
+        if !typed.isEmpty {
+            s += "\n[What I typed]\n\(clip(typed, 1500))"
+        }
+        if !hasImage && typed.isEmpty {
+            s += " I haven't written anything yet and don't know where to start."
+        }
+        s += """
+
+        Please write the very next step for me, just one step:
+        1. First go through what I've written, in order. If an earlier step is wrong and that's why I can't continue: in your first sentence say which step it is (quote what I wrote) and what's wrong, then write the corrected version of that step, and stop there.
+        2. If everything so far is fine: in your first sentence say where you're continuing from (quote the last expression I wrote); if I haven't written anything yet, write the first step.
+        3. Put the expression for this step on its own line as $$...$$, written so I can copy it straight onto my page; one step means one line, or two or three closely linked lines written together.
+        4. Finish with one or two sentences on why this step is written this way: which condition, formula or method it uses.
+        5. Write only this step. Don't carry the calculation further, and don't write the final answer (unless this step is itself the last step).
+        6. The line numbers are only for you to locate things; I can't see them, so don't say "line 3". Keep it short, like a teacher adding one line to my page.
+        """
+        return s
+    }
+
     static func stepQuestion(_ text: String, done: Bool) -> String {
         guard AILanguage.isEnglish else { return stepQuestionZH(text, done: done) }
         let (question, detailed) = AskPreset.resolve(text, in: .step)
@@ -241,6 +266,8 @@ extension Tutor {
                 if let note = m.note, !note.isEmpty {
                     lines.append("- When asking for a hint, the student added: \(clip(note, 200))")
                 }
+            case .hint where m.isNextStep:
+                lines.append("- The student was stuck, and the AI wrote the next step for them: \(clip(m.text, 300))")
             case .hint:
                 hints += 1
                 lines.append("- Hint \(hints): \(clip(m.text, 300))")

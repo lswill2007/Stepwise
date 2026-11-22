@@ -767,3 +767,14 @@
 "页边问答" = "Margin Q&A";
 "PDF" = "PDF";
 "默认存在“我的 iPad › Stepwise Files”：点“选择文件夹”，在左边点“我的 iPad”，再点“打开”。Stepwise 会在那里找 Stepwise Files 文件夹，没有就新建一个，然后自动读取里面的数据；里面还没有数据时，把现在的数据复制进去。也可以选 iCloud 云盘。更新或重新安装 App 后，重新选同一个位置就能读到原来的数据。原来位置的数据不会删除。API Key、服务商、选的模型和常用模型、学习时间和周报、其他设置也会存在这个文件夹里（settings.json，API Key 没有加密，请不要把文件夹分享给别人）。" = "By default, data lives in “On My iPad › Stepwise Files”: tap “Choose Folder”, tap “On My iPad” on the left, then tap “Open”. Stepwise looks for a Stepwise Files folder there, creates one if needed, and loads its data automatically; if it has no data yet, your current data is copied in. You can also choose iCloud Drive. After updating or reinstalling the app, choose the same place again to get your data back. Data at the previous location is never deleted. Your API keys, providers, chosen and favorite models, study time and weekly reports, and other settings are also stored in this folder (settings.json — API keys are not encrypted, so don't share the folder).";
+"下一步 · AI 写的" = "Next Step · Written by AI";
+"AI 写的下一步" = "Next Step Written by AI";
+"写出下一步" = "Write the Next Step";
+"正在写下一步…" = "Writing the next step…";
+"AI 接着你写的，直接写出下一步" = "The AI continues from what you wrote and writes the next step";
+"好一会儿没动笔了。不知道怎么开始的话，可以让 AI 写出第一步。" = "You haven't written anything for a while. If you're not sure how to start, the AI can write the first step.";
+"停在这里好一会儿了。写不下去的话，可以让 AI 接着写出一步。" = "You've been stopped here for a while. If you can't go on, the AI can write the next step.";
+"不用" = "Dismiss";
+"不提醒" = "Off";
+"停笔多久后提醒看下一步" = "Suggest Next Step After a Pause";
+"做题时这么久没写字，就在按钮下面提醒可以让 AI 接着写出一步" = "If you haven't written for this long, a note under the buttons offers to have the AI write the next step";

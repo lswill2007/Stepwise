@@ -318,6 +318,31 @@ enum Tutor {
         return s
     }
 
+    /// 点“下一步”：卡了太久写不下去，让 AI 接着已经写的直接写出一步（只写一步）
+    static func nextStepInstructionZH(hasImage: Bool, typed: String) -> String {
+        var s = "我卡在这里很久了，写不出下一步。"
+        if hasImage {
+            s += "我到目前为止的手写也附上了（行号只给你定位用）。"
+        }
+        if !typed.isEmpty {
+            s += "\n【我打的字】\n\(clip(typed, 1500))"
+        }
+        if !hasImage && typed.isEmpty {
+            s += "我还没写什么，不知道从哪里开始。"
+        }
+        s += """
+
+        请直接替我写出紧接着的下一步，只写一步：
+        1. 先按顺序看一遍我已经写的。如果前面有一步写错了，才导致写不下去：第一句话指出是哪一步（引用我写的式子）、错在哪，然后写出改正后的那一步，不要再往下写。
+        2. 前面都没问题：第一句话说接在哪里往下写（引用我写的最后一个式子）；我还没写什么，就写出第一步。
+        3. 把这一步的式子单独成行写成 $$...$$，写成我能直接抄到纸上的样子；一步就是一行，或者紧密相连、一起写出来的两三行。
+        4. 最后用一两句话说明这一步为什么这样写：用了哪个条件、公式或方法。
+        5. 只写这一步，不要往下算，也不要写出最终答案（除非这一步本身就是最后一步）。
+        6. 行号只给你定位用，我看不到，不要说“第几行”。整体简洁，像老师在我纸上补写一行。
+        """
+        return s
+    }
+
     /// 用笔圈出一步来提问
     static func stepQuestionZH(_ text: String, done: Bool) -> String {
         // 点的是常用问题：换成具体的问法；“详细过程”这类不限几句话
@@ -368,6 +393,8 @@ enum Tutor {
                 if let note = m.note, !note.isEmpty {
                     lines.append("- 学生请求提示时补充说：\(clip(note, 200))")
                 }
+            case .hint where m.isNextStep:
+                lines.append("- 学生卡住时，AI 替学生写出了下一步：\(clip(m.text, 300))")
             case .hint:
                 hints += 1
                 lines.append("- 第 \(hints) 次提示：\(clip(m.text, 300))")

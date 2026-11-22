@@ -15,6 +15,7 @@ struct SettingsView: View {
     @State private var importMessage: String?
     @AppStorage("clockEnabled") private var clockEnabled = false
     @AppStorage("clockScale") private var clockScale: Double = 1
+    @AppStorage(NextStepNudge.storageKey) private var nudgeMinutes = NextStepNudge.defaultMinutes
     @AppStorage(AILanguage.storageKey) private var aiLanguage: String = AILanguage.auto.rawValue
     @State private var pane: Pane? = .study
     /// “推荐模型组合”里选的服务商；nil 时用当前使用的服务商
@@ -313,6 +314,17 @@ struct SettingsView: View {
             }
 
             Toggle("显示用时", isOn: $store.showTiming)
+
+            Picker(selection: $nudgeMinutes) {
+                ForEach(NextStepNudge.choices, id: \.self) { m in
+                    Text(m == 0 ? L("不提醒") : String(localized: "\(m) 分钟")).tag(m)
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("停笔多久后提醒看下一步")
+                    Text("做题时这么久没写字，就在按钮下面提醒可以让 AI 接着写出一步").font(.caption).foregroundStyle(.secondary)
+                }
+            }
         } header: {
             Text("检查速度")
         } footer: {

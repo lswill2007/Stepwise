@@ -38,6 +38,11 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// hintLevel 为这个值：点“卡了”得到的点拨，不算提示的档次
     static let stuckHintLevel = 0
     var isStuckHelp: Bool { kind == .hint && hintLevel == Self.stuckHintLevel }
+    /// hintLevel 为这个值：点“下一步”由 AI 直接写出的一步，也不算提示的档次
+    static let nextStepHintLevel = -1
+    var isNextStep: Bool { kind == .hint && hintLevel == Self.nextStepHintLevel }
+    /// 按档次算的提示（思路 → 关键一步 → 下一步写什么）；旧版本的提示没有记档次，也算
+    var isLeveledHint: Bool { kind == .hint && (hintLevel ?? 1) > 0 }
     /// 批改时标出的出错位置，画在手写区对应的那一行
     var marks: [InkMark]?
     /// 学生用橡皮擦掉的批注（marks 里的序号，从 0 开始）

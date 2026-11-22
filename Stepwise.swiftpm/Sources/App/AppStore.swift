@@ -1169,6 +1169,24 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// 点“下一步”：卡了太久写不下去，带上现在的手写和打的字，让 AI 直接接着写出一步。
+    /// 回复记成一条提示（hintLevel 为 -1），不占用提示的档次
+    func requestNextStep(_ setID: UUID, _ qID: UUID, answer: String, handwriting: Data?) {
+        let answer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let imageIDs = handwriting.map { [ImageStore.save($0)] } ?? []
+        let message = ChatMessage(role: .user, kind: .hintRequest, text: L("写出下一步"),
+                                  prompt: Tutor.nextStepInstruction(hasImage: !imageIDs.isEmpty, typed: answer),
+                                  imageIDs: imageIDs)
+        run(setID, qID, userMessage: message, replyKind: .hint, purpose: .hint, waitingLabel: L("正在写下一步…")) { [weak self] full in
+            self?.mutate(setID, qID) { q in
+                var step = ChatMessage(role: .assistant, kind: .hint, text: full)
+                step.hintLevel = ChatMessage.nextStepHintLevel
+                q.messages.append(step)
+                _ = self?.countReviewRound(&q)
+            }
+        }
+    }
+
     func requestSolution(_ setID: UUID, _ qID: UUID) {
         let message = ChatMessage(role: .user, kind: .solutionRequest, text: L("给出完整答案"), prompt: Tutor.solutionInstruction)
         run(setID, qID, userMessage: message, replyKind: .solution, purpose: .solution) { [weak self] full in
