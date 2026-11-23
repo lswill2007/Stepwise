@@ -108,6 +108,7 @@ extension AppStore {
     func deleteBoard(_ id: UUID) {
         stopBoardJob(id)
         DrawingStore.delete([id])
+        ReadingPosition.forget([id])
         boards.removeAll { $0.id == id }
         if selectedBoardID == id { selectedBoardID = nil }
     }

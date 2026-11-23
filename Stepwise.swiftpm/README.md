@@ -64,6 +64,7 @@ Sources/App/
   NoteStore.swift        笔记的增删改、生成笔记、选中提问、圈出来问、练习题编号
   NoteGuide.swift        做题卡住时找相关笔记、临时荧光笔、详细记录
   Study.swift            学习时间统计、学习日志和周报、浮动时钟
+  ReadingPosition.swift  每个题集、笔记、白板上次看到哪里（存在 UserDefaults），重新打开时回到那里
   InkShape.swift         笔的手感参数：稳定性平滑、压力灵敏度、扁平笔尖的粗细计算
   Assets.xcassets        主色 AccentColor（App 图标用 Swift Playgrounds 自带的叶子占位图标，在 Package.swift 里设置）
   Views/

@@ -405,7 +405,46 @@ struct NoteDocView: View {
     @State private var showAskField = false
     @State private var askText = ""
     @State private var showSettings = false
+    /// 上次看到哪里：每一块在看得见区域里的位置，离开时记下顶上那条线落在哪一块
+    @State private var reading = NoteReading()
     @Environment(\.scenePhase) private var scenePhase
+
+    final class NoteReading {
+        var frames: [UUID: CGRect] = [:]
+        var order: [UUID] = []
+        var ready = false
+        var position: ReadingPosition?
+        let restorer = ScrollRestorer()
+
+        /// 看得见区域顶上往下这么多的一条线落在哪一块里
+        static let line: CGFloat = 60
+
+        func track() {
+            guard ready, !restorer.restoring else { return }
+            let line = Self.line
+            let current = order.first { frames[$0].map { $0.minY <= line && $0.maxY > line } ?? false }
+                ?? order.first { frames[$0].map { $0.minY > line } ?? false }
+            position = current.flatMap { id in
+                frames[id].map { ReadingPosition(item: id, part: Double((line - $0.minY) / max($0.height, 1))) }
+            }
+        }
+
+        /// 把页面挪到这个位置，等排版稳定下来；这期间不记新位置
+        func hold(_ position: ReadingPosition, done: @escaping () -> Void = {}) {
+            guard let item = position.item else { return }
+            self.position = position
+            ready = false
+            restorer.restore { [weak self] in
+                guard let frame = self?.frames[item] else { return nil }
+                let offset = position.part.map { CGFloat($0) * frame.height } ?? CGFloat(position.y)
+                return offset - (Self.line - frame.minY)
+            } done: { [weak self] in
+                self?.ready = true
+                self?.track()
+                done()
+            }
+        }
+    }
 
     var body: some View {
         if let doc = store.note(noteID) {
@@ -424,6 +463,11 @@ struct NoteDocView: View {
                                     return height > 0 && frame.maxY > 40 && frame.minY < height - 80
                                 } action: { [noteID] isVisible in
                                     NoteViewport.shared.set(block.id, visible: isVisible, in: noteID)
+                                }
+                                // 在看得见区域里的位置：记下看到哪里，下次打开回到这里
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { frame in
+                                    reading.frames[block.id] = frame
+                                    reading.track()
                                 }
                                 // 记下每一块的位置：空白处的笔迹跟着它上面那一块挪
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.pageSpace)) } action: { [scale = paperScale(doc)] frame in
@@ -444,6 +488,7 @@ struct NoteDocView: View {
                         // 给底部的工具条留位置
                         Color.clear.frame(height: 150)
                     }
+                    .findsScrollView(reading.restorer)
                     // 正文居中；页边有展开的批注时，正文和批注一起居中，正文往左让出位置
                     .frame(width: columnWidth(doc), alignment: .leading)
                     .padding(.horizontal, pagePadding)
@@ -465,8 +510,11 @@ struct NoteDocView: View {
                             .allowsHitTesting(false)
                     }
                 }
+                .onAppear { restorePosition(proxy, doc: doc) }
                 .onChange(of: store.noteJump) {
                     guard let target = store.noteJump else { return }
+                    reading.restorer.cancel()
+                    reading.ready = true
                     withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(target, anchor: .top) }
                     store.noteJump = nil
                 }
@@ -491,8 +539,14 @@ struct NoteDocView: View {
             .onChange(of: width) {
                 pageInk.scheduleSettle { settlePageInk() }
                 ink.redrawAfterResize()
+                // 页面变宽变窄（拉出、收起左栏），整页跟着缩放：顶上还是原来看着的那一处
+                if reading.ready, let position = reading.position { reading.hold(position) }
             }
-            .onChange(of: doc.blocks.map(\.id)) { pageInk.scheduleSettle { settlePageInk() } }
+            .onChange(of: doc.blocks.map(\.id)) {
+                pageInk.scheduleSettle { settlePageInk() }
+                reading.order = doc.blocks.map(\.id)
+                reading.frames = reading.frames.filter { id in doc.blocks.contains { $0.id == id.key } }
+            }
             .overlay { InkOptionsDismissLayer(tools: ink.tools) }
             .overlay(alignment: .bottom) { bottomBar(doc, busy: job != nil) }
             .navigationTitle(doc.title)
@@ -523,9 +577,15 @@ struct NoteDocView: View {
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .onChange(of: scenePhase) {
-                if scenePhase != .active { ink.saveAll() }
+                if scenePhase != .active {
+                    ink.saveAll()
+                    savePosition()
+                }
             }
-            .onDisappear { ink.saveAll() }
+            .onDisappear {
+                ink.saveAll()
+                savePosition()
+            }
             // 问答补进笔记、插在一块中间：这一块插入点下面的笔迹跟着往下挪
             .onReceive(NotificationCenter.default.publisher(for: .noteInkShift)) { note in
                 guard let request = note.object as? InkShiftRequest,
@@ -552,6 +612,26 @@ struct NoteDocView: View {
 
     /// 页面内容的坐标（整页涂鸦用）
     private static let pageSpace = "notePage"
+
+    /// 打开笔记时回到上次看到的那一块、那一块里的那个位置
+    private func restorePosition(_ proxy: ScrollViewProxy, doc: NoteDoc) {
+        reading.order = doc.blocks.map(\.id)
+        guard let saved = ReadingPosition.load(noteID), let item = saved.item, doc.blocks.contains(where: { $0.id == item }) else {
+            reading.ready = true
+            return
+        }
+        reading.position = saved
+        reading.ready = false
+        // 等页面排好版再翻过去
+        DispatchQueue.main.async {
+            proxy.scrollTo(item, anchor: .top)
+            reading.hold(saved)
+        }
+    }
+
+    private func savePosition() {
+        if let position = reading.position { ReadingPosition.save(position, for: noteID) }
+    }
 
     /// 排版停下来以后，空白处的笔迹跟着它上面那一块挪
     private func settlePageInk() {

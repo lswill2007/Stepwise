@@ -946,6 +946,7 @@ final class AppStore: ObservableObject {
 
     func deleteSet(_ id: UUID) {
         guard let s = set(id) else { return }
+        ReadingPosition.forget([id])
         for q in s.questions { cancelReply(q.id) }
         ImageStore.delete(s.questions.flatMap { q in q.imageIDs + q.messages.flatMap(\.imageIDs) })
         DrawingStore.delete(s.questions.map(\.id))

@@ -65,6 +65,9 @@ struct NotebookView: View {
         /// 刚打开时先翻到选中的那道题，翻完才开始报。
         /// 否则页面一排出来（第一题在最上面）就把“第一题”报上去，盖掉了要翻到的题，页面就停在第一题
         var ready = false
+        /// 现在看到哪里（顶上那条线在哪道题里、离题目顶端多远），离开页面时存下来
+        var position: ReadingPosition?
+        let restorer = ScrollRestorer()
     }
 
     @StateObject private var ink = NotebookInk()
@@ -104,6 +107,7 @@ struct NotebookView: View {
                     // 给底部的工具条留位置
                     Color.clear.frame(height: 110)
                 }
+                .findsScrollView(tracker.restorer)
                 .padding(.horizontal, 28)
                 .frame(maxWidth: 1100)
                 .frame(maxWidth: .infinity)
@@ -112,15 +116,26 @@ struct NotebookView: View {
             // 页面从导航栏下面开始，翻到哪道题按导航栏下面那一条线算
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { tracker.topInset = $0 }
             .onAppear {
-                // 等页面排好版再翻到选中的题
+                // 等页面排好版再翻到选中的题；上次就停在这道题，回到上次看到的地方
                 DispatchQueue.main.async {
-                    scroll(proxy, to: store.selectedQuestionID, animated: false)
-                    tracker.ready = true
+                    let target = store.selectedQuestionID
+                    scroll(proxy, to: target, animated: false)
+                    guard let saved = ReadingPosition.load(fileID), let target, saved.item == target else {
+                        tracker.ready = true
+                        return
+                    }
+                    tracker.position = saved
+                    tracker.quietUntil = .distantFuture
+                    hold(saved)
                 }
             }
             // 左边目录点了哪道题，就翻到哪道题（翻页时自己报上去的不算）
             .onChange(of: store.selectedQuestionID) {
                 guard let id = store.selectedQuestionID, id != tracker.reported else { return }
+                if tracker.restorer.restoring {
+                    tracker.restorer.cancel()
+                    tracker.ready = true
+                }
                 scroll(proxy, to: id, animated: true)
             }
         }
@@ -131,7 +146,11 @@ struct NotebookView: View {
         .background(Ink.paper)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         // 收起、拉出左栏：手写区留着不重建，宽度停下来后逼画布重画一遍
-        .onChange(of: width) { ink.redrawAfterResize() }
+        .onChange(of: width) {
+            ink.redrawAfterResize()
+            // 页面变宽变窄（拉出、收起左栏）：题目重新排版，顶上还是原来看着的那一处
+            if tracker.ready, let position = tracker.position { hold(position) }
+        }
         .overlay { InkOptionsDismissLayer(tools: ink.tools) }
         .overlay(alignment: .bottom) {
             if HandwritingModel.isAvailable && !items.isEmpty {
@@ -174,12 +193,42 @@ struct NotebookView: View {
             }
         }
         .onChange(of: scenePhase) {
-            if scenePhase != .active { ink.saveAll() }
+            if scenePhase != .active {
+                ink.saveAll()
+                savePosition()
+            }
         }
-        .onDisappear { ink.saveAll() }
+        .onDisappear {
+            ink.saveAll()
+            savePosition()
+        }
     }
 
     private static let scrollSpace = "notebookScroll"
+    /// 翻到哪道题按导航栏下面多远的一条线算：翻到某道题时题目顶端正好在导航栏下沿，线再往下一点，免得算成上一道
+    private static let lineBelowBar: CGFloat = 80
+
+    /// 位置按题集记；错题本用它固定的 id
+    private var fileID: UUID { setID ?? AppStore.mistakeBookID }
+
+    private func savePosition() {
+        if let position = tracker.position { ReadingPosition.save(position, for: fileID) }
+    }
+
+    /// 把页面挪到这个位置，等排版稳定下来；这期间不报题、不记新位置
+    private func hold(_ position: ReadingPosition) {
+        guard let item = position.item else { return }
+        tracker.position = position
+        tracker.ready = false
+        tracker.quietUntil = .distantFuture
+        tracker.restorer.restore {
+            tracker.frames[item].map { CGFloat(position.y) - (tracker.topInset + Self.lineBelowBar - $0.minY) }
+        } done: {
+            tracker.quietUntil = Date()
+            tracker.ready = true
+            reportScrolledQuestion()
+        }
+    }
 
     /// 主动翻到某道题。翻页动画经过的题不报给左边目录，免得目录跟着闪
     private func scroll(_ proxy: ScrollViewProxy, to id: UUID?, animated: Bool) {
@@ -195,13 +244,16 @@ struct NotebookView: View {
 
     /// 翻到哪道题，左边目录就跟着选中哪道题：页面顶上那一条线落在哪道题里就是哪道
     private func reportScrolledQuestion() {
-        guard tracker.ready, Date() >= tracker.quietUntil else { return }
-        // 翻到某道题时题目顶端正好在导航栏下沿，线再往下一点，免得算成上一道
-        let line = tracker.topInset + 80
+        guard tracker.ready else { return }
+        let line = tracker.topInset + Self.lineBelowBar
         let frames = tracker.frames
         let current = frames.first { $0.value.minY <= line && $0.value.maxY > line }?.key
             ?? frames.filter { $0.value.minY > line }.min { $0.value.minY < $1.value.minY }?.key
-        guard let current, current != tracker.reported else { return }
+        // 翻页动画期间也记：动画停下来以后不会再报位置
+        if let current, let frame = frames[current] {
+            tracker.position = ReadingPosition(item: current, y: line - frame.minY)
+        }
+        guard Date() >= tracker.quietUntil, let current, current != tracker.reported else { return }
         tracker.reported = current
         if store.selectedQuestionID != current { store.selectedQuestionID = current }
     }

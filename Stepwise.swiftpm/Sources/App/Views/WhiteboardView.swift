@@ -130,6 +130,16 @@ final class BoardState: ObservableObject {
     var stickyHeights: [UUID: CGFloat] = [:]
     /// 正在拖（或刚拖过）的便签放在最上面
     @Published var raisedNote: UUID?
+    /// 打开时回到上次的位置和缩放：白板第一次有了尺寸时用上
+    var pendingRestore: ReadingPosition?
+    /// 上次看到的最下沿（纸的坐标）：画布至少要这么高，才滚得回去
+    private var restoredBottom: CGFloat = 0
+
+    /// 现在的位置和缩放，下次打开回到这里
+    var position: ReadingPosition? {
+        guard let canvas, canvas.zoomScale > 0 else { return nil }
+        return ReadingPosition(x: canvas.contentOffset.x, y: canvas.contentOffset.y, zoom: canvas.zoomScale)
+    }
 
     func syncViewport() {
         guard let canvas else { return }
@@ -155,7 +165,7 @@ final class BoardState: ObservableObject {
         let zoom = max(canvas.zoomScale, 0.01)
         let drawing = model.drawing
         let bottom = drawing.strokes.isEmpty ? 0 : drawing.bounds.maxY
-        let needed = max(2400, bottom + 1200, notesBottom + 800, visibleSize.height / zoom)
+        let needed = max(2400, bottom + 1200, notesBottom + 800, visibleSize.height / zoom, restoredBottom)
         let height = (needed / Self.growStep).rounded(.up) * Self.growStep
         let size = CGSize(width: Whiteboard.canvasWidth * zoom, height: height * zoom)
         if abs(canvas.contentSize.width - size.width) > 0.5 || abs(canvas.contentSize.height - size.height) > 0.5 {
@@ -171,7 +181,24 @@ final class BoardState: ObservableObject {
         if abs(canvas.minimumZoomScale - minZoom) > 0.001 { canvas.minimumZoomScale = minZoom }
         if canvas.maximumZoomScale != 3 { canvas.maximumZoomScale = 3 }
         updateContentSize()
+        if let restore = pendingRestore {
+            pendingRestore = nil
+            apply(restore)
+        }
         syncViewport()
+    }
+
+    /// 回到上次的位置和缩放
+    private func apply(_ position: ReadingPosition) {
+        guard let canvas else { return }
+        let zoom = min(max(CGFloat(position.zoom), canvas.minimumZoomScale), canvas.maximumZoomScale)
+        if abs(canvas.zoomScale - zoom) > 0.001 { canvas.zoomScale = zoom }
+        restoredBottom = (CGFloat(position.y) + visibleSize.height) / zoom
+        updateContentSize()
+        var offset = CGPoint(x: position.x, y: position.y)
+        offset.x = min(max(0, offset.x), max(0, canvas.contentSize.width - visibleSize.width))
+        offset.y = min(max(0, offset.y), max(0, canvas.contentSize.height - visibleSize.height))
+        if offset != canvas.contentOffset { canvas.contentOffset = offset }
     }
 
     /// 让画布上这一块露出来（便签按屏幕大小算，宽度不随缩放变）；已经看得见就不动
@@ -708,6 +735,9 @@ struct WhiteboardView: View {
                 model.onCircleStroke = { [weak state] stroke in state?.select(circle: stroke) }
                 model.onDrawingChanged = { [weak state] in state?.drawingChanged() }
                 state.notesBottom = Self.notesBottom(board)
+                // 回到上次看到的地方
+                state.pendingRestore = ReadingPosition.load(boardID)
+                state.layout()
             }
             .onChange(of: board.notes) { old, new in
                 state.notesBottom = Self.notesBottom(board)
@@ -718,12 +748,23 @@ struct WhiteboardView: View {
                 }
             }
             .onChange(of: scenePhase) {
-                if scenePhase != .active { ink.saveAll() }
+                if scenePhase != .active {
+                    ink.saveAll()
+                    savePosition()
+                }
             }
-            .onDisappear { ink.saveAll() }
+            .onDisappear {
+                ink.saveAll()
+                savePosition()
+            }
         } else {
             ContentUnavailableView("白板不存在", systemImage: "rectangle.and.pencil.and.ellipsis")
         }
+    }
+
+    private func savePosition() {
+        // 还没来得及排版（刚打开就离开）：留着原来记的位置
+        if state.pendingRestore == nil, let position = state.position { ReadingPosition.save(position, for: boardID) }
     }
 
     /// 便签大概写到哪里（画布坐标）

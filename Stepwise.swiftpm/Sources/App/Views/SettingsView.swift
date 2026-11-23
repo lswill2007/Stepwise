@@ -710,7 +710,7 @@ struct ProviderEditView: View {
         .navigationBarBackButtonHidden(shouldAskToSwitch)
         .toolbar {
             if shouldAskToSwitch {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .leadingBackButton) {
                     Button { askSwitch = true } label: {
                         Image(systemName: "chevron.backward")
                     }
@@ -1399,5 +1399,16 @@ private struct LargeSheetSizing: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+private extension ToolbarItemPlacement {
+    /// 自己画的返回按钮放在左上角（Mac 上没有 topBarLeading）
+    static var leadingBackButton: ToolbarItemPlacement {
+        #if os(iOS)
+        .topBarLeading
+        #else
+        .navigation
+        #endif
     }
 }

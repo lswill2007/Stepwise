@@ -93,6 +93,7 @@ extension AppStore {
             DrawingStore.delete(doc.blocks.map(\.id) + [id])
         }
         notes.removeAll { $0.id == id }
+        ReadingPosition.forget([id])
         if selectedNoteID == id { selectedNoteID = nil }
     }
 

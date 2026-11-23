@@ -188,11 +188,15 @@ struct SidebarView: View {
             }
             store.selectedNoteID = nil
             store.selectedSetID = id
+            // 上次看到哪道题就回到哪道题；没看过的从第一道没做完的题开始
+            let last = id.flatMap { ReadingPosition.load($0)?.item }
             if id == AppStore.mistakeBookID {
-                store.selectedQuestionID = store.starredEntries.first?.question.id
+                let entries = store.starredEntries.map(\.question.id)
+                store.selectedQuestionID = entries.first { $0 == last } ?? entries.first
             } else {
-                store.selectedQuestionID = store.set(id)?.questions.first(where: { !$0.status.isDone })?.id
-                    ?? store.set(id)?.questions.first?.id
+                let questions = store.set(id)?.questions ?? []
+                store.selectedQuestionID = questions.first(where: { $0.id == last })?.id
+                    ?? questions.first(where: { !$0.status.isDone })?.id ?? questions.first?.id
             }
         })
     }
