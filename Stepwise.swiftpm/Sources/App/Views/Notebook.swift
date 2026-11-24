@@ -68,6 +68,7 @@ struct NotebookView: View {
         /// 现在看到哪里（顶上那条线在哪道题里、离题目顶端多远），离开页面时存下来
         var position: ReadingPosition?
         let restorer = ScrollRestorer()
+        let autosave = PositionAutosave()
     }
 
     @StateObject private var ink = NotebookInk()
@@ -252,6 +253,7 @@ struct NotebookView: View {
         // 翻页动画期间也记：动画停下来以后不会再报位置
         if let current, let frame = frames[current] {
             tracker.position = ReadingPosition(item: current, y: line - frame.minY)
+            tracker.autosave.changed(fileID) { [tracker] in tracker.position }
         }
         guard Date() >= tracker.quietUntil, let current, current != tracker.reported else { return }
         tracker.reported = current

@@ -132,6 +132,9 @@ final class BoardState: ObservableObject {
     @Published var raisedNote: UUID?
     /// 打开时回到上次的位置和缩放：白板第一次有了尺寸时用上
     var pendingRestore: ReadingPosition?
+    /// 这块白板；打开以后才设，之前的滚动（画布刚排版、还没回到上次的位置）不存
+    var boardID: UUID?
+    private let autosave = PositionAutosave()
     /// 上次看到的最下沿（纸的坐标）：画布至少要这么高，才滚得回去
     private var restoredBottom: CGFloat = 0
 
@@ -139,6 +142,16 @@ final class BoardState: ObservableObject {
     var position: ReadingPosition? {
         guard let canvas, canvas.zoomScale > 0 else { return nil }
         return ReadingPosition(x: canvas.contentOffset.x, y: canvas.contentOffset.y, zoom: canvas.zoomScale)
+    }
+
+    /// 滚动、缩放了：停下来以后存下位置
+    func viewportChanged() {
+        syncViewport()
+        guard let boardID, pendingRestore == nil else { return }
+        autosave.changed(boardID) { [weak self] in
+            guard let self, self.pendingRestore == nil, self.canvas?.window != nil else { return nil }
+            return self.position
+        }
     }
 
     func syncViewport() {
@@ -641,8 +654,8 @@ struct BoardCanvas: UIViewRepresentable {
             return !canvas.isPencilDown && canvas.drawingPolicy != .anyInput
         }
 
-        @objc func scrollViewDidScroll(_ scrollView: UIScrollView) { state.syncViewport() }
-        @objc func scrollViewDidZoom(_ scrollView: UIScrollView) { state.syncViewport() }
+        @objc func scrollViewDidScroll(_ scrollView: UIScrollView) { state.viewportChanged() }
+        @objc func scrollViewDidZoom(_ scrollView: UIScrollView) { state.viewportChanged() }
         @objc func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
             state.updateContentSize()
             state.syncViewport()
@@ -738,6 +751,7 @@ struct WhiteboardView: View {
                 state.notesBottom = Self.notesBottom(board)
                 // 回到上次看到的地方
                 state.pendingRestore = ReadingPosition.load(boardID)
+                state.boardID = boardID
                 state.layout()
             }
             .onChange(of: board.notes) { old, new in

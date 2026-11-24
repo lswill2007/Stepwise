@@ -415,6 +415,7 @@ struct NoteDocView: View {
         var ready = false
         var position: ReadingPosition?
         let restorer = ScrollRestorer()
+        let autosave = PositionAutosave()
 
         /// 看得见区域顶上往下这么多的一条线落在哪一块里
         static let line: CGFloat = 60
@@ -468,6 +469,7 @@ struct NoteDocView: View {
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { frame in
                                     reading.frames[block.id] = frame
                                     reading.track()
+                                    if reading.ready { reading.autosave.changed(noteID) { [reading] in reading.position } }
                                 }
                                 // 记下每一块的位置：空白处的笔迹跟着它上面那一块挪
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.pageSpace)) } action: { [scale = paperScale(doc)] frame in

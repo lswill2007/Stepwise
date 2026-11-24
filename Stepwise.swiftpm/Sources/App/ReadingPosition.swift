@@ -1,4 +1,5 @@
 import SwiftUI
+import QuartzCore
 
 /// 每个文件（题集、错题本、笔记、白板）上次看到哪里：关掉再打开时回到原来的位置。
 ///
@@ -35,6 +36,36 @@ struct ReadingPosition: Codable, Equatable {
         guard var all = UserDefaults.standard.dictionary(forKey: key) else { return }
         files.forEach { all[$0.uuidString] = nil }
         UserDefaults.standard.set(all, forKey: key)
+    }
+}
+
+/// 滚动、缩放停下来一会儿就存一次位置。只在离开页面、进后台时存的话，App 被直接结束
+/// （从 Xcode 重新运行、装新版本、被系统清掉、闪退）时最后看的地方就丢了，下次打开回到更早的位置
+final class PositionAutosave {
+    private var lastChange: CFTimeInterval = 0
+    private var scheduled = false
+    /// 停下来多久才存（秒）
+    private static let quiet: CFTimeInterval = 0.6
+
+    /// 位置变了；停下来以后读一次 position() 存下来。滚动时每一帧都会调，这里只记时间
+    func changed(_ file: UUID, _ position: @escaping () -> ReadingPosition?) {
+        lastChange = CACurrentMediaTime()
+        guard !scheduled else { return }
+        scheduled = true
+        wait(file, position)
+    }
+
+    private func wait(_ file: UUID, _ position: @escaping () -> ReadingPosition?) {
+        let remaining = max(0.05, lastChange + Self.quiet - CACurrentMediaTime())
+        DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
+            guard let self else { return }
+            if CACurrentMediaTime() - self.lastChange < Self.quiet - 0.01 {
+                self.wait(file, position)
+                return
+            }
+            self.scheduled = false
+            if let current = position() { ReadingPosition.save(current, for: file) }
+        }
     }
 }
 
