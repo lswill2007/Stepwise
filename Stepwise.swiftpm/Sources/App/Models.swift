@@ -299,6 +299,8 @@ struct BoardNote: Codable, Identifiable, Equatable {
     var minimized = false
     var createdAt = Date()
     var model: String?
+    /// 拖右下角放大、缩小的倍数（连字一起）；nil 为原来的大小
+    var scale: Double?
 }
 
 /// 便签里指出的一处：第几行（发给 AI 的图片左边印的行号）和那一行在画布上的位置

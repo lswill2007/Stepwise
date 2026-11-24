@@ -6,8 +6,10 @@ import CoreGraphics
 extension Whiteboard {
     /// 画布的宽度（纸的坐标）；高度随写的内容往下加长
     static let canvasWidth: CGFloat = 2400
-    /// 便签的宽度（屏幕上的点，不随缩放变）
+    /// 便签的宽度（屏幕上的点，不随缩放变）；拖右下角放大缩小以后乘上便签自己的倍数
     static let stickyWidth: CGFloat = 280
+    /// 便签能拖到多小、多大（倍数）
+    static let stickyScales: ClosedRange<CGFloat> = 0.75...2.5
 
     /// 框住一处后，便签放在哪里：右边放得下放右边，放不下放左边，再放不下放下面；和已有的便签叠在一起时往下挪。
     /// 便签按屏幕大小画，不随缩放变：zoom 是现在的缩放，heights 是量到的每张便签的高度（屏幕上的点）
@@ -27,7 +29,7 @@ extension Whiteboard {
         // 收起的便签只是一个小标签
         let others = notes.map { note in
             let h = note.minimized ? 34 : (heights[note.id] ?? estimatedHeight(note))
-            let w = note.minimized ? 70 : stickyWidth
+            let w = note.minimized ? 70 : note.width
             return CGRect(x: note.x, y: note.y, width: Double(w / z), height: Double(h / z))
         }
         for _ in 0..<30 {
@@ -54,6 +56,10 @@ extension Whiteboard {
 
 extension BoardNote {
     var isCheck: Bool { question == nil }
+    /// 拖右下角放大缩小的倍数
+    var sizeScale: CGFloat { CGFloat(scale ?? 1) }
+    /// 便签现在的宽度（屏幕上的点）
+    var width: CGFloat { Whiteboard.stickyWidth * sizeScale }
 }
 
 extension AppStore {

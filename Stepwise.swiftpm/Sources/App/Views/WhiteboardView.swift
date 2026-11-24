@@ -975,6 +975,8 @@ private struct BoardStickyView: View {
     var onRaise: () -> Void = {}
     @State private var drag: CGSize = .zero
     @State private var enlarged = false
+    /// 正在拖右下角：拖到的倍数。拖的时候先整张缩放着看（快），松手再按新大小排字（清楚）
+    @State private var resizing: CGFloat?
 
     private var streaming: Bool { store.boardJobs[boardID] == note.id }
 
@@ -1009,7 +1011,7 @@ private struct BoardStickyView: View {
         VStack(alignment: .leading, spacing: 8) {
             header
             if !note.text.isEmpty {
-                RichText(note.text, scale: 0.86)
+                RichText(note.text, scale: 0.86 * note.sizeScale)
                     .fixedSize(horizontal: false, vertical: true)
                     // 文字在网页视图里，点击会被它吃掉：盖一层透明的来接双击
                     .overlay {
@@ -1026,8 +1028,10 @@ private struct BoardStickyView: View {
             }
         }
         .padding(12)
-        .frame(width: Whiteboard.stickyWidth, alignment: .leading)
+        .padding(.bottom, streaming ? 0 : 8)
+        .frame(width: note.width, alignment: .leading)
         .background(Ink.note, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(alignment: .bottomTrailing) { if !streaming { resizeGrip } }
         // 一条胶带
         .overlay(alignment: .top) {
             Rectangle().fill(Color.white.opacity(0.45))
@@ -1037,6 +1041,53 @@ private struct BoardStickyView: View {
                 .allowsHitTesting(false)
         }
         .shadow(color: .black.opacity(0.16), radius: 6, x: 1, y: 3)
+        .scaleEffect((resizing ?? note.sizeScale) / note.sizeScale, anchor: .topLeading)
+    }
+
+    /// 右下角的三道斜线：拖它放大、缩小便签（字跟着变大变小）；点两下回到原来的大小
+    private var resizeGrip: some View {
+        Canvas { context, size in
+            for k in 0..<3 {
+                let d = CGFloat(k) * 4 + 4
+                var line = Path()
+                line.move(to: CGPoint(x: size.width - 6 - d, y: size.height - 6))
+                line.addLine(to: CGPoint(x: size.width - 6, y: size.height - 6 - d))
+                context.stroke(line, with: .color(.secondary.opacity(0.7)), style: StrokeStyle(lineWidth: 1.3, lineCap: .round))
+            }
+        }
+        .frame(width: 30, height: 30)
+        .contentShape(Rectangle())
+        .gesture(resizeGesture)
+        .onTapGesture(count: 2) { setScale(1) }
+        .accessibilityLabel("拖动调整便签大小")
+    }
+
+    /// 按横着拖了多远算倍数：右下角跟着手指走
+    private var resizeGesture: some Gesture {
+        DragGesture(minimumDistance: 2, coordinateSpace: .global)
+            .onChanged { value in
+                if resizing == nil { onRaise() }
+                let start = note.width
+                resizing = Self.clamp(note.sizeScale * (start + value.translation.width) / start)
+            }
+            .onEnded { _ in
+                if let resizing { setScale(resizing) }
+            }
+    }
+
+    private static func clamp(_ s: CGFloat) -> CGFloat {
+        min(max(s, Whiteboard.stickyScales.lowerBound), Whiteboard.stickyScales.upperBound)
+    }
+
+    /// 存下新的倍数；换大小和拿掉预览同时做，不加动画，免得闪一下
+    private func setScale(_ s: CGFloat) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            let value = abs(s - 1) < 0.04 ? nil : Double(s)
+            if note.scale != value { store.mutateBoardNote(boardID, note.id) { $0.scale = value } }
+            resizing = nil
+        }
     }
 
     private var header: some View {
@@ -1077,7 +1128,7 @@ private struct BoardStickyView: View {
                 .frame(width: 16, height: 16)
                 .background(Ink.red.opacity(0.85), in: Circle())
                 .padding(.top, 2)
-            RichText(comment.note, scale: 0.78)
+            RichText(comment.note, scale: 0.78 * note.sizeScale)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
