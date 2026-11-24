@@ -822,6 +822,8 @@ private struct BoardOverlay: View {
                     let spot = viewport.screen(CGPoint(x: note.x, y: note.y))
                     BoardStickyView(boardID: boardID, note: note, number: i + 1, zoom: viewport.zoom,
                                     onRaise: { if state.raisedNote != note.id { state.raisedNote = note.id } },
+                                    // 拖大时右边不超出看得见的白板，右下角的斜线一直拿得到
+                                    roomRight: state.visibleSize.width - spot.x - 12,
                                     onReturn: { putBack(note) })
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { state.stickyHeights[note.id] = $0 }
                         .zIndex(state.raisedNote == note.id ? 1 : 0)
@@ -980,6 +982,8 @@ private struct BoardStickyView: View {
     let zoom: CGFloat
     /// 开始拖：放到最上面
     var onRaise: () -> Void = {}
+    /// 便签左边到看得见的白板右边还有多宽（屏幕上的点）：拖大不超过这么宽
+    var roomRight: CGFloat = .infinity
     /// 放回框住的地方旁边
     var onReturn: () -> Void = {}
     @State private var drag: CGSize = .zero
@@ -1077,7 +1081,9 @@ private struct BoardStickyView: View {
             .onChanged { value in
                 if resizing == nil { onRaise() }
                 let start = note.width
-                resizing = Self.clamp(note.sizeScale * (start + value.translation.width) / start)
+                // 已经比这还大（白板缩小了、便签在边上）就不再变大，但不逼它变小
+                let largest = max(note.sizeScale, min(Whiteboard.stickyScales.upperBound, roomRight / Whiteboard.stickyWidth))
+                resizing = min(Self.clamp(note.sizeScale * (start + value.translation.width) / start), largest)
             }
             .onEnded { _ in
                 if let resizing { setScale(resizing) }
