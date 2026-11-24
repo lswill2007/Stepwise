@@ -221,6 +221,10 @@ final class PadCanvasView: PKCanvasView {
     // 所以换笔迹前先拍一张现在的样子垫在画布下面（画布是透明的）：没重画好的地方露出来的是截图里的字，
     // 正在写的笔画在画布上，不会被挡住。PencilKit 重画完、笔也抬起来了再拿掉
 
+    /// 写完一笔整理笔锋、换笔迹时，垫着的截图一开始就露出来（白板）。
+    /// 白板的画布是一大块，真机上 PencilKit 换完笔迹要空一两帧才重画好，截图藏着的话字就闪一下
+    var showsCoverWhileReshaping = false
+
     /// 垫在画布下面的截图（连着换了几次就有几张，一起拿掉）
     private var redrawCovers: [UIView] = []
     private var coverDeadline: DispatchWorkItem?
@@ -1398,7 +1402,7 @@ struct NotebookCanvas: UIViewRepresentable {
             let undoManager = canvasView.undoManager
             // 换之前垫一张截图（先藏着）：PencilKit 重画好之前又落笔写下一笔时露出来，刚写的字也不会消失。
             // 变了的那几笔在截图上换成新的样子，露出来时和画布上的对得上，不会糊
-            canvasView.coverWhileRedrawing(visible: false, changed: Self.changedBounds(canvasView.paperDrawing, drawing),
+            canvasView.coverWhileRedrawing(visible: canvasView.showsCoverWhileReshaping, changed: Self.changedBounds(canvasView.paperDrawing, drawing),
                                            becoming: drawing)
             applying = true
             canvasView.paperDrawing = drawing
@@ -1745,11 +1749,13 @@ struct InkPalette: View {
     /// 套索工具的名字：做题、笔记页上它只用来挪笔迹，叫“移动”，免得和“圈出来问”分不清；
     /// 白板上框住的笔迹还能发给 AI 检查，仍叫“框选”
     var lassoTitle: String = L("移动")
+    /// 一直展开：不能收起，写字时也不缩小（白板）
+    var alwaysOpen = false
     /// 手动收起（记住）；shrunk 是开始书写时自动缩小（临时的，下次打开还是展开）
     @AppStorage("inkPaletteCollapsed") private var collapsed = false
     @State private var shrunk = false
 
-    private var isSmall: Bool { collapsed || shrunk }
+    private var isSmall: Bool { !alwaysOpen && (collapsed || shrunk) }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -1789,8 +1795,8 @@ struct InkPalette: View {
         // 开始书写：缩成底边的小标签，把纸面让出来；点一下再展开
         .onReceive(tools.writingBegan) {
             guard !isSmall else { return }
-            tools.optionsShown = false
-            shrunk = true
+            if tools.optionsShown { tools.optionsShown = false }
+            if !alwaysOpen { shrunk = true }
         }
         // 换工具时，参数面板跟着换；选了没有参数的工具就收起来
         .onChange(of: tools.tool) {
@@ -1899,9 +1905,11 @@ struct InkPalette: View {
             iconButton(tools.optionsShown ? "slider.horizontal.below.square.filled.and.square" : "slider.horizontal.3", L("调节")) {
                 tools.optionsShown.toggle()
             }
-            iconButton("chevron.down", L("收起工具栏")) {
-                tools.optionsShown = false
-                collapsed = true
+            if !alwaysOpen {
+                iconButton("chevron.down", L("收起工具栏")) {
+                    tools.optionsShown = false
+                    collapsed = true
+                }
             }
         }
         .buttonStyle(.borderless)
@@ -2181,6 +2189,7 @@ struct NotebookCanvas: View {
 struct InkPalette: View {
     @ObservedObject var tools: InkTools
     var lassoTitle: String = ""
+    var alwaysOpen = false
     var body: some View { EmptyView() }
 }
 

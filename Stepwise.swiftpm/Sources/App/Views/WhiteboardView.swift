@@ -570,6 +570,7 @@ struct BoardCanvas: UIViewRepresentable {
         canvas.minimumZoomScale = 0.25
         canvas.maximumZoomScale = 3
         canvas.bouncesZoom = true
+        canvas.showsCoverWhileReshaping = true
         canvas.delegate = context.coordinator
         // 手指从最左边向右拽是拉回左栏，不是滚动画布（不在边上落下的手指，边缘手势马上就失败，不耽误滚动）
         canvas.panGestureRecognizer.require(toFail: edge)
@@ -700,7 +701,7 @@ struct WhiteboardView: View {
             .background(Ink.paper)
             .overlay(alignment: .top) { BoardEmptyHint(model: model, hasNotes: !board.notes.isEmpty) }
             .overlay { InkOptionsDismissLayer(tools: ink.tools) }
-            .overlay(alignment: .bottom) { InkPalette(tools: ink.tools, lassoTitle: L("框选")) }
+            .overlay(alignment: .bottom) { InkPalette(tools: ink.tools, lassoTitle: L("框选"), alwaysOpen: true) }
             .navigationTitle(board.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
