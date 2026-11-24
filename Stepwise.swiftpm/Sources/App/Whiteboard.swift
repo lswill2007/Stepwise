@@ -12,10 +12,11 @@ extension Whiteboard {
     static let stickyScales: ClosedRange<CGFloat> = 0.75...2.5
 
     /// 框住一处后，便签放在哪里：右边放得下放右边，放不下放左边，再放不下放下面；和已有的便签叠在一起时往下挪。
-    /// 便签按屏幕大小画，不随缩放变：zoom 是现在的缩放，heights 是量到的每张便签的高度（屏幕上的点）
-    static func stickySpot(for region: CGRect, avoiding notes: [BoardNote] = [], zoom: CGFloat = 1,
+    /// 便签按屏幕大小画，不随缩放变，所以位置一律按 1 倍缩放来排（heights 是量到的每张便签的高度，屏幕上的点）。
+    /// 以前按放便签那一刻的缩放换算：缩得很小时，上面一张高的便签在纸上折算成几千，新便签被推到老远，离框住的字很远
+    static func stickySpot(for region: CGRect, avoiding notes: [BoardNote] = [],
                            heights: [UUID: CGFloat] = [:]) -> CGPoint {
-        let z = max(zoom, 0.05)
+        let z: CGFloat = 1
         let gap: CGFloat = 28 / z
         let width = stickyWidth / z
         var spot: CGPoint
@@ -130,10 +131,23 @@ extension AppStore {
         boardJobs[boardID] = nil
     }
 
+    /// 便签放回它框住的地方旁边（离得太远、找不到时用），避开别的便签。返回放好的位置（画布坐标），好翻过去
+    @discardableResult
+    func returnBoardNote(_ boardID: UUID, _ noteID: UUID, stickyHeights: [UUID: CGFloat] = [:]) -> CGPoint? {
+        guard let board = board(boardID), let note = board.notes.first(where: { $0.id == noteID }) else { return nil }
+        let others = board.notes.filter { $0.id != noteID }
+        let spot = Whiteboard.stickySpot(for: note.region.rect, avoiding: others, heights: stickyHeights)
+        mutateBoardNote(boardID, noteID) { n in
+            n.x = spot.x
+            n.y = spot.y
+        }
+        return spot
+    }
+
     /// 框选一处发给 AI。image：框住的笔迹，左边印了行号；lines：每一行在画布上的位置（行号从 1 开始）；
     /// question 为 nil 时是检查。回复写在一张便签上，指出的问题按行号列在下面
     func askBoard(_ boardID: UUID, region: CGRect, lines: [CGRect], image: Data, question: String?,
-                  zoom: CGFloat = 1, stickyHeights: [UUID: CGFloat] = [:]) {
+                  stickyHeights: [UUID: CGFloat] = [:]) {
         guard boardTasks[boardID] == nil, board(boardID) != nil else { return }
         let purpose: RequestPurpose = question == nil ? .check : .chat
         let client: LLMClient
@@ -141,7 +155,7 @@ extension AppStore {
             if !(error is ConsentRequired) { errorMessage = error.localizedDescription }
             return
         }
-        let spot = Whiteboard.stickySpot(for: region, avoiding: board(boardID)?.notes ?? [], zoom: zoom, heights: stickyHeights)
+        let spot = Whiteboard.stickySpot(for: region, avoiding: board(boardID)?.notes ?? [], heights: stickyHeights)
         let note = BoardNote(region: InkRegion(region), x: spot.x, y: spot.y,
                              question: question?.trimmingCharacters(in: .whitespacesAndNewlines))
         mutateBoard(boardID) { board in

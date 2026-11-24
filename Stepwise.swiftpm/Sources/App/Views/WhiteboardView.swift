@@ -820,9 +820,9 @@ private struct BoardOverlay: View {
                 marks
                 ForEach(Array(board.notes.enumerated()), id: \.element.id) { i, note in
                     let spot = viewport.screen(CGPoint(x: note.x, y: note.y))
-                    BoardStickyView(boardID: boardID, note: note, number: i + 1, zoom: viewport.zoom) {
-                        if state.raisedNote != note.id { state.raisedNote = note.id }
-                    }
+                    BoardStickyView(boardID: boardID, note: note, number: i + 1, zoom: viewport.zoom,
+                                    onRaise: { if state.raisedNote != note.id { state.raisedNote = note.id } },
+                                    onReturn: { putBack(note) })
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { state.stickyHeights[note.id] = $0 }
                         .zIndex(state.raisedNote == note.id ? 1 : 0)
                         .offset(x: spot.x, y: spot.y)
@@ -884,10 +884,17 @@ private struct BoardOverlay: View {
         .allowsHitTesting(false)
     }
 
+    /// 便签放回框住的地方旁边，翻过去让它露出来
+    private func putBack(_ note: BoardNote) {
+        guard let spot = store.returnBoardNote(boardID, note.id, stickyHeights: state.stickyHeights) else { return }
+        state.raisedNote = note.id
+        state.reveal(CGRect(x: spot.x, y: spot.y, width: note.width, height: state.stickyHeights[note.id] ?? 160))
+    }
+
     private func send(_ selection: BoardSelection, question: String?) {
         guard let export = BoardExport.make(selection.strokes) else { return }
         store.askBoard(boardID, region: selection.bounds, lines: export.lines, image: export.image, question: question,
-                       zoom: viewport.zoom, stickyHeights: state.stickyHeights)
+                       stickyHeights: state.stickyHeights)
         state.selection = nil
     }
 }
@@ -973,6 +980,8 @@ private struct BoardStickyView: View {
     let zoom: CGFloat
     /// 开始拖：放到最上面
     var onRaise: () -> Void = {}
+    /// 放回框住的地方旁边
+    var onReturn: () -> Void = {}
     @State private var drag: CGSize = .zero
     @State private var enlarged = false
     /// 正在拖右下角：拖到的倍数。拖的时候先整张缩放着看（快），松手再按新大小排字（清楚）
@@ -1103,6 +1112,7 @@ private struct BoardStickyView: View {
             if !streaming {
                 Menu {
                     Button("放大查看", systemImage: "arrow.up.left.and.arrow.down.right") { enlarged = true }
+                    Button("放回框住的地方旁边", systemImage: "arrow.uturn.backward") { onReturn() }
                     Button("删除便签", systemImage: "trash", role: .destructive) { store.deleteBoardNote(boardID, note.id) }
                 } label: {
                     Image(systemName: "ellipsis").font(.caption).foregroundStyle(.secondary).frame(width: 24, height: 20)
