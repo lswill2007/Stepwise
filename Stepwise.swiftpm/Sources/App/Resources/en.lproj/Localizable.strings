@@ -806,3 +806,5 @@
 "要改用 %@ 吗？" = "Switch to %@?";
 "只填好 Key 还不会切换。做题、导入题目现在用的还是 %@，点“设为当前使用”才会改用 %@。" = "Entering a key doesn't switch providers. Practice and importing still use %1$@; tap “Use This Provider” to switch to %2$@.";
 "填好 Key 不会自动切换：点“设为当前使用”后，做题、导入题目才会用 %@。" = "Entering a key doesn't switch automatically. Tap “Use This Provider” to use %@ for practice and importing.";
+"总目录" = "Library";
+"收起目录" = "Hide Contents";

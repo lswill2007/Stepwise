@@ -36,6 +36,7 @@ final class PadCanvasView: PKCanvasView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        observePageMoves()
         // 每一笔写完时，把写的时候推迟的换笔迹补上
         drawingGestureRecognizer.addTarget(self, action: #selector(strokeGestureChanged(_:)))
         drawingGestureRecognizer.addTarget(self, action: #selector(trackAskOutline(_:)))
@@ -43,6 +44,7 @@ final class PadCanvasView: PKCanvasView {
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+        observePageMoves()
         drawingGestureRecognizer.addTarget(self, action: #selector(strokeGestureChanged(_:)))
         drawingGestureRecognizer.addTarget(self, action: #selector(trackAskOutline(_:)))
     }
@@ -213,6 +215,23 @@ final class PadCanvasView: PKCanvasView {
         }
     }
 
+    // MARK: 收起、拉出栏时垫一张截图
+    //
+    // 收起、拉出左栏或目录时，PencilKit 一看到外面的排版在变就把画好的字丢掉，等外面停下来才重画：
+    // 栏滑动的那零点几秒里手写的字整块不见（看起来像少了笔画、闪一下）。栏开始滑之前先拍一张垫在下面露着，重画好再拿掉
+
+    static let pageWillMove = Notification.Name("PadCanvasPageWillMove")
+
+    private func observePageMoves() {
+        NotificationCenter.default.addObserver(forName: Self.pageWillMove, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.window != nil, self.pendingDrawing == nil, !self.isStroking,
+                      !self.drawing.strokes.isEmpty else { return }
+                self.coverWhileRedrawing()
+            }
+        }
+    }
+
     // MARK: 用代码换笔迹时垫一张截图
     //
     // 用代码给 drawing 赋值（写完一笔整理笔锋、撤销、排版变了挪笔迹、逼它重画……）后，PencilKit 要过几帧才把变了的地方重画好。
@@ -332,10 +351,18 @@ final class PadCanvasView: PKCanvasView {
         // 画布大出文字的那一圈也要画得出来：PencilKit 只画内容范围里的笔迹
         if overflow > 0, contentSize != bounds.size { contentSize = bounds.size }
         super.layoutSubviews()
-        // 画布滚动、缩放、挪了位置：垫着的截图对不上了
-        if let cover = redrawCovers.first,
-           contentOffset != coverOffset || zoomScale != coverZoom || cover.bounds.size != bounds.size || cover.center != center {
-            removeRedrawCover()
+        // 画布滚动、缩放了：垫着的截图对不上了，拿掉。
+        // 只是挪了位置、变宽变窄（收起拉出栏以后页面重排）：笔迹按画布左上角算，截图跟着左上角挪过去接着垫着，
+        // 拿掉的话 PencilKit 重画好之前字会空一两帧
+        if let first = redrawCovers.first {
+            if contentOffset != coverOffset || zoomScale != coverZoom || first.transform != transform {
+                removeRedrawCover()
+            } else if first.bounds.size != bounds.size || first.center != center {
+                let topLeft = CGPoint(x: center.x - bounds.width / 2, y: center.y - bounds.height / 2)
+                for cover in redrawCovers {
+                    cover.center = CGPoint(x: topLeft.x + cover.bounds.width / 2, y: topLeft.y + cover.bounds.height / 2)
+                }
+            }
         }
         guard pendingDrawing != nil, window != nil, bounds.width > 1, bounds.height > 1 else { return }
         DispatchQueue.main.async { [weak self] in

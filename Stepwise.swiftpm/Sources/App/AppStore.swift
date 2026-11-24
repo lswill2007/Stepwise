@@ -144,8 +144,35 @@ final class AppStore: ObservableObject {
         didSet { UserDefaults.standard.set(listHidden, forKey: "listHidden") }
     }
 
+    // MARK: 栏滑进滑出时页面不跟着一帧帧变宽变窄
+    //
+    // 页面（题目、笔记）宽度一变就要重排：公式、页边批注、每道题的手写画布都跟着重新量、重新画，一次要好几百毫秒。
+    // 以前栏滑动的每一帧页面都变一次宽，动画一开始就卡住半秒，手写的字也在这期间整块消失。
+    // 现在栏滑动时页面保持原来的宽度，整块跟着挪（只是移动位置，很便宜）；滑完再一次排成新的宽度
+
+    /// 页面现在多宽（RootView 量好写进来）
+    var pageWidth: CGFloat = 0
+    /// 栏正在滑：页面先按这个宽度排，滑完变回 nil
+    @Published private(set) var frozenPageWidth: CGFloat?
+    private var pageUnfreeze: DispatchWorkItem?
+
+    /// 马上要收起 / 拉出一栏：页面先保持现在的宽度，栏滑完再换成新的宽度
+    func holdPageWidth(for duration: Double = 0.32) {
+        #if os(iOS)
+        // 手写的画布先垫上截图：栏滑动时 PencilKit 会把字丢掉一会儿
+        NotificationCenter.default.post(name: PadCanvasView.pageWillMove, object: nil)
+        #endif
+        guard pageWidth > 0 else { return }
+        if frozenPageWidth == nil { frozenPageWidth = pageWidth }
+        pageUnfreeze?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.frozenPageWidth = nil }
+        pageUnfreeze = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
+    }
+
     /// 进 / 出全屏。不在全屏但左栏收着时“退出”就是把左栏放回来（白板只有左栏，收起左栏就是全屏）
     func setFullScreen(_ on: Bool) {
+        holdPageWidth()
         withAnimation(.easeInOut(duration: 0.25)) {
             if on {
                 if !isFullScreen { sidebarBeforeFullScreen = !sidebarHidden }

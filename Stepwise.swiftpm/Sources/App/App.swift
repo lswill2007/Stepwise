@@ -206,8 +206,9 @@ struct RootView: View {
                     }
                 }
                 .toolbar {
-                    // 左栏收起了（不是全屏）：左上角放回左栏。全屏时页面右上角有“退出全屏”
-                    if store.sidebarHidden && !store.isFullScreen && store.selectedBoardID == nil {
+                    // 还没打开题集、笔记（没有目录）而左栏收着：左上角放回左栏。
+                    // 打开了的话左上角是“目录”，目录拉出来以后它的左上角才是“总目录”（见 listAndPage）
+                    if store.sidebarHidden && !store.isFullScreen && store.selectedBoardID == nil && !hasList {
                         ToolbarItem(placement: Self.leading) {
                             Button {
                                 setSidebarHidden(false)
@@ -258,6 +259,11 @@ struct RootView: View {
 
     /// 把中间栏拉出来；屏幕窄时左栏一起收起，给中间栏让位
     private func showList() {
+        if store.isFullScreen {
+            listDrag = 0
+            withAnimation(.snappy(duration: 0.28)) { fullScreenOutline = true }
+            return
+        }
         if listYieldsToSidebar { setSidebarHidden(true) }
         if listFloats {
             listDrag = 0
@@ -284,6 +290,7 @@ struct RootView: View {
             store.setFullScreen(hidden)
             return
         }
+        store.holdPageWidth()
         withAnimation(.snappy(duration: 0.28)) {
             store.columnVisibility = hidden ? .detailOnly : .all
         }
@@ -295,7 +302,7 @@ struct RootView: View {
     /// 中间栏这会儿露在外面（全屏做题时和左栏一起藏起来；笔记全屏时点左上角“目录”浮出来）
     private var listShown: Bool {
         guard hasList else { return false }
-        if store.isFullScreen { return store.selectedNoteID != nil && fullScreenOutline }
+        if store.isFullScreen { return fullScreenOutline }
         guard !listYieldsToSidebar else { return false }
         return listFloats ? !listTucked : !store.listHidden
     }
@@ -306,6 +313,12 @@ struct RootView: View {
     private var listAndPage: some View {
         ZStack(alignment: .leading) {
             detail
+                // 栏正在滑：页面保持原来的宽度整块挪，滑完再排成新的宽度（见 AppStore.holdPageWidth）
+                .frame(width: store.frozenPageWidth)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                    if store.frozenPageWidth == nil { store.pageWidth = width }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, listShown && !listOverlays ? listWidth : 0)
                 // 收起后，从页面最左边向右拽拉回来
                 .overlay(alignment: .leading) {
@@ -338,24 +351,24 @@ struct RootView: View {
         }
         // 栏被手指拽开时，露出来的是纸色，不是一条灰缝
         .background(Ink.paper)
+        // 左上角一层一层往外拉：页面左上角是“目录”，拉出目录以后目录的左上角是“总目录”（左栏）。
+        // 全屏时也一样，目录浮在页面上；点“总目录”就退出全屏、放回左栏
         .toolbar {
-            if hasList && !listShown && !store.isFullScreen {
+            if hasList && listShown && store.sidebarHidden {
                 ToolbarItem(placement: .navigation) {
                     Button {
-                        showList()
+                        setSidebarHidden(false)
                     } label: {
-                        Label("显示列表", systemImage: "list.bullet.indent")
+                        Label("总目录", systemImage: "sidebar.left")
                     }
                 }
             }
-            // 笔记全屏：左上角的目录按钮，点一下目录浮出来，再点一下（或点页面、选一节）收起
-            if store.isFullScreen && store.selectedNoteID != nil && store.selectedBoardID == nil {
+            if hasList {
                 ToolbarItem(placement: .navigation) {
                     Button {
-                        listDrag = 0
-                        withAnimation(.snappy(duration: 0.28)) { fullScreenOutline.toggle() }
+                        if listShown { hideList() } else { showList() }
                     } label: {
-                        Label("目录", systemImage: "list.bullet.indent")
+                        Label(listShown ? L("收起目录") : L("目录"), systemImage: "list.bullet.indent")
                     }
                 }
             }
@@ -363,6 +376,7 @@ struct RootView: View {
         // 退出全屏、换了笔记：全屏时拉出来的目录收起
         .onChange(of: store.isFullScreen) { fullScreenOutline = false }
         .onChange(of: store.selectedNoteID) { fullScreenOutline = false }
+        .onChange(of: store.selectedSetID) { fullScreenOutline = false }
     }
 
     private var listSwipe: some Gesture {
@@ -387,6 +401,7 @@ struct RootView: View {
 
     private func setListHidden(_ hidden: Bool) {
         if !hidden { listDrag = 0 }
+        store.holdPageWidth()
         withAnimation(.snappy(duration: 0.28)) { store.listHidden = hidden }
     }
 

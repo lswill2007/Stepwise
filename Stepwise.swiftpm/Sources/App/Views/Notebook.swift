@@ -37,7 +37,8 @@ final class NotebookInk: ObservableObject {
             #endif
         }
         pendingRedraw = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+        // 栏滑动时页面宽度先不变，滑完只变一次：不用等宽度再变，马上重画，免得截图拿掉以后字空一下
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03, execute: work)
     }
 }
 
