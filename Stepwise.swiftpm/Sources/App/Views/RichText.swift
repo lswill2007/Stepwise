@@ -24,6 +24,8 @@ struct RichText: View {
     var onRendered: (() -> Void)?
 
     @State private var height: CGFloat
+    /// 网页排好版了（公式也排好）：之前摆着几行灰条当加载中，不让这块空白
+    @State private var shown = false
 
     init(_ text: String, scale: Double = 1, tone: RichTone = .normal, onSelect: ((String) -> Void)? = nil,
          host: InkHost? = nil, highlight: String? = nil, onRendered: (() -> Void)? = nil) {
@@ -42,9 +44,19 @@ struct RichText: View {
 
     var body: some View {
         MathWebView(text: text, scale: scale, tone: tone, highlight: highlight, onSelect: onSelect, host: host, height: $height,
-                    onRendered: onRendered)
+                    shown: $shown, onRendered: onRendered)
+            .opacity(shown ? 1 : 0)
             .frame(height: max(height, 18))
             .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .topLeading) {
+                if !shown { RichTextPlaceholder(height: max(height, 18), scale: scale).transition(.opacity) }
+            }
+            .animation(.easeOut(duration: 0.2), value: shown)
+            // 网页那边万一一直没报排好（公式样式没载进来之类），过一会儿也照样显示出来
+            .task {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                shown = true
+            }
             // 记住量到的高度：页面滚动回收后重建时直接用，不会先按估计高度排再变，把页面顶得跳一下
             .onChange(of: height) {
                 if Self.measured.count > 400 { Self.measured.removeAll() }
@@ -58,11 +70,44 @@ struct RichText: View {
     }
 }
 
+/// 排版中的占位：按这块的高度画几行灰条（最后一行短一点），轻轻地一明一暗
+private struct RichTextPlaceholder: View {
+    let height: CGFloat
+    let scale: Double
+    @State private var dim = false
+
+    var body: some View {
+        let line = 26 * CGFloat(scale)
+        let count = max(1, min(Int(height / line), 14))
+        GeometryReader { geo in
+            VStack(alignment: .leading, spacing: line * 0.45) {
+                ForEach(0..<count, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: line * 0.2)
+                        .fill(Color.secondary.opacity(0.16))
+                        .frame(width: geo.size.width * Self.widths[i % Self.widths.count] * (i == count - 1 && count > 1 ? 0.6 : 1),
+                               height: line * 0.55)
+                }
+            }
+            .padding(.top, line * 0.2)
+        }
+        .frame(height: height, alignment: .topLeading)
+        .clipped()
+        .opacity(dim ? 0.45 : 1)
+        .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: dim)
+        .onAppear { dim = true }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private static let widths: [CGFloat] = [1, 0.94, 0.97, 0.9, 1, 0.92]
+}
+
 // MARK: - WKWebView 包装
 
 @MainActor
 final class MathWebCoordinator: NSObject, WKNavigationDelegate {
     var height: Binding<CGFloat>
+    var shown: Binding<Bool>
     var onSelect: ((String) -> Void)?
     var onRendered: (() -> Void)?
     weak var webView: WKWebView?
@@ -72,14 +117,16 @@ final class MathWebCoordinator: NSObject, WKNavigationDelegate {
     private var lastTone: RichTone = .normal
     private var lastHighlight: String?
 
-    init(height: Binding<CGFloat>) {
+    init(height: Binding<CGFloat>, shown: Binding<Bool>) {
         self.height = height
+        self.shown = shown
     }
 
     func makeWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
         config.userContentController.add(WeakScriptHandler(self), name: "height")
         config.userContentController.add(WeakScriptHandler(self), name: "selection")
+        config.userContentController.add(WeakScriptHandler(self), name: "ready")
         let web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = self
         #if os(iOS)
@@ -119,6 +166,11 @@ final class MathWebCoordinator: NSObject, WKNavigationDelegate {
         if value > 4 { onRendered?() }
     }
 
+    /// 网页里内容连同公式都排好了
+    func receivedReady() {
+        if !shown.wrappedValue { shown.wrappedValue = true }
+    }
+
     func receivedSelection(_ text: String) {
         onSelect?(text)
     }
@@ -149,6 +201,10 @@ private final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
             MainActor.assumeIsolated { target?.receivedSelection(text) }
             return
         }
+        if message.name == "ready" {
+            MainActor.assumeIsolated { target?.receivedReady() }
+            return
+        }
         guard let number = message.body as? NSNumber else { return }
         let value = CGFloat(number.doubleValue)
         MainActor.assumeIsolated { target?.receivedHeight(value) }
@@ -164,9 +220,10 @@ struct MathWebView: UIViewRepresentable {
     let onSelect: ((String) -> Void)?
     let host: InkHost?
     @Binding var height: CGFloat
+    @Binding var shown: Bool
     var onRendered: (() -> Void)?
 
-    func makeCoordinator() -> MathWebCoordinator { MathWebCoordinator(height: $height) }
+    func makeCoordinator() -> MathWebCoordinator { MathWebCoordinator(height: $height, shown: $shown) }
 
     func makeUIView(context: Context) -> WKWebView {
         context.coordinator.onSelect = onSelect
@@ -181,6 +238,7 @@ struct MathWebView: UIViewRepresentable {
 
     func updateUIView(_ web: WKWebView, context: Context) {
         context.coordinator.height = $height
+        context.coordinator.shown = $shown
         context.coordinator.onSelect = onSelect
         context.coordinator.onRendered = onRendered
         context.coordinator.update(text: text, scale: scale, tone: tone, highlight: highlight)
@@ -195,9 +253,10 @@ struct MathWebView: NSViewRepresentable {
     let onSelect: ((String) -> Void)?
     let host: InkHost?
     @Binding var height: CGFloat
+    @Binding var shown: Bool
     var onRendered: (() -> Void)?
 
-    func makeCoordinator() -> MathWebCoordinator { MathWebCoordinator(height: $height) }
+    func makeCoordinator() -> MathWebCoordinator { MathWebCoordinator(height: $height, shown: $shown) }
 
     func makeNSView(context: Context) -> WKWebView {
         context.coordinator.onSelect = onSelect
@@ -212,6 +271,7 @@ struct MathWebView: NSViewRepresentable {
 
     func updateNSView(_ web: WKWebView, context: Context) {
         context.coordinator.height = $height
+        context.coordinator.shown = $shown
         context.coordinator.onSelect = onSelect
         context.coordinator.onRendered = onRendered
         context.coordinator.update(text: text, scale: scale, tone: tone, highlight: highlight)
@@ -414,7 +474,7 @@ enum MathTemplate {
     </style>
     </head><body><div id="c"></div>
     <script>
-    var SRC = "", READY = false;
+    var SRC = "", READY = false, FAILED = false, GOT = false;
     var MIRRORS = [
       "",
       "https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/",
@@ -452,7 +512,7 @@ enum MathTemplate {
 
     function loadKatex() {
       (function attempt(k) {
-        if (k >= MIRRORS.length) return;
+        if (k >= MIRRORS.length) { FAILED = true; draw(); return; }
         var base = MIRRORS[k];
         loadScript(base + "katex.min.js", function () {
           window.KATEX_BASE = base || "local";
@@ -526,14 +586,22 @@ enum MathTemplate {
       if (box.clientWidth !== lastWidth) { lastWidth = box.clientWidth; fit(); post(); }
     });
 
+    // 排好了告诉 App（去掉加载中的灰条）：没有公式的马上算好；有公式的等 KaTeX 和它的样式都载好，或者载不到了
+    function ready() {
+      if (!GOT) return;
+      if (!(FAILED || (READY && window.CSS_OK) || !/\$|\\[(\[]|\\begin\{/.test(SRC))) return;
+      try { window.webkit.messageHandlers.ready.postMessage(1); } catch (e) {}
+    }
+
     function draw() {
-      box.innerHTML = md(SRC); applyHL(); fit(); lastWidth = box.clientWidth; post();
+      box.innerHTML = md(SRC); applyHL(); fit(); lastWidth = box.clientWidth; post(); ready();
       // 字体（公式字体、中文字体）加载完宽度会变：再量一次，表格、公式按真正的宽度缩放
       if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { fit(); post(); });
     }
 
     function setContent(s, scale, tone, hl) {
       SRC = s;
+      GOT = true;
       HL = hl || "";
       document.body.className = tone || "";
       document.documentElement.style.setProperty("--scale", scale || 1);
