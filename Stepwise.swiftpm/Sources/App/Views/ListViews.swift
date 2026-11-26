@@ -58,9 +58,10 @@ struct SidebarView: View {
         let browsing = store.hasOpenItem ? nil : store.folder(store.selectedFolderID)?.id
         List {
             Group {
-                if !store.questionSets.isEmpty {
+                if !isEmpty {
                     Section {
-                        mistakeBookRow
+                        allRow(selected: !store.hasOpenItem && browsing == nil)
+                        if !store.questionSets.isEmpty { mistakeBookRow }
                     }
                 }
                 Section {
@@ -187,6 +188,17 @@ struct SidebarView: View {
         }
         walk(nil, 0)
         return out
+    }
+
+    /// 全部：回到最外层，右边一格一格排出没放进文件夹的东西和最外层的文件夹
+    private func allRow(selected: Bool) -> some View {
+        LibraryBar(color: .gray, depth: 0, selected: selected, symbol: .icon("square.grid.2x2")) {
+            Text("全部").font(.body.weight(selected ? .semibold : .medium))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .onTapGesture { store.browseFolder(nil) }
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .listRowInsets(EdgeInsets(top: 3, leading: 10, bottom: 3, trailing: 10))
     }
 
     /// 收藏：固定在最上面的一条
