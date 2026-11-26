@@ -122,6 +122,14 @@ final class MathWebCoordinator: NSObject, WKNavigationDelegate {
             push()
         }
     }
+
+    /// 系统内存紧张时会结束网页的进程（常在 App 进后台时），网页就一直是空白：重新载入，载好后把内容再排一遍
+    nonisolated func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        MainActor.assumeIsolated {
+            loaded = false
+            MathAssets.load(webView)
+        }
+    }
 }
 
 /// 避免 WKUserContentController 强引用 coordinator 造成内存泄漏

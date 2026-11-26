@@ -355,8 +355,11 @@ final class OnlinePrices: @unchecked Sendable {
         var makerIDs = extraMakers
         for (_, provider) in json {
             for (id, m) in provider["models"] as? [String: [String: Any]] ?? [:] {
-                guard let canonical = (m["canonical_model_id"] as? String)?.lowercased(), canonical.contains("/") else { continue }
-                makerIDs.insert(String(canonical.split(separator: "/")[0]))
+                // 网上的价格表写成 "/" 或 "/xxx" 时 split 取不到第一段，以前会闪退
+                guard let canonical = (m["canonical_model_id"] as? String)?.lowercased(),
+                      let maker = canonical.split(separator: "/", omittingEmptySubsequences: false).first, !maker.isEmpty,
+                      canonical.count > maker.count + 1 else { continue }
+                makerIDs.insert(String(maker))
                 for name in nameVariants(id) { canonicalVotes[name, default: [:]][canonical, default: 0] += 1 }
             }
         }
@@ -376,7 +379,9 @@ final class OnlinePrices: @unchecked Sendable {
         // 没人标过的，用厂商自己价格表里同名的模型
         var own: [String: [String]] = [:]
         for key in prices.keys.sorted() {
-            let id = String(key.split(separator: "/", maxSplits: 1)[1])
+            let parts = key.split(separator: "/", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            let id = String(parts[1])
             for name in nameVariants(id) { own[name, default: []].append(key) }
         }
         for name in Set(canonicalVotes.keys).union(own.keys) {

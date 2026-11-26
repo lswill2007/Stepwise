@@ -150,15 +150,21 @@ extension AppStore {
         if block.kind == .exercise, let qID = block.questionID {
             for q in exerciseQuestions(docID, qID) {
                 cancelReply(q.id)
-                ImageStore.delete(q.imageIDs + q.messages.flatMap(\.imageIDs))
+                ImageStore.delete(q.imageIDs + q.messages.flatMap(\.imageIDs) + (q.previousAttempts ?? []).flatMap { $0.flatMap(\.imageIDs) })
                 DrawingStore.delete([q.id])
                 if let si = sets.firstIndex(where: { $0.id == doc.exerciseSetID }) {
                     sets[si].questions.removeAll { $0.id == q.id }
                 }
             }
         }
+        // 圈在这一块上的批注一起删：留着的话看不见、删不掉，还一直占着页边
+        let commentIDs = Set((doc.comments ?? []).filter { $0.blockID == blockID }.map(\.id))
+        if let commentID = noteJobs[docID]?.commentID, commentIDs.contains(commentID) { stopNoteJob(docID) }
         DrawingStore.delete([blockID])
-        mutateNote(docID) { $0.blocks.removeAll { $0.id == blockID } }
+        mutateNote(docID) {
+            $0.blocks.removeAll { $0.id == blockID }
+            if !commentIDs.isEmpty { $0.comments?.removeAll { commentIDs.contains($0.id) } }
+        }
         renumberExercises(docID)
     }
 

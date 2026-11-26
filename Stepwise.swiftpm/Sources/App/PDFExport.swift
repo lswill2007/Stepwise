@@ -356,16 +356,26 @@ struct PDFDocumentBuilder {
         return "\u{1}INK\(inks.count - 1)\u{1}"
     }
 
+    /// 一遍换完所有位置：正文里有所有图片的 base64，常常十几 MB，以前每张手写图都把整篇查找、复制一遍
     mutating func fillTranscripts(_ results: [Int: String]) {
-        for k in inks.indices {
-            let token = "\u{1}INK\(k)\u{1}"
-            var replacement = ""
-            if let text = results[k] {
-                replacement = "<div class=\"transcript\"><div class=\"t-title\">\(Self.esc(L("文字转写（AI 识别，可能有误）")))</div>"
-                    + md(text) + "</div>"
+        guard !inks.isEmpty else { return }
+        let title = "<div class=\"transcript\"><div class=\"t-title\">\(Self.esc(L("文字转写（AI 识别，可能有误）")))</div>"
+        var result = ""
+        result.reserveCapacity(body.utf8.count)
+        var rest = body[...]
+        while let found = rest.range(of: "\u{1}INK") {
+            result += rest[..<found.lowerBound]
+            let after = rest[found.upperBound...]
+            if let close = after.firstIndex(of: "\u{1}"), let k = Int(after[..<close]) {
+                if let text = results[k] { result += title + md(text) + "</div>" }
+                rest = after[after.index(after: close)...]
+            } else {
+                result += rest[found]
+                rest = after
             }
-            body = body.replacingOccurrences(of: token, with: replacement)
         }
+        result += rest
+        body = result
     }
 
     // MARK: 手写图片
@@ -594,8 +604,8 @@ enum PDFRenderer {
         let region = Locale.current.region?.identifier
         return region == "US" || region == "CA" ? CGRect(x: 0, y: 0, width: 612, height: 792) : CGRect(x: 0, y: 0, width: 595.2, height: 841.8)
     }
-    static let marginX: CGFloat = 56
-    static let marginY: CGFloat = 40
+    nonisolated static let marginX: CGFloat = 56
+    nonisolated static let marginY: CGFloat = 40
     static let headerHeight: CGFloat = 30
     static let footerHeight: CGFloat = 30
 
@@ -649,8 +659,10 @@ enum PDFRenderer {
         }
         UIGraphicsEndPDFContext()
         guard pages > 0, data.length > 0 else { throw LLMError(message: L("没能生成 PDF，请再试一次。")) }
-        // 复制、搜索出来的字要对：把文字对照表里的康熙部首改回常用字（见 PDFTextFix）
-        return PDFTextFix.fix(data as Data)
+        // 复制、搜索出来的字要对：把文字对照表里的康熙部首改回常用字（见 PDFTextFix）。
+        // 要把整份 PDF 扫好几遍，放到后台做，转圈的动画不停
+        let pdf = data as Data
+        return await Task.detached(priority: .userInitiated) { PDFTextFix.fix(pdf) }.value
     }
 
     /// 每页页眉（标题）和页脚（页码）

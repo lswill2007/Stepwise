@@ -610,8 +610,22 @@ enum Tutor {
         return shown
     }
 
-    /// 列表里的单行预览：去掉 LaTeX 标记，尽量可读
+    private static let previewCache: NSCache<NSString, NSString> = {
+        let cache = NSCache<NSString, NSString>()
+        cache.countLimit = 2000
+        return cache
+    }()
+
+    /// 列表里的单行预览：去掉 LaTeX 标记，尽量可读。
+    /// 题目列表、笔记目录每次刷新都要算一遍（十几个正则、几十次替换），算过的记下来
     static func plainPreview(_ text: String) -> String {
+        if let cached = previewCache.object(forKey: text as NSString) { return cached as String }
+        let result = makePlainPreview(text)
+        previewCache.setObject(result as NSString, forKey: text as NSString)
+        return result
+    }
+
+    private static func makePlainPreview(_ text: String) -> String {
         var s = text
         s = s.replacingOccurrences(of: "\\\\(begin|end)\\{[^}]*\\}", with: " ", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\\\", with: "；")

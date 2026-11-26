@@ -10,6 +10,8 @@ struct ImportView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var material: ImportedMaterial?
+    /// 正在后台读选的文件、照片
+    @State private var readingID: UUID?
     @State private var pastedText = ""
     @State private var pdfAsImages = false
     /// 程序根据自动判断结果同步开关时，不要触发重新渲染
@@ -53,6 +55,14 @@ struct ImportView: View {
                     Text("导入题目")
                 }
 
+                if readingID != nil {
+                    Section {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("正在读取…").foregroundStyle(.secondary)
+                        }
+                    }
+                }
                 if let material {
                     Section("已载入") {
                         HStack {
@@ -140,7 +150,7 @@ struct ImportView: View {
                                 Spacer()
                             }
                         }
-                        .disabled(currentMaterial == nil)
+                        .disabled(currentMaterial == nil || readingID != nil)
                     }
                 } footer: {
                     if let p = store.activeProvider, let v = store.visionProvider {
@@ -197,41 +207,64 @@ struct ImportView: View {
         return text.isEmpty ? nil : ImportedMaterial(name: L("粘贴的题目"), textPages: [text])
     }
 
+    // 读文件、把 PDF 一页页画成图、缩小照片都在后台做：以前在主线程上，选了 30 页的 PDF 或一堆照片后界面要卡好几秒
     private func handleFile(_ result: Result<[URL], Error>) {
+        let url: URL
         do {
-            guard let url = try result.get().first else { return }
-            material = try Importer.load(url: url)
-            let detected = !(material?.images.isEmpty ?? true) && material?.pdfData != nil
+            guard let first = try result.get().first else { return }
+            url = first
+        } catch {
+            store.errorMessage = error.localizedDescription
+            return
+        }
+        readMaterial { try Importer.load(url: url) } then: { loaded in
+            material = loaded
+            let detected = !loaded.images.isEmpty && loaded.pdfData != nil
             if detected != pdfAsImages {
                 syncingToggle = true
                 pdfAsImages = detected
             }
-        } catch {
-            store.errorMessage = error.localizedDescription
         }
     }
 
     private func reloadPDF() {
         guard let m = material, let data = m.pdfData else { return }
-        do {
-            material = try Importer.loadPDF(data: data, name: m.name, mode: pdfAsImages ? .images : .text)
-        } catch {
-            store.errorMessage = error.localizedDescription
+        let mode: Importer.PDFMode = pdfAsImages ? .images : .text
+        readMaterial { try Importer.loadPDF(data: data, name: m.name, mode: mode) } then: { material = $0 }
+    }
+
+    /// 在后台读材料，读好了回到主线程；后读的覆盖先读的，先读的晚到了就不要
+    private func readMaterial(_ work: @escaping @Sendable () throws -> ImportedMaterial,
+                              then apply: @escaping (ImportedMaterial) -> Void) {
+        readingID = UUID()
+        let id = readingID
+        Task {
+            let result = await Task.detached(priority: .userInitiated) { Result { try work() } }.value
+            guard readingID == id else { return }
+            readingID = nil
+            switch result {
+            case .success(let loaded): apply(loaded)
+            case .failure(let error): store.errorMessage = error.localizedDescription
+            }
         }
     }
 
     private func loadPhotos() {
         let items = photoItems
         guard !items.isEmpty else { return }
+        readingID = UUID()
+        let id = readingID
         Task {
             var images: [Data] = []
             for item in items {
                 if let data = try? await item.loadTransferable(type: Data.self),
-                   let jpeg = ImageUtil.normalizedJPEG(data) {
+                   let jpeg = await Task.detached(priority: .userInitiated, operation: { ImageUtil.normalizedJPEG(data) }).value {
                     images.append(jpeg)
                 }
             }
             photoItems = []
+            guard readingID == id else { return }
+            readingID = nil
             if images.isEmpty {
                 store.errorMessage = L("没有读取到图片")
             } else {
@@ -289,8 +322,8 @@ struct DocumentScanner: UIViewControllerRepresentable {
 
         func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
             let images = (0..<scan.pageCount).compactMap { i -> Data? in
-                guard let cg = scan.imageOfPage(at: i).cgImage, let jpeg = ImageUtil.jpeg(cg) else { return nil }
-                return ImageUtil.normalizedJPEG(jpeg)
+                guard let cg = scan.imageOfPage(at: i).cgImage else { return nil }
+                return ImageUtil.jpeg(cg, maxPixel: 1600)
             }
             onFinish(images)
         }

@@ -168,7 +168,8 @@ extension AppStore {
             // 图片：文件名本身是 UUID，本机已有同名文件就是同一张图
             for id in Set(LibraryBackup.imageIDs(in: set)) {
                 let original = imageMap.first { $0.value == id }?.key ?? id
-                if ImageStore.load(id) == nil, let data = backup.images[original] {
+                // 只看有没有，不用把整张图读出来
+                if !ImageStore.exists(id), let data = backup.images[original] {
                     ImageStore.save(data, id: id)
                 }
             }

@@ -79,6 +79,11 @@ enum ImageStore {
         return try? DataLocation.read(url)
     }
 
+    /// 有没有这张图（不读出来）
+    static func exists(_ id: String) -> Bool {
+        DataLocation.exists(directory.appendingPathComponent(id))
+    }
+
     /// 按指定文件名保存（导入备份时用）
     static func save(_ data: Data, id: String) {
         try? DataLocation.write(data, to: directory.appendingPathComponent(id))
@@ -115,6 +120,22 @@ enum ImageUtil {
         ]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         return jpeg(image)
+    }
+
+    /// 缩到最长边不超过 maxPixel 再压成 JPEG，只压一次（以前先压一次整张大图、再解开缩小、再压一次）
+    static func jpeg(_ image: CGImage, maxPixel: Int) -> Data? {
+        let longest = max(image.width, image.height)
+        guard longest > maxPixel, maxPixel > 0 else { return jpeg(image) }
+        let fit = Double(maxPixel) / Double(longest)
+        let width = max(1, Int((Double(image.width) * fit).rounded())), height = max(1, Int((Double(image.height) * fit).rounded()))
+        guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        let rect = CGRect(x: 0, y: 0, width: width, height: height)
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(rect)
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: rect)
+        return ctx.makeImage().flatMap { jpeg($0) }
     }
 
     static func jpeg(_ image: CGImage, quality: Double = 0.75) -> Data? {
@@ -222,21 +243,45 @@ enum DrawingStore {
         directory.appendingPathComponent(id.uuidString + ".drawing")
     }
 
+    /// 写字停下时在后台写盘（整页笔迹编码、写文件不占主线程，下一笔落下时不卡）。
+    /// 读、写、删都排在这一条队列上，读到的一定是最后写进去的
+    private static let queue = DispatchQueue(label: "com.lswill2007.stepwise.drawings", qos: .utility)
+
     static func exists(_ id: UUID) -> Bool {
-        DataLocation.exists(url(id))
+        let url = url(id)
+        return queue.sync { DataLocation.exists(url) }
     }
 
     static func load(_ id: UUID) -> Data? {
-        guard exists(id) else { return nil }
-        return try? DataLocation.read(url(id))
+        let url = url(id)
+        return queue.sync {
+            guard DataLocation.exists(url) else { return nil }
+            return try? DataLocation.read(url)
+        }
     }
 
     /// data 为 nil 表示没有笔迹，删除文件
     static func save(_ data: Data?, for id: UUID) {
+        let url = url(id)
+        queue.sync { write(data, to: url) }
+    }
+
+    /// 在后台编码、写盘；地址现在就定下来（等待期间换了储存位置，也不会写到新位置去）
+    static func saveInBackground(for id: UUID, encode: @escaping @Sendable () -> Data?) {
+        let url = url(id)
+        queue.async { write(encode(), to: url) }
+    }
+
+    /// 等排着的写盘都写完（退到后台、换储存位置之前）
+    static func flush() {
+        queue.sync {}
+    }
+
+    private static func write(_ data: Data?, to url: URL) {
         if let data {
-            try? DataLocation.write(data, to: url(id))
+            try? DataLocation.write(data, to: url)
         } else {
-            DataLocation.remove(url(id))
+            DataLocation.remove(url)
         }
     }
 

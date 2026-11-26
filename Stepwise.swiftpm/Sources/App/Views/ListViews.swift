@@ -47,7 +47,7 @@ struct SidebarView: View {
                             .foregroundStyle(Ink.red)
                         Text("错题本").font(.headline)
                         Spacer()
-                        let count = store.starredEntries.count
+                        let count = store.starredCount
                         if count > 0 {
                             Text("\(count)")
                                 .font(.callout).monospacedDigit()

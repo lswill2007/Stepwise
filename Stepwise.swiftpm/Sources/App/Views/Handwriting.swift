@@ -222,14 +222,15 @@ final class PadCanvasView: PKCanvasView {
 
     static let pageWillMove = Notification.Name("PadCanvasPageWillMove")
 
+    // 用 selector 的写法：画布释放时系统自动注销。以前用 block 的写法、没留下注销用的 token，
+    // 每个建过的画布都留下一个观察者，越用越多，每次拉出、收起栏都要挨个跑一遍
     private func observePageMoves() {
-        NotificationCenter.default.addObserver(forName: Self.pageWillMove, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.window != nil, self.pendingDrawing == nil, !self.isStroking,
-                      !self.drawing.strokes.isEmpty else { return }
-                self.coverWhileRedrawing()
-            }
-        }
+        NotificationCenter.default.addObserver(self, selector: #selector(pageWillMove(_:)), name: Self.pageWillMove, object: nil)
+    }
+
+    @objc private func pageWillMove(_ note: Notification) {
+        guard window != nil, pendingDrawing == nil, !isStroking, !drawing.strokes.isEmpty else { return }
+        coverWhileRedrawing()
     }
 
     // MARK: 用代码换笔迹时垫一张截图
@@ -296,7 +297,9 @@ final class PadCanvasView: PKCanvasView {
         // 屏幕上实际放大了多少（正文的 scaleEffect 也算上），图按这个清晰度画
         let onScreen = convert(CGRect(x: 0, y: 0, width: 100, height: 100), to: nil).width / 100
         let scale = (window?.screen.scale ?? 2) * zoom * min(max(onScreen, 0.25), 4)
-        let canvasDrawing = PKDrawing(strokes: newDrawing.strokes.map { stroke in
+        // 只画和这一块挨着的笔画：写完一笔正要写下一笔时在主线程上做，满满一页时不用把所有笔画都挪一遍
+        let near = changed.insetBy(dx: -8, dy: -8)
+        let canvasDrawing = PKDrawing(strokes: newDrawing.strokes.filter { $0.renderBounds.intersects(near) }.map { stroke in
             var moved = stroke
             moved.transform = stroke.transform.concatenating(toCanvas)
             return moved
@@ -598,7 +601,6 @@ final class InkTools: ObservableObject {
     var penNib: Double { penKind == .fountain ? 0.6 : 0 }
 
     static let penColors = ["#1C1C1E", "#1F4FA8", "#C0392B", "#2E7D32"]
-    static let penWidths: [Double] = [2, 3, 5]
     static let markerColors = ["#FFE066", "#A5E887", "#FFA8C5", "#9CD3FF"]
     static let markerWidthRange: ClosedRange<Double> = 4...40
     static let markerOpacityRange: ClosedRange<Double> = 0.15...1
@@ -1085,7 +1087,7 @@ final class HandwritingModel: ObservableObject {
         pendingSave = nil
         guard let questionID else { return }
         let toSave = storedDrawing ?? drawing
-        DrawingStore.save(toSave.strokes.isEmpty ? nil : toSave.dataRepresentation(), for: questionID)
+        DrawingStore.saveInBackground(for: questionID) { toSave.strokes.isEmpty ? nil : toSave.dataRepresentation() }
     }
 
     /// 笔记这一块中间插进了内容：y 以下的笔迹往下挪 dy，屏幕上和存下的一起改
@@ -1146,15 +1148,19 @@ final class HandwritingModel: ObservableObject {
         let left = max(0, content.minX - 24)
         let area = CGRect(x: left, y: top, width: content.maxX + 24 - left,
                           height: CGFloat(lastRow - firstRow + 1) * spacing)
+        let gutter: CGFloat = 40
+        let size = CGSize(width: area.width + gutter, height: area.height)
+        // 宽不超过 1280 像素就够看清手写；写得多（图很高）时高度放宽到 2400，不然整张缩小后每行的字太小。
+        // 识别时高的图会切成几段同时转写（ImageUtil.horizontalStrips），每段都不大。
+        // 直接按最后的大小画：以前先按 2 倍画出整张大图（写得长时几千万像素）、压成 JPEG，再解开缩小、再压一次
+        let scale = 2 * min(1, 1280 / (size.width * 2), 2400 / (size.height * 2))
         var ink: UIImage!
         // 固定浅色外观，避免深色模式下导出白色笔迹
         UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
-            ink = drawing.image(from: area, scale: 2)
+            ink = drawing.image(from: area, scale: scale)
         }
-        let gutter: CGFloat = 40
-        let size = CGSize(width: area.width + gutter, height: area.height)
         let format = UIGraphicsImageRendererFormat()
-        format.scale = 2
+        format.scale = scale
         format.opaque = true
         let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
             UIColor.white.setFill()
@@ -1184,11 +1190,7 @@ final class HandwritingModel: ObservableObject {
             }
         }
         guard let cg = image.cgImage else { return nil }
-        // 宽不超过 1280 像素就够看清手写；写得多（图很高）时高度放宽到 2400，不然整张缩小后每行的字太小。
-        // 识别时高的图会切成几段同时转写（ImageUtil.horizontalStrips），每段都不大
-        let fit = min(1, 1280 / CGFloat(cg.width), 2400 / CGFloat(cg.height))
-        let maxPixel = Int((CGFloat(max(cg.width, cg.height)) * fit).rounded(.down))
-        return ImageUtil.jpeg(cg).flatMap { ImageUtil.normalizedJPEG($0, maxPixel: maxPixel) }
+        return ImageUtil.jpeg(cg)
     }
 }
 
@@ -1439,7 +1441,9 @@ struct NotebookCanvas: UIViewRepresentable {
             }
             applying = false
             model.drawingChanged(drawing)
-            undoManager?.registerUndo(withTarget: self) { coordinator in
+            // 撤销记录在整个窗口共用的撤销管理器里：不要拉着画布不放（关掉的页面、白板的画布一直留在内存里）
+            undoManager?.registerUndo(withTarget: self) { [weak canvasView] coordinator in
+                guard let canvasView else { return }
                 coordinator.replace(canvasView, with: previous, undoTo: drawing)
             }
         }

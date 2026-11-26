@@ -868,7 +868,8 @@ struct ProviderEditView: View {
     private func fetchModelsAsync() async {
         guard let config else { return }
         do {
-            let models = try await LLMClient(config: config, apiKey: apiKey).listModels()
+            // 和存进钥匙串的一样去掉首尾空格，测试的结果和实际用的时候一致
+            let models = try await LLMClient(config: config, apiKey: apiKey.trimmingCharacters(in: .whitespacesAndNewlines)).listModels()
             self.config?.fetchedModels = models
             // 还没选模型时，默认选第一个能对话的模型（聚合平台按字母排序，第一个可能是绘图模型）
             if self.config?.model.isEmpty == true,
@@ -890,7 +891,7 @@ struct ProviderEditView: View {
         Task {
             defer { testing = false }
             do {
-                let reply = try await LLMClient(config: config, apiKey: apiKey).complete(
+                let reply = try await LLMClient(config: config, apiKey: apiKey.trimmingCharacters(in: .whitespacesAndNewlines)).complete(
                     system: Tutor.pick("你是一个助手。", "You are an assistant."),
                     messages: [LLMMessage(role: .user, parts: [.text(Tutor.pick("请只回复四个字：连接成功", "Reply with exactly two words: Connection successful"))])],
                     options: RequestOptions(responseTimeout: LLMClient.quickTimeout))

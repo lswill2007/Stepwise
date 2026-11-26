@@ -159,11 +159,7 @@ final class BoardState: ObservableObject {
         let offset = canvas.contentOffset, zoom = canvas.zoomScale
         if viewport.offset != offset { viewport.offset = offset }
         if viewport.zoom != zoom { viewport.zoom = zoom }
-        if let pattern, pattern.offset != offset || pattern.zoom != zoom {
-            pattern.offset = offset
-            pattern.zoom = zoom
-            pattern.setNeedsDisplay()
-        }
+        pattern?.update(offset: offset, zoom: zoom)
     }
 
     /// 屏幕上看得见的白板有多大。画布本身固定是一个大方块（见 BoardContainerView），比看得见的大，多出来的被裁掉
@@ -310,8 +306,7 @@ enum BoardExport {
             }
             ink.draw(in: CGRect(x: gutter, y: 0, width: area.width, height: area.height))
         }
-        guard let cg = image.cgImage, let jpeg = ImageUtil.jpeg(cg),
-              let normalized = ImageUtil.normalizedJPEG(jpeg, maxPixel: 1800) else { return nil }
+        guard let cg = image.cgImage, let normalized = ImageUtil.jpeg(cg, maxPixel: 1800) else { return nil }
         return Result(image: normalized, lines: lines)
     }
 
@@ -344,11 +339,82 @@ enum BoardExport {
     }
 }
 
-/// 白板的纸：点阵或方格，跟着画布滚动、缩放
+/// 白板的纸：点阵或方格，跟着画布滚动、缩放。
+/// 纸画在比看得见的地方大一格的一块上：滚动时只把这一块挪一挪（挪不到一格），缩放、换纸、改大小时才重画。
+/// 以前每滚一帧都把整屏的点（上千个）重新画一遍
 final class BoardPatternView: UIView {
     var style: PaperStyle = .dots
-    var offset: CGPoint = .zero
-    var zoom: CGFloat = 1
+    private(set) var offset: CGPoint = .zero
+    private(set) var zoom: CGFloat = 1
+    private let tile = BoardPatternTile()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        isUserInteractionEnabled = false
+        clipsToBounds = true
+        tile.owner = self
+        addSubview(tile)
+        layoutTile()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// 点（格子）的间距：缩得很小时点太密，隔一个画一个
+    var step: CGFloat {
+        var step = PaperStyle.spacing * zoom
+        while step < 14 { step *= 2 }
+        return step
+    }
+
+    func update(offset: CGPoint, zoom: CGFloat) {
+        guard offset != self.offset || zoom != self.zoom else { return }
+        let zoomChanged = zoom != self.zoom
+        self.offset = offset
+        self.zoom = zoom
+        if zoomChanged {
+            layoutTile()
+            tile.setNeedsDisplay()
+        }
+        shiftTile()
+    }
+
+    /// 换了纸（或深浅色）：重画
+    override func setNeedsDisplay() {
+        super.setNeedsDisplay()
+        tile.isHidden = style == .blank
+        tile.setNeedsDisplay()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layoutTile()
+    }
+
+    private func layoutTile() {
+        let s = step
+        let size = CGSize(width: bounds.width + s, height: bounds.height + s)
+        if tile.bounds.size != size {
+            tile.bounds = CGRect(origin: .zero, size: size)
+            tile.center = CGPoint(x: size.width / 2, y: size.height / 2)
+            tile.setNeedsDisplay()
+        }
+        tile.isHidden = style == .blank
+        shiftTile()
+    }
+
+    /// 纸上 (offset + x) 是间距的整数倍的地方有点：这一块从 0 开始每隔一格画一个点，往左上挪 offset 除以间距的余数
+    private func shiftTile() {
+        let s = step
+        func phase(_ v: CGFloat) -> CGFloat { v - (v / s).rounded(.down) * s }
+        tile.transform = CGAffineTransform(translationX: -phase(offset.x), y: -phase(offset.y))
+    }
+}
+
+/// 白板纸实际画出来的那一块
+final class BoardPatternTile: UIView {
+    weak var owner: BoardPatternView?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -356,26 +422,22 @@ final class BoardPatternView: UIView {
         isOpaque = false
         isUserInteractionEnabled = false
         contentMode = .redraw
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: BoardPatternView, _) in view.setNeedsDisplay() }
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: BoardPatternTile, _) in view.setNeedsDisplay() }
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override func draw(_ rect: CGRect) {
-        guard style != .blank, let ctx = UIGraphicsGetCurrentContext() else { return }
-        // 缩得很小时点太密：隔一个画一个
-        var step = PaperStyle.spacing * zoom
-        while step < 14 { step *= 2 }
-        let startX = (offset.x / step).rounded(.up) * step - offset.x
-        let startY = (offset.y / step).rounded(.up) * step - offset.y
-        switch style {
+        guard let owner, owner.style != .blank, let ctx = UIGraphicsGetCurrentContext() else { return }
+        let step = owner.step, zoom = owner.zoom
+        switch owner.style {
         case .dots:
             ctx.setFillColor(UIColor.label.withAlphaComponent(0.2).cgColor)
             let r: CGFloat = min(1.6, max(0.9, 1.2 * zoom))
-            var y = startY
-            while y < bounds.height {
-                var x = startX
-                while x < bounds.width {
+            var y: CGFloat = 0
+            while y < bounds.height + r {
+                var x: CGFloat = 0
+                while x < bounds.width + r {
                     ctx.fillEllipse(in: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2))
                     x += step
                 }
@@ -384,13 +446,13 @@ final class BoardPatternView: UIView {
         case .grid:
             ctx.setStrokeColor(UIColor.label.withAlphaComponent(0.09).cgColor)
             ctx.setLineWidth(0.7)
-            var x = startX
+            var x: CGFloat = 0
             while x < bounds.width {
                 ctx.move(to: CGPoint(x: x, y: 0))
                 ctx.addLine(to: CGPoint(x: x, y: bounds.height))
                 x += step
             }
-            var y = startY
+            var y: CGFloat = 0
             while y < bounds.height {
                 ctx.move(to: CGPoint(x: 0, y: y))
                 ctx.addLine(to: CGPoint(x: bounds.width, y: y))
@@ -746,8 +808,9 @@ struct WhiteboardView: View {
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .onAppear {
-                model.onCircleStroke = { [weak state] stroke in state?.select(circle: stroke) }
-                model.onDrawingChanged = { [weak state] in state?.drawingChanged() }
+                let boardState = state
+                model.onCircleStroke = { [weak boardState] stroke in boardState?.select(circle: stroke) }
+                model.onDrawingChanged = { [weak boardState] in boardState?.drawingChanged() }
                 state.notesBottom = Self.notesBottom(board)
                 // 回到上次看到的地方
                 state.pendingRestore = ReadingPosition.load(boardID)

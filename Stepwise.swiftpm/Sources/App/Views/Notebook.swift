@@ -19,7 +19,11 @@ final class NotebookInk: ObservableObject {
         return model
     }
 
-    func saveAll() { models.values.forEach { $0.saveNow() } }
+    /// 退到后台时用：等笔迹都写好再返回
+    func saveAll() {
+        models.values.forEach { $0.saveNow() }
+        DrawingStore.flush()
+    }
 
     /// 已经建好的笔迹模型（没打开过的不新建）
     func existingModel(for id: UUID) -> HandwritingModel? { models[id] }
@@ -188,7 +192,8 @@ struct NotebookView: View {
             }
         }
         // 新加入错题本的题接在后面
-        .onChange(of: store.starredEntries.map(\.question.id)) {
+        // 只有错题本才算（每次刷新都要把所有题集翻一遍再排序）
+        .onChange(of: setID == nil ? store.starredEntries.map(\.question.id) : []) {
             guard setID == nil else { return }
             for entry in store.starredEntries where !mistakeEntries.contains(where: { $0.qID == entry.question.id }) {
                 mistakeEntries.append(Entry(setID: entry.setID, qID: entry.question.id))

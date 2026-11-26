@@ -150,8 +150,9 @@ extension AppStore {
             do {
                 for try await piece in client.stream(system: system, messages: messages) {
                     full += piece
+                    // 写的时候只刷新这一块（不动整个笔记，写的时候翻页不卡）
                     if Date().timeIntervalSince(lastFlush) > 0.15 {
-                        self?.updateBlockText(docID, newBlock.id, full)
+                        self?.live(newBlock.id).text = full
                         lastFlush = Date()
                     }
                 }
@@ -159,8 +160,15 @@ extension AppStore {
                 self?.updateBlockText(docID, newBlock.id, full.trimmingCharacters(in: .whitespacesAndNewlines))
             } catch {
                 if !(error is CancellationError) { self?.errorMessage = error.localizedDescription }
-                if full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { self?.deleteBlock(docID, newBlock.id) }
+                let written = full.trimmingCharacters(in: .whitespacesAndNewlines)
+                if written.isEmpty {
+                    self?.deleteBlock(docID, newBlock.id)
+                } else {
+                    // 停下来了：已经写出来的留下
+                    self?.updateBlockText(docID, newBlock.id, written)
+                }
             }
+            self?.endLive(newBlock.id)
             self?.noteJobs[docID] = nil
             self?.noteTasks[docID] = nil
         }

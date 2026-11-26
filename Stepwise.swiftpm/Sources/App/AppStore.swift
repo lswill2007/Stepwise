@@ -268,6 +268,8 @@ final class AppStore: ObservableObject {
     }
     /// 正在后台求解的题
     private var presolving: Set<UUID> = []
+    /// 预先求解失败的题和失败的时间：题目每次滚进屏幕都会来求解，失败了隔一会儿再试，不每次都花一次请求
+    private var presolveFailedAt: [UUID: Date] = [:]
 
     /// 实际用于批改和提示的服务商（已填 Key 且选了模型才生效）
     var gradingProvider: ProviderConfig? { overrideProvider(id: gradingProviderID, model: gradingModel) }
@@ -290,6 +292,7 @@ final class AppStore: ObservableObject {
     }
 
     private var saveTask: Task<Void, Never>?
+    private var foldersSaveTask: Task<Void, Never>?
     /// 模型设置文件（settings.json）停一会儿再写，填 API Key 时不用每个字都写一次
     private var settingsSaveTask: Task<Void, Never>?
     /// 正在套用设置文件：这期间的赋值不写回文件
@@ -297,6 +300,8 @@ final class AppStore: ObservableObject {
     /// 储存位置里的 settings.json 存在但读不出来：不写，免得把里面的 API Key 覆盖掉
     private var settingsFileBlocked = false
     private var replyTasks: [UUID: Task<Void, Never>] = [:]
+    /// 每次回复的编号：停下后马上又点了检查，旧的那次收尾时不去清新的这次的状态
+    private var replyTokens: [UUID: UUID] = [:]
 
     /// 数据文件都在数据根目录下（默认 App 内的 Documents，也可以在设置里换成用户选的文件夹）
     nonisolated private static var libraryURL: URL { DataLocation.url(DataLocation.libraryFile) }
@@ -490,62 +495,56 @@ final class AppStore: ObservableObject {
         saveTask?.cancel()
         notesSaveTask?.cancel()
         boardsSaveTask?.cancel()
+        foldersSaveTask?.cancel()
         guard !writesBlocked else { return }
-        if let data = try? JSONEncoder().encode(sets) {
-            try? DataLocation.write(data, to: Self.libraryURL)
+        // 拉下控制中心、切到别的 App 都会来这里：自上次写盘以后没改过的文件不再整个重写
+        for (url, encode) in [(Self.libraryURL, { [sets] in try? JSONEncoder().encode(sets) }),
+                              (Self.notesURL, { [notes] in try? JSONEncoder().encode(notes) }),
+                              (Self.boardsURL, { [boards] in try? JSONEncoder().encode(boards) })] as [(URL, () -> Data?)]
+        where !SaveLedger.shared.isClean(url) {
+            let generation = SaveLedger.shared.issue(url)
+            if let data = encode() { SaveLedger.shared.write(data, to: url, generation: generation) }
         }
-        if let data = try? JSONEncoder().encode(notes) {
-            try? DataLocation.write(data, to: Self.notesURL)
+        // 文件夹以前改一次就马上写一次；现在停一下再写，还没写的这里补上
+        if SaveLedger.shared.hasPending(Self.foldersURL), let data = try? JSONEncoder().encode(folders) {
+            SaveLedger.shared.write(data, to: Self.foldersURL, generation: SaveLedger.shared.issue(Self.foldersURL))
         }
-        if let data = try? JSONEncoder().encode(boards) {
-            try? DataLocation.write(data, to: Self.boardsURL)
+    }
+
+    /// 停一会儿再在后台写盘；写之前先排好号，晚排的写过了，早排的就不再写（免得旧数据盖掉新的）
+    private func scheduleWrite<Value: Encodable>(_ value: Value, to url: URL, after delay: UInt64,
+                                                            replacing task: inout Task<Void, Never>?) {
+        task?.cancel()
+        let generation = SaveLedger.shared.issue(url)
+        task = Task.detached(priority: .utility) {
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled, let data = try? JSONEncoder().encode(value) else { return }
+            SaveLedger.shared.write(data, to: url, generation: generation)
         }
     }
 
     /// 便签在流式回复、拖动时变化很频繁，停一会儿再写盘
     private func scheduleBoardsSave() {
         guard !loading, !writesBlocked else { return }
-        boardsSaveTask?.cancel()
-        let snapshot = boards
-        let url = Self.boardsURL
-        boardsSaveTask = Task.detached(priority: .utility) {
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            guard !Task.isCancelled, let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? DataLocation.write(data, to: url)
-        }
+        scheduleWrite(boards, to: Self.boardsURL, after: 800_000_000, replacing: &boardsSaveTask)
     }
 
     /// 笔记在流式生成时变化很频繁，停一会儿再写盘
     private func scheduleNotesSave() {
         guard !loading, !writesBlocked else { return }
-        notesSaveTask?.cancel()
-        let snapshot = notes
         // 地址在这里先定下来：等待期间换了储存位置，也不会写到新位置去
-        let url = Self.notesURL
-        notesSaveTask = Task.detached(priority: .utility) {
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            guard !Task.isCancelled, let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? DataLocation.write(data, to: url)
-        }
+        scheduleWrite(notes, to: Self.notesURL, after: 800_000_000, replacing: &notesSaveTask)
     }
 
     private func scheduleSave() {
         guard !loading, !writesBlocked else { return }
-        saveTask?.cancel()
-        let snapshot = sets
-        let url = Self.libraryURL
-        saveTask = Task.detached(priority: .utility) {
-            try? await Task.sleep(nanoseconds: 600_000_000)
-            guard !Task.isCancelled, let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? DataLocation.write(data, to: url)
-        }
+        scheduleWrite(sets, to: Self.libraryURL, after: 600_000_000, replacing: &saveTask)
     }
 
+    /// 折叠、展开文件夹也会改：以前每次都在主线程上立刻写盘（删文件夹、导入备份时一个一个写），现在停一下在后台写
     private func saveFolders() {
         guard !loading, !writesBlocked else { return }
-        if let data = try? JSONEncoder().encode(folders) {
-            try? DataLocation.write(data, to: Self.foldersURL)
-        }
+        scheduleWrite(folders, to: Self.foldersURL, after: 300_000_000, replacing: &foldersSaveTask)
     }
 
     // MARK: - 储存位置
@@ -573,8 +572,9 @@ final class AppStore: ObservableObject {
         let scope = destination?.scope
         let accessing = scope?.startAccessingSecurityScopedResource() ?? false
         defer { if accessing { scope?.stopAccessingSecurityScopedResource() } }
-        // 先把最近的改动写进原来的位置
+        // 先把最近的改动写进原来的位置（包括还排着队的手写笔迹）
         saveNow()
+        DrawingStore.flush()
         if mode == .copyCurrent {
             guard !writesBlocked else {
                 throw LocationError(message: L("当前位置的数据没有完整读出来，不能复制。请先确认原来的数据能正常打开。"))
@@ -674,8 +674,9 @@ final class AppStore: ObservableObject {
     func saveSettingsFile() {
         guard DataLocation.isCustom, !loading, !applyingSettings, !settingsFileBlocked else { return }
         settingsSaveTask?.cancel()
+        // 学习时间每 20 秒、每次翻页停下都会改设置：停 3 秒再写，连着改只写一次
         settingsSaveTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard !Task.isCancelled else { return }
             self?.writeSettingsFile()
         }
@@ -695,10 +696,12 @@ final class AppStore: ObservableObject {
                                 preferences: Self.preferenceSnapshot())
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(file) {
-            try? DataLocation.write(data, to: DataLocation.url(DataLocation.settingsFile))
-        }
+        let url = DataLocation.url(DataLocation.settingsFile)
+        // 和上次写的一模一样就不再写（文件夹在 iCloud 里时每写一次都要上传）
+        guard let data = try? encoder.encode(file), data != lastSettingsWrite?.data || url != lastSettingsWrite?.url else { return }
+        if (try? DataLocation.write(data, to: url)) != nil { lastSettingsWrite = (url, data) }
     }
+    private var lastSettingsWrite: (url: URL, data: Data)?
 
     /// 套用储存文件夹里的 settings.json（已经在后台读好）；没有这个文件时返回 false
     @discardableResult
@@ -975,7 +978,8 @@ final class AppStore: ObservableObject {
         guard let s = set(id) else { return }
         ReadingPosition.forget([id])
         for q in s.questions { cancelReply(q.id) }
-        ImageStore.delete(s.questions.flatMap { q in q.imageIDs + q.messages.flatMap(\.imageIDs) })
+        // 连“重新练习”之前那几轮的手写图片一起删（以前漏了，一直留在 images 文件夹里）
+        ImageStore.delete(LibraryBackup.imageIDs(in: s))
         DrawingStore.delete(s.questions.map(\.id))
         sets.removeAll { $0.id == id }
         if selectedSetID == id {
@@ -1012,9 +1016,9 @@ final class AppStore: ObservableObject {
             .sorted { ($0.question.starredAt ?? .distantPast) > ($1.question.starredAt ?? .distantPast) }
     }
 
-    /// 某道题属于哪个题集
-    func setID(containing qID: UUID) -> UUID? {
-        sets.first { $0.questions.contains { $0.id == qID } }?.id
+    /// 错题本里有几道题（只数数，不用排序）
+    var starredCount: Int {
+        sets.reduce(0) { total, set in total + set.questions.reduce(0) { $0 + ($1.isStarred ? 1 : 0) } }
     }
 
     func toggleStar(_ setID: UUID, _ qID: UUID) {
@@ -1060,12 +1064,6 @@ final class AppStore: ObservableObject {
         return r + 1
     }
 
-    func neighbor(of qID: UUID, in setID: UUID, offset: Int) -> UUID? {
-        guard let qs = set(setID)?.questions, let i = qs.firstIndex(where: { $0.id == qID }) else { return nil }
-        let j = i + offset
-        return qs.indices.contains(j) ? qs[j].id : nil
-    }
-
     /// 下一道还没通过的题；没有就返回顺序上的下一题
     func nextQuestion(after qID: UUID, in setID: UUID) -> UUID? {
         guard let qs = set(setID)?.questions, let i = qs.firstIndex(where: { $0.id == qID }) else { return nil }
@@ -1081,6 +1079,7 @@ final class AppStore: ObservableObject {
         guard presolveAnswers, aiConsent == true else { return }
         let todo = ids.filter { id in
             guard let q = question(setID, id), !presolving.contains(id) else { return false }
+            if let failed = presolveFailedAt[id], Date().timeIntervalSince(failed) < 300 { return false }
             return (q.referenceAnswer ?? "").isEmpty && q.aiAnswer == nil
         }
         guard !todo.isEmpty, let client = try? makeClient(for: .presolve) else { return }
@@ -1106,6 +1105,9 @@ final class AppStore: ObservableObject {
                         self.presolving.remove(id)
                         if let answer, !answer.isEmpty {
                             self.mutate(setID, id) { $0.aiAnswer = answer }
+                            self.presolveFailedAt[id] = nil
+                        } else {
+                            self.presolveFailedAt[id] = Date()
                         }
                     }
                 }
@@ -1386,6 +1388,8 @@ final class AppStore: ObservableObject {
         pending[qID] = PendingReply(kind: replyKind, inMargin: inMargin, label: reader == nil ? waitingLabel : L("正在读手写…"))
         live(qID).text = ""
         let started = Date()
+        let token = UUID()
+        replyTokens[qID] = token
 
         replyTasks[qID] = Task { [weak self] in
             var full = ""
@@ -1435,7 +1439,7 @@ final class AppStore: ObservableObject {
                 }
             } catch {
                 guard let self else { return }
-                self.pending[qID] = nil
+                if self.replyTokens[qID] == token { self.pending[qID] = nil }
                 // 失败时撤回这次的提问，方便直接重试
                 self.mutate(setID, qID) { q in q.messages.removeAll { $0.id == userMessage.id } }
                 ImageStore.delete(userMessage.imageIDs)
@@ -1443,8 +1447,10 @@ final class AppStore: ObservableObject {
                     self.errorMessage = error.localizedDescription
                 }
             }
-            self?.endLive(qID)
-            self?.replyTasks[qID] = nil
+            guard let self, self.replyTokens[qID] == token else { return }
+            self.endLive(qID)
+            self.replyTasks[qID] = nil
+            self.replyTokens[qID] = nil
         }
     }
 
@@ -1888,5 +1894,42 @@ extension AppStore {
         guard let i = folders.firstIndex(where: { $0.id == id }), folders[i].parentID != parent else { return }
         folders[i].parentID = parent
         if let parent { setCollapsed(parent, false) }
+    }
+}
+
+/// 同一个文件的写盘按排号的先后：后排的号写过了，先排的就不再写，旧数据不会盖掉新数据。
+/// 也记着每个文件最后排的号写好没有，没改过的文件不用重写
+final class SaveLedger: @unchecked Sendable {
+    static let shared = SaveLedger()
+    private let lock = NSLock()
+    private var issued: [String: Int] = [:]
+    private var written: [String: Int] = [:]
+
+    func issue(_ url: URL) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        let next = (issued[url.path] ?? 0) + 1
+        issued[url.path] = next
+        return next
+    }
+
+    /// 排过号、而且最后排的号已经写好了
+    func isClean(_ url: URL) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let last = issued[url.path] else { return false }
+        return written[url.path] == last
+    }
+
+    /// 排过号、还没写好
+    func hasPending(_ url: URL) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let last = issued[url.path] else { return false }
+        return written[url.path] != last
+    }
+
+    /// 写的时候拿着锁，同一时间只有一处在写
+    func write(_ data: Data, to url: URL, generation: Int) {
+        lock.lock(); defer { lock.unlock() }
+        guard generation > (written[url.path] ?? 0) else { return }
+        if (try? DataLocation.write(data, to: url)) != nil { written[url.path] = generation }
     }
 }

@@ -23,11 +23,7 @@ enum NoteLayoutProbe {
         #endif
         defer { web.removeFromSuperview() }
 
-        if let page = MathAssets.pageURL {
-            web.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
-        } else {
-            web.loadHTMLString(MathTemplate.html, baseURL: URL(string: "https://stepwise.app/"))
-        }
+        MathAssets.load(web)
 
         // 等 KaTeX 和它的样式表加载好，否则公式的高度不对
         var ready = false

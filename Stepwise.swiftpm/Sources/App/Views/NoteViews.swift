@@ -13,6 +13,8 @@ struct NoteImportView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var material: ImportedMaterial?
+    /// 正在后台读选的文件、照片
+    @State private var readingID: UUID?
     @State private var pastedText = ""
     @State private var pdfAsImages = false
     /// 程序根据自动判断结果同步开关时，不要触发重新渲染
@@ -48,6 +50,14 @@ struct NoteImportView: View {
                     Text("课件、讲义、教材都可以，用来预习或复习。")
                 }
 
+                if readingID != nil {
+                    Section {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("正在读取…").foregroundStyle(.secondary)
+                        }
+                    }
+                }
                 if let material {
                     Section("已载入") {
                         HStack {
@@ -151,7 +161,7 @@ struct NoteImportView: View {
                             Spacer()
                         }
                     }
-                    .disabled(currentMaterial == nil)
+                    .disabled(currentMaterial == nil || readingID != nil)
                 } footer: {
                     if let p = store.noteProvider ?? store.activeProvider {
                         Text("将使用 \(p.name) · \(p.model.isEmpty ? "未选择模型" : p.model)。生成时会打开笔记，写完一块显示一块。")
@@ -189,41 +199,64 @@ struct NoteImportView: View {
         return text.isEmpty ? nil : ImportedMaterial(name: L("粘贴的资料"), textPages: [text])
     }
 
+    // 读文件、把 PDF 一页页画成图、缩小照片都在后台做：以前在主线程上，选了 30 页的 PDF 或一堆照片后界面要卡好几秒
     private func handleFile(_ result: Result<[URL], Error>) {
+        let url: URL
         do {
-            guard let url = try result.get().first else { return }
-            material = try Importer.load(url: url)
-            let detected = !(material?.images.isEmpty ?? true) && material?.pdfData != nil
+            guard let first = try result.get().first else { return }
+            url = first
+        } catch {
+            store.errorMessage = error.localizedDescription
+            return
+        }
+        readMaterial { try Importer.load(url: url) } then: { loaded in
+            material = loaded
+            let detected = !loaded.images.isEmpty && loaded.pdfData != nil
             if detected != pdfAsImages {
                 syncingToggle = true
                 pdfAsImages = detected
             }
-        } catch {
-            store.errorMessage = error.localizedDescription
         }
     }
 
     private func reloadPDF() {
         guard let m = material, let data = m.pdfData else { return }
-        do {
-            material = try Importer.loadPDF(data: data, name: m.name, mode: pdfAsImages ? .images : .text)
-        } catch {
-            store.errorMessage = error.localizedDescription
+        let mode: Importer.PDFMode = pdfAsImages ? .images : .text
+        readMaterial { try Importer.loadPDF(data: data, name: m.name, mode: mode) } then: { material = $0 }
+    }
+
+    /// 在后台读材料，读好了回到主线程；后读的覆盖先读的，先读的晚到了就不要
+    private func readMaterial(_ work: @escaping @Sendable () throws -> ImportedMaterial,
+                              then apply: @escaping (ImportedMaterial) -> Void) {
+        readingID = UUID()
+        let id = readingID
+        Task {
+            let result = await Task.detached(priority: .userInitiated) { Result { try work() } }.value
+            guard readingID == id else { return }
+            readingID = nil
+            switch result {
+            case .success(let loaded): apply(loaded)
+            case .failure(let error): store.errorMessage = error.localizedDescription
+            }
         }
     }
 
     private func loadPhotos() {
         let items = photoItems
         guard !items.isEmpty else { return }
+        readingID = UUID()
+        let id = readingID
         Task {
             var images: [Data] = []
             for item in items {
                 if let data = try? await item.loadTransferable(type: Data.self),
-                   let jpeg = ImageUtil.normalizedJPEG(data) {
+                   let jpeg = await Task.detached(priority: .userInitiated, operation: { ImageUtil.normalizedJPEG(data) }).value {
                     images.append(jpeg)
                 }
             }
             photoItems = []
+            guard readingID == id else { return }
+            readingID = nil
             if images.isEmpty {
                 store.errorMessage = L("没有读取到图片")
             } else {
@@ -279,7 +312,6 @@ final class NoteViewport: ObservableObject {
 /// 中间一栏：笔记的小标题和练习题，点哪里翻到哪里；页面上正在显示的几节加深
 struct NoteOutlineView: View {
     @EnvironmentObject var store: AppStore
-    @ObservedObject private var viewport = NoteViewport.shared
     let noteID: UUID
 
     struct Item: Identifiable {
@@ -295,33 +327,8 @@ struct NoteOutlineView: View {
             List {
                 Section {
                     ForEach(Self.outline(doc, store: store)) { item in
-                        let shown = viewport.isVisible(item.blockID, in: noteID)
-                        Button {
-                            store.noteJump = item.blockID
-                        } label: {
-                            HStack(spacing: 8) {
-                                if let icon = item.icon {
-                                    Image(systemName: icon).font(.caption)
-                                        .foregroundStyle(shown ? Color.primary : Color.secondary)
-                                }
-                                Text(item.title)
-                                    .font(item.level <= 2 ? .subheadline.weight(.semibold) : .subheadline)
-                                    .foregroundStyle(item.level <= 2 || shown ? Color.primary : Color.secondary)
-                                    .lineLimit(2)
-                            }
-                            .padding(.leading, CGFloat(max(item.level - 2, 0)) * 14)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        // 页面上正在显示的这几节：底色加深，像选中一样
-                        .listRowBackground(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(shown ? Color.primary.opacity(0.1) : Color.clear)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 1)
-                        )
-                        .animation(.easeInOut(duration: 0.2), value: shown)
+                        // 翻页时只有这几行跟着刷新，目录本身不用重新整理
+                        OutlineRow(item: item, noteID: noteID) { store.noteJump = item.blockID }
                     }
                 } header: {
                     if store.noteJobs[noteID] != nil {
@@ -376,6 +383,42 @@ struct NoteOutlineView: View {
             }
         }
         return items
+    }
+}
+
+/// 目录的一行：页面上正在显示的这一节加深
+private struct OutlineRow: View {
+    @ObservedObject private var viewport = NoteViewport.shared
+    let item: NoteOutlineView.Item
+    let noteID: UUID
+    let jump: () -> Void
+
+    var body: some View {
+        let shown = viewport.isVisible(item.blockID, in: noteID)
+        Button(action: jump) {
+            HStack(spacing: 8) {
+                if let icon = item.icon {
+                    Image(systemName: icon).font(.caption)
+                        .foregroundStyle(shown ? Color.primary : Color.secondary)
+                }
+                Text(item.title)
+                    .font(item.level <= 2 ? .subheadline.weight(.semibold) : .subheadline)
+                    .foregroundStyle(item.level <= 2 || shown ? Color.primary : Color.secondary)
+                    .lineLimit(2)
+            }
+            .padding(.leading, CGFloat(max(item.level - 2, 0)) * 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        // 页面上正在显示的这几节：底色加深，像选中一样
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(shown ? Color.primary.opacity(0.1) : Color.clear)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 1)
+        )
+        .animation(.easeInOut(duration: 0.2), value: shown)
     }
 }
 
@@ -477,7 +520,7 @@ struct NoteDocView: View {
                                     pageInk.scheduleSettle { settlePageInk() }
                                 }
                             // 出练习题时，在提问的那一块下面显示进度
-                            if let job, job.afterBlock == block.id, block.kind != .answer {
+                            if let job, job.afterBlock == block.id, block.kind != .answer, !block.text.isEmpty {
                                 progressRow(job)
                             }
                         }
@@ -1154,7 +1197,7 @@ struct NoteTextBlockView<MenuContent: View>: View {
                                     .modifier(NotePaper(width: paperWidth, scale: paperScale))
                             }
                         }
-                        GeneratingBadge(label: L("正在回答…"), startedAt: store.noteJobs[noteID]?.startedAt, tint: Ink.blue) {
+                        GeneratingBadge(label: store.noteJobs[noteID]?.label ?? L("正在回答…"), startedAt: store.noteJobs[noteID]?.startedAt, tint: Ink.blue) {
                             store.stopNoteJob(noteID)
                         }
                     } else {
@@ -1261,7 +1304,7 @@ struct NoteTextBlockView<MenuContent: View>: View {
                     strokes.draw(at: .zero)
                 }
             }
-            ask(image?.jpegData(compressionQuality: 0.85).flatMap { ImageUtil.normalizedJPEG($0, maxPixel: 1280) })
+            ask(image?.cgImage.flatMap { ImageUtil.jpeg($0, maxPixel: 1280) })
             return
         }
         // 把圈住的那一小段（排版后的文字和公式，加上上面的笔迹）截图发给 AI
@@ -1279,7 +1322,7 @@ struct NoteTextBlockView<MenuContent: View>: View {
                 image.draw(at: .zero)
                 strokes?.draw(in: CGRect(origin: .zero, size: image.size))
             }
-            ask(combined.jpegData(compressionQuality: 0.85).flatMap { ImageUtil.normalizedJPEG($0, maxPixel: 1280) })
+            ask(combined.cgImage.flatMap { ImageUtil.jpeg($0, maxPixel: 1280) })
         }
         #else
         ask(nil)

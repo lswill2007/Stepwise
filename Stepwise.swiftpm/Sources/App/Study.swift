@@ -57,9 +57,13 @@ final class StudyTracker: ObservableObject {
     func start() {
         guard timer == nil else { return }
         lastTick = Date()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        // 加进 common 模式：上下翻页（手指拖着、松手滑行）时也照常计时。
+        // 以前翻页时计时器停着，翻了 5 秒以上，这段时间整个不算
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     private func tick() {
@@ -339,7 +343,7 @@ extension AppStore {
         var s = Tutor.pick("【每天】\n", "[Each day]\n") + lines.joined(separator: "\n")
         s += Tutor.pick("\n\n【这周卡住过的题】\n", "\n\n[Questions they got stuck on this week]\n")
             + (hard.isEmpty ? Tutor.pick("没有", "None") : hard.prefix(12).joined(separator: "\n"))
-        s += Tutor.pick("\n\n【错题本】现在有 \(starredEntries.count) 道", "\n\n[Review list] \(Tutor.count(starredEntries.count, "question", "questions")) now")
+        s += Tutor.pick("\n\n【错题本】现在有 \(starredCount) 道", "\n\n[Review list] \(Tutor.count(starredCount, "question", "questions")) now")
         if !notes.isEmpty {
             s += Tutor.pick("\n\n【笔记】", "\n\n[Notes] ") + notes.prefix(8).map(\.title).joined(separator: Tutor.pick("、", ", "))
         }

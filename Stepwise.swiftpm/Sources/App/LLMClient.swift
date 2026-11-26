@@ -58,25 +58,33 @@ struct LLMClient {
                     let normalized = Self.normalized(messages)
                     let fastKey = "\(config.id)|\(model)"
                     // 这个模型之前拒绝过快速模式参数，就不再带
-                    var useFast = options.fast && !FastModeMemory.isUnsupported(fastKey) && !fastParameters(transcribing: options.transcribing).isEmpty
+                    var useFast = options.fast && !ParameterMemory.fastMode.isUnsupported(fastKey) && !fastParameters(transcribing: options.transcribing).isEmpty
+                    // 转写和普通请求的快速模式参数不一样，成功过的分开记
+                    let fastGoodKey = fastKey + (options.transcribing ? "|transcribe" : "")
                     // OpenAI 兼容接口要请求了才在最后报用量；之前拒绝过这个参数的服务商就不再带
-                    var useUsage = config.apiProtocol == .openAI && !UsageOptionMemory.isUnsupported(config.id)
+                    var useUsage = config.apiProtocol == .openAI && !ParameterMemory.usageOption.isUnsupported(config.id)
                     var request = try makeChatRequest(system: system, messages: normalized, fast: useFast, transcribing: options.transcribing, usage: useUsage)
                     var (bytes, response) = try await Self.session.bytes(for: request)
                     // 等太久已经放弃了：不再往下走
                     guard gate.markResponded() else { throw CancellationError() }
                     var status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                    // 参数不被接受：先去掉报用量的参数重试，还不行再去掉快速模式参数；重试成功才记下是哪个参数不被接受
+                    // 参数不被接受：先去掉报用量的参数重试，还不行再去掉快速模式参数；重试成功才记下是哪个参数不被接受。
+                    // 带着它成功过的参数不去掉（报错是别的原因，重发一遍也一样）
                     var dropped: String?
-                    while (status == 400 || status == 422) && (useUsage || useFast) {
-                        if useUsage { useUsage = false; dropped = "usage" } else { useFast = false; dropped = "fast" }
+                    while status == 400 || status == 422 {
+                        let canDropUsage = useUsage && !ParameterMemory.usageOption.isKnownGood(config.id)
+                        let canDropFast = useFast && !ParameterMemory.fastMode.isKnownGood(fastGoodKey)
+                        guard canDropUsage || canDropFast else { break }
+                        if canDropUsage { useUsage = false; dropped = "usage" } else { useFast = false; dropped = "fast" }
                         request = try makeChatRequest(system: system, messages: normalized, fast: useFast, transcribing: options.transcribing, usage: useUsage)
                         (bytes, response) = try await Self.session.bytes(for: request)
                         status = (response as? HTTPURLResponse)?.statusCode ?? 0
                     }
                     if status == 200 {
-                        if dropped == "usage" { UsageOptionMemory.markUnsupported(config.id) }
-                        if dropped == "fast" { FastModeMemory.markUnsupported(fastKey) }
+                        if dropped == "usage" { ParameterMemory.usageOption.markUnsupported(config.id) }
+                        if dropped == "fast" { ParameterMemory.fastMode.markUnsupported(fastKey) }
+                        if useUsage { ParameterMemory.usageOption.markGood(config.id) }
+                        if useFast { ParameterMemory.fastMode.markGood(fastGoodKey) }
                     }
                     if status != 200 {
                         var body = ""
@@ -86,17 +94,28 @@ struct LLMClient {
                     var usage = LLMUsage()
                     // 不管正常结束、出错还是被停止，已经报回来的用量都记下
                     defer { UsageLog.record(provider: config.id, model: model, usage: usage) }
+                    var yielded = false
+                    // 不是 "data:" 开头的行：服务商没按流式回（或者中转站用 200 回了一段 JSON 报错），留着最后看
+                    var plain = ""
                     for try await line in bytes.lines {
                         try Task.checkCancellation()
-                        guard line.hasPrefix("data:") else { continue }
+                        guard line.hasPrefix("data:") else {
+                            if !yielded, plain.utf8.count < 32_000 { plain += line + "\n" }
+                            continue
+                        }
                         let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                         if payload == "[DONE]" { break }
                         guard let data = payload.data(using: .utf8),
                               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
                         readUsage(json, into: &usage)
                         if let text = try parseChunk(json), !text.isEmpty {
+                            yielded = true
                             continuation.yield(text)
                         }
+                    }
+                    // 一个字也没收到：看看是不是整段的回答或报错。以前这种情况只说“模型没有返回内容”，看不到真正的原因
+                    if !yielded, let text = try plainReply(plain), !text.isEmpty {
+                        continuation.yield(text)
                     }
                     continuation.finish()
                 } catch {
@@ -411,6 +430,24 @@ struct LLMClient {
         }
     }
 
+    /// 没按流式返回的整段回复：有报错就报出来，有回答就取出回答
+    private func plainReply(_ body: String) throws -> String? {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{"), let data = trimmed.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        if json["error"] != nil { return try parseChunk(json) }
+        switch config.apiProtocol {
+        case .openAI:
+            let message = ((json["choices"] as? [[String: Any]])?.first?["message"]) as? [String: Any]
+            return message?["content"] as? String
+        case .anthropic:
+            let blocks = json["content"] as? [[String: Any]] ?? []
+            return blocks.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined()
+        case .gemini:
+            return try parseChunk(json)
+        }
+    }
+
     private func parseChunk(_ json: [String: Any]) throws -> String? {
         if let error = json["error"] {
             let msg = (error as? [String: Any])?["message"] as? String ?? "\(error)"
@@ -548,40 +585,46 @@ private final class ResponseGate: @unchecked Sendable {
     }
 }
 
-/// 记住哪些模型不接受快速模式参数，避免每次都多一次失败的请求
-enum FastModeMemory {
-    private static let lock = NSLock()
-    private static var unsupported: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "fastModeUnsupported") ?? [])
+/// 记住哪些服务商 / 模型不接受某个可选参数（存下来，避免每次都多一次失败的请求），
+/// 以及这次打开 App 以来带着它成功过的：之后再报 400 就不是这个参数的问题（比如模型不能看图），
+/// 不用去掉它把题目和手写图片再发一遍，直接报错
+final class ParameterMemory: @unchecked Sendable {
+    /// 快速模式参数，按“服务商|模型”记
+    static let fastMode = ParameterMemory(defaultsKey: "fastModeUnsupported")
+    /// stream_options（报用量）参数，按服务商记
+    static let usageOption = ParameterMemory(defaultsKey: "usageOptionUnsupported")
 
-    static func isUnsupported(_ key: String) -> Bool {
+    private let lock = NSLock()
+    private let defaultsKey: String
+    private var unsupported: Set<String>
+    private var knownGood: Set<String> = []
+
+    private init(defaultsKey: String) {
+        self.defaultsKey = defaultsKey
+        unsupported = Set(UserDefaults.standard.stringArray(forKey: defaultsKey) ?? [])
+    }
+
+    func isUnsupported(_ key: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return unsupported.contains(key)
     }
 
-    static func markUnsupported(_ key: String) {
+    func markUnsupported(_ key: String) {
         lock.lock()
         unsupported.insert(key)
+        knownGood.remove(key)
         let list = Array(unsupported)
         lock.unlock()
-        UserDefaults.standard.set(list, forKey: "fastModeUnsupported")
+        UserDefaults.standard.set(list, forKey: defaultsKey)
     }
-}
 
-/// 不接受 stream_options（报用量）参数的服务商，记住以后不再带
-enum UsageOptionMemory {
-    private static let lock = NSLock()
-    private static var unsupported: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "usageOptionUnsupported") ?? [])
-
-    static func isUnsupported(_ key: String) -> Bool {
+    func isKnownGood(_ key: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return unsupported.contains(key)
+        return knownGood.contains(key)
     }
 
-    static func markUnsupported(_ key: String) {
-        lock.lock()
-        unsupported.insert(key)
-        let list = Array(unsupported)
-        lock.unlock()
-        UserDefaults.standard.set(list, forKey: "usageOptionUnsupported")
+    func markGood(_ key: String) {
+        lock.lock(); defer { lock.unlock() }
+        knownGood.insert(key)
     }
 }
