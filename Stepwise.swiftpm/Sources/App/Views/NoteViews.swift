@@ -132,7 +132,7 @@ struct NoteImportView: View {
                         .onAppear {
                             guard !folderInitialized else { return }
                             folderInitialized = true
-                            folderID = store.set(store.selectedSetID)?.folderID.flatMap { store.folder($0)?.id }
+                            folderID = store.takeImportFolder()
                         }
                     }
                 } header: {
@@ -271,6 +271,11 @@ struct NoteImportView: View {
         guard store.aiConsent == true else {
             showConsent = true
             return
+        }
+        // 没看到“放到文件夹”那一栏就开始了：也放到默认的文件夹
+        if !folderInitialized {
+            folderInitialized = true
+            folderID = store.takeImportFolder()
         }
         do {
             try store.startNoteGeneration(material: source, prompt: prompt, exercises: exerciseLevel, title: title,

@@ -15,26 +15,30 @@ struct LibraryBackup: Codable {
     var images: [String: Data]
     /// 题目 id（笔记块 id）→ 手写笔迹、笔记上的涂鸦（PencilKit 数据）
     var drawings: [String: Data]
-    /// 题集所在的文件夹（连同上级文件夹），导入后保持同样的分类；旧版本的备份没有
+    /// 题集、笔记、白板所在的文件夹（连同上级文件夹），导入后保持同样的分类；旧版本的备份没有
     var folders: [Folder]?
     /// 笔记；笔记里的练习题在 sets 里（noteID 指向笔记）。旧版本的备份没有
     var notes: [NoteDoc]?
     /// AI 白板（笔迹在 drawings 里，按白板 id）。旧版本的备份没有
     var boards: [Whiteboard]?
 
-    /// notes：要一起导出的笔记，它们的练习题集由调用方放进 sets
-    init(sets: [QuestionSet], folders allFolders: [Folder] = [], notes: [NoteDoc] = [], boards: [Whiteboard] = []) {
+    /// notes：要一起导出的笔记，它们的练习题集由调用方放进 sets。
+    /// keepEmptyFolders：整个资料库都导出时，空的文件夹也带上，导入后文件夹一个不少
+    init(sets: [QuestionSet], folders allFolders: [Folder] = [], notes: [NoteDoc] = [], boards: [Whiteboard] = [],
+         keepEmptyFolders keepAll: Bool = false) {
         self.sets = sets
         self.notes = notes.isEmpty ? nil : notes
         self.boards = boards.isEmpty ? nil : boards
         var needed: [Folder] = []
-        for set in sets {
-            var current = allFolders.first { $0.id == set.folderID }
+        let placed = sets.map(\.folderID) + notes.map(\.folderID) + boards.map(\.folderID)
+        for folderID in placed {
+            var current = allFolders.first { $0.id == folderID }
             while let f = current, !needed.contains(where: { $0.id == f.id }) {
                 needed.append(f)
                 current = allFolders.first { $0.id == f.parentID }
             }
         }
+        if keepAll { needed = allFolders }
         self.folders = needed.isEmpty ? nil : needed
         var images: [String: Data] = [:]
         for id in sets.flatMap(Self.imageIDs) {
@@ -107,10 +111,13 @@ struct BackupFile: Transferable {
     var folders: [Folder] = []
     var notes: [NoteDoc] = []
     var boards: [Whiteboard] = []
+    /// 整个资料库都导出：空的文件夹也带上
+    var allFolders = false
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(exportedContentType: .json) { file in
-            SentTransferredFile(try LibraryBackup(sets: file.sets, folders: file.folders, notes: file.notes, boards: file.boards).write())
+            SentTransferredFile(try LibraryBackup(sets: file.sets, folders: file.folders, notes: file.notes, boards: file.boards,
+                                                  keepEmptyFolders: file.allFolders).write())
         }
     }
 }

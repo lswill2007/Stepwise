@@ -153,7 +153,6 @@
 "笔记操作" = "Note Actions";
 "设置" = "Settings";
 "还没有题目" = "No questions yet";
-"里面的题集和子文件夹会移到上一级，不会删除任何题目。" = "Question sets and subfolders inside will move up one level. No questions are deleted.";
 "重命名" = "Rename";
 "重命名文件夹" = "Rename Folder";
 "重命名笔记" = "Rename Notes";
@@ -806,5 +805,20 @@
 "要改用 %@ 吗？" = "Switch to %@?";
 "只填好 Key 还不会切换。做题、导入题目现在用的还是 %@，点“设为当前使用”才会改用 %@。" = "Entering a key doesn't switch providers. Practice and importing still use %1$@; tap “Use This Provider” to switch to %2$@.";
 "填好 Key 不会自动切换：点“设为当前使用”后，做题、导入题目才会用 %@。" = "Entering a key doesn't switch automatically. Tap “Use This Provider” to use %@ for practice and importing.";
-"总目录" = "Library";
 "收起目录" = "Hide Contents";
+
+/* 资料库：按文件夹分类 */
+"资料库" = "Library";
+"里面的笔记、白板、题集和子文件夹会移到上一级，不会删除任何内容。" = "Notes, whiteboards, question sets and subfolders inside will move up one level. Nothing is deleted.";
+"在这里新建" = "New Here";
+"红色" = "Red";
+"橙色" = "Orange";
+"黄色" = "Yellow";
+"绿色" = "Green";
+"青绿色" = "Teal";
+"天蓝色" = "Cyan";
+"蓝色" = "Blue";
+"靛蓝色" = "Indigo";
+"紫色" = "Purple";
+"粉色" = "Pink";
+"灰色" = "Gray";

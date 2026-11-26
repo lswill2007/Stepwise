@@ -551,7 +551,11 @@ struct ExportView: View {
                 let parts = [chosen.isEmpty ? nil : String(localized: "\(chosen.count) 个题集"),
                              chosenNotes.isEmpty ? nil : String(localized: "\(chosenNotes.count) 篇笔记"),
                              chosenBoards.isEmpty ? nil : String(localized: "\(chosenBoards.count) 块白板")].compactMap { $0 }
-                ShareLink(item: BackupFile(sets: chosen + noteSets, folders: store.folders, notes: chosenNotes, boards: chosenBoards),
+                // 全都选上时空的文件夹也带上
+                let everything = chosen.count == store.questionSets.count && chosenNotes.count == store.notes.count
+                    && chosenBoards.count == store.boards.count
+                ShareLink(item: BackupFile(sets: chosen + noteSets, folders: store.folders, notes: chosenNotes, boards: chosenBoards,
+                                           allFolders: everything),
                           preview: SharePreview("Stepwise 备份（\(parts.joined(separator: "、"))）")) {
                     Label(parts.isEmpty ? L("请先选择题集或笔记") : L("导出 ") + parts.joined(separator: L("、")),
                           systemImage: "square.and.arrow.up")

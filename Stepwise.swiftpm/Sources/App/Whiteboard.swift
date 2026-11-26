@@ -90,11 +90,13 @@ extension AppStore {
         selectedBoardID = id
     }
 
-    /// 新建一块白板并打开；纸用上次选的样式
+    /// 新建一块白板并打开；纸用上次选的样式。放进 folderID 这个文件夹（nil 为最外层）
     @discardableResult
-    func createBoard() -> UUID {
+    func createBoard(in folderID: UUID? = nil) -> UUID {
         let count = boards.count + 1
         var board = Whiteboard(title: count == 1 ? L("白板") : String(localized: "白板 \(count)"))
+        board.folderID = folder(folderID)?.id
+        if let folderID { setCollapsed(folderID, false) }
         if let last = UserDefaults.standard.string(forKey: "boardPaper"), let style = PaperStyle(rawValue: last) {
             board.paper = style
         }

@@ -117,13 +117,92 @@ struct Question: Codable, Identifiable, Equatable {
     var isStarred: Bool { starredAt != nil }
 }
 
-/// 左侧的分级文件夹：文件夹里可以放题集，也可以再放文件夹
+/// 左侧资料库的分级文件夹：文件夹里可以放笔记、白板、题集，也可以再放文件夹
 struct Folder: Codable, Identifiable, Equatable {
     var id = UUID()
     var name: String
     /// 上一级文件夹；nil 表示最外层
     var parentID: UUID?
     var collapsed = false
+    /// 文件夹的颜色（FolderColor 的 rawValue）；旧数据没有，按 id 挑一个，每次都一样
+    var color: String?
+
+    var tint: FolderColor {
+        if let color, let c = FolderColor(rawValue: color) { return c }
+        let sum = withUnsafeBytes(of: id.uuid) { $0.reduce(0) { $0 + Int($1) } }
+        return FolderColor.allCases[sum % FolderColor.allCases.count]
+    }
+}
+
+/// 文件夹可选的颜色：左栏里每个文件夹画成这个颜色的一条圆角条
+enum FolderColor: String, CaseIterable, Identifiable {
+    case red, orange, yellow, green, teal, cyan, blue, indigo, purple, pink, gray
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .red: return L("红色")
+        case .orange: return L("橙色")
+        case .yellow: return L("黄色")
+        case .green: return L("绿色")
+        case .teal: return L("青绿色")
+        case .cyan: return L("天蓝色")
+        case .blue: return L("蓝色")
+        case .indigo: return L("靛蓝色")
+        case .purple: return L("紫色")
+        case .pink: return L("粉色")
+        case .gray: return L("灰色")
+        }
+    }
+}
+
+/// 资料库里的一项：题集、笔记或白板，都可以放进任意一个文件夹
+enum LibraryItem: Identifiable {
+    case set(QuestionSet)
+    case note(NoteDoc)
+    case board(Whiteboard)
+
+    var id: UUID {
+        switch self {
+        case .set(let s): return s.id
+        case .note(let n): return n.id
+        case .board(let b): return b.id
+        }
+    }
+
+    var folderID: UUID? {
+        switch self {
+        case .set(let s): return s.folderID
+        case .note(let n): return n.folderID
+        case .board(let b): return b.folderID
+        }
+    }
+
+    var createdAt: Date {
+        switch self {
+        case .set(let s): return s.createdAt
+        case .note(let n): return n.createdAt
+        case .board(let b): return b.createdAt
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .set(let s): return s.title
+        case .note(let n): return n.title
+        case .board(let b): return b.title
+        }
+    }
+
+    /// 拖放时带的文字：“set:…”“note:…”“board:…”
+    var dragKey: String {
+        switch self {
+        case .set(let s): return "set:\(s.id.uuidString)"
+        case .note(let n): return "note:\(n.id.uuidString)"
+        case .board(let b): return "board:\(b.id.uuidString)"
+        }
+    }
 }
 
 /// 做完一道题之后的快捷操作，可以在设置里自定义
@@ -279,6 +358,8 @@ struct Whiteboard: Codable, Identifiable, Equatable {
     var notes: [BoardNote] = []
     /// 隐藏所有便签（随时可以再显示）
     var notesHidden = false
+    /// 所在的文件夹；nil 表示放在最外层（旧数据没有）
+    var folderID: UUID?
 }
 
 /// 白板上的一组便签：框选一处发给 AI，回复写在一张便签上，指出的问题按行号在旁边列出

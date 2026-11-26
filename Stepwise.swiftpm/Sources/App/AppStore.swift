@@ -67,6 +67,8 @@ final class AppStore: ObservableObject {
     @Published var sets: [QuestionSet] = [] { didSet { scheduleSave() } }
     /// 左侧的分级文件夹，单独存在 folders.json
     @Published var folders: [Folder] = [] { didSet { saveFolders() } }
+    /// 在文件夹菜单里点了“导入题目到这里”“导入资料生成笔记到这里”：导入页默认放到这个文件夹
+    var importFolderHint: UUID?
     /// 选了题集（或错题本）、笔记就不再显示白板
     @Published var selectedSetID: UUID? { didSet { if selectedSetID != nil, selectedBoardID != nil { selectedBoardID = nil }; rememberOpened() } }
     @Published var selectedQuestionID: UUID? {
@@ -1790,17 +1792,54 @@ extension AppStore {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    func sets(in folderID: UUID?) -> [QuestionSet] {
-        // 指向已经不存在的文件夹的题集放到最外层，不会丢
-        questionSets.filter { set in
-            let actual = folder(set.folderID) == nil ? nil : set.folderID
-            return actual == folderID
-        }
+    /// 资料库按文件夹排好：每个文件夹（nil 为最外层）里直接放的子文件夹和题集、笔记、白板。
+    /// 指向已经不存在的文件夹的东西放到最外层，不会丢
+    struct LibraryIndex {
+        var folders: [UUID?: [Folder]] = [:]
+        var items: [UUID?: [LibraryItem]] = [:]
+        /// 文件夹里（包括子文件夹）一共多少个笔记、白板、题集
+        var counts: [UUID: Int] = [:]
     }
 
-    /// 文件夹里（包括子文件夹）一共多少个题集
-    func setCount(inTree id: UUID) -> Int {
-        sets(in: id).count + childFolders(of: id).reduce(0) { $0 + setCount(inTree: $1.id) }
+    func libraryIndex() -> LibraryIndex {
+        var index = LibraryIndex()
+        let ids = Set(folders.map(\.id))
+        func place(_ id: UUID?) -> UUID? { id.flatMap { ids.contains($0) ? $0 : nil } }
+        for f in folders { index.folders[place(f.parentID), default: []].append(f) }
+        for key in index.folders.keys {
+            index.folders[key]?.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        }
+        var all: [LibraryItem] = questionSets.map { .set($0) }
+        all += notes.map { .note($0) }
+        all += boards.map { .board($0) }
+        for item in all { index.items[place(item.folderID), default: []].append(item) }
+        // 新的在上面
+        for key in index.items.keys {
+            index.items[key]?.sort { $0.createdAt > $1.createdAt }
+        }
+        func count(_ id: UUID, _ depth: Int) -> Int {
+            guard depth < 50 else { return 0 }
+            let n = (index.items[id]?.count ?? 0) + (index.folders[id] ?? []).reduce(0) { $0 + count($1.id, depth + 1) }
+            index.counts[id] = n
+            return n
+        }
+        for f in index.folders[nil] ?? [] { _ = count(f.id, 0) }
+        return index
+    }
+
+    /// 导入页默认放到哪个文件夹：文件夹菜单里点的那个，否则是现在选中的东西所在的文件夹
+    func takeImportFolder() -> UUID? {
+        defer { importFolderHint = nil }
+        return folder(importFolderHint)?.id ?? currentFolderID
+    }
+
+    /// 现在选中的笔记、白板或题集所在的文件夹：新建、导入时默认放到这里
+    var currentFolderID: UUID? {
+        let raw: UUID?
+        if let id = selectedBoardID { raw = board(id)?.folderID }
+        else if let id = selectedNoteID { raw = note(id)?.folderID }
+        else { raw = set(selectedSetID)?.folderID }
+        return folder(raw)?.id
     }
 
     /// “数学 / 函数 / 二次函数”
@@ -1839,7 +1878,10 @@ extension AppStore {
     @discardableResult
     func addFolder(name: String, parent: UUID?) -> UUID {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let new = Folder(name: trimmed.isEmpty ? L("新文件夹") : trimmed, parentID: parent)
+        // 颜色按顺序轮着来，挨着的文件夹颜色不一样
+        let colors = FolderColor.allCases
+        let new = Folder(name: trimmed.isEmpty ? L("新文件夹") : trimmed, parentID: parent,
+                         color: colors[folders.count % colors.count].rawValue)
         folders.append(new)
         // 在文件夹里新建时，把上一级展开
         if let parent, let i = folders.firstIndex(where: { $0.id == parent }) { folders[i].collapsed = false }
@@ -1857,16 +1899,32 @@ extension AppStore {
         folders[i].collapsed = collapsed
     }
 
-    /// 删除文件夹：里面的题集和子文件夹移到上一级，不会删除任何题目
+    func setFolderColor(_ id: UUID, _ color: FolderColor) {
+        guard let i = folders.firstIndex(where: { $0.id == id }), folders[i].color != color.rawValue else { return }
+        folders[i].color = color.rawValue
+    }
+
+    /// 删除文件夹：里面的笔记、白板、题集和子文件夹移到上一级，不会删除任何内容
     func deleteFolder(_ id: UUID) {
         guard let f = folder(id) else { return }
         for i in folders.indices where folders[i].parentID == id { folders[i].parentID = f.parentID }
         for i in sets.indices where sets[i].folderID == id { sets[i].folderID = f.parentID }
+        for i in notes.indices where notes[i].folderID == id { notes[i].folderID = f.parentID }
+        for i in boards.indices where boards[i].folderID == id { boards[i].folderID = f.parentID }
         folders.removeAll { $0.id == id }
     }
 
-    /// 上级文件夹不存在、或者互相嵌套成环的文件夹（只可能来自损坏的备份）放回最外层，里面的题集不会看不见
+    /// 上级文件夹不存在、或者互相嵌套成环的文件夹（只可能来自损坏的备份）放回最外层，里面的题集不会看不见。
+    /// 旧版本的文件夹没有颜色：按先后轮着给一个，挨着的文件夹颜色不一样，以后也不会变
     func repairFolders() {
+        if folders.contains(where: { $0.color == nil }) {
+            let colors = FolderColor.allCases
+            var colored = folders
+            for i in colored.indices where colored[i].color == nil {
+                colored[i].color = colors[i % colors.count].rawValue
+            }
+            folders = colored
+        }
         let ids = Set(folders.map(\.id))
         for i in folders.indices {
             var seen: Set<UUID> = [folders[i].id]
@@ -1885,6 +1943,21 @@ extension AppStore {
     func moveSet(_ setID: UUID, to folderID: UUID?) {
         guard let i = sets.firstIndex(where: { $0.id == setID }), sets[i].folderID != folderID else { return }
         sets[i].folderID = folderID
+        if let folderID { setCollapsed(folderID, false) }
+    }
+
+    /// 把一篇笔记、一块白板或一个题集移到某个文件夹（nil 为最外层）
+    func moveItem(_ id: UUID, to folderID: UUID?) {
+        if let i = notes.firstIndex(where: { $0.id == id }) {
+            guard notes[i].folderID != folderID else { return }
+            notes[i].folderID = folderID
+        } else if let i = boards.firstIndex(where: { $0.id == id }) {
+            guard boards[i].folderID != folderID else { return }
+            boards[i].folderID = folderID
+        } else {
+            moveSet(id, to: folderID)
+            return
+        }
         if let folderID { setCollapsed(folderID, false) }
     }
 

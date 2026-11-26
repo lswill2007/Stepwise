@@ -1,12 +1,14 @@
 import SwiftUI
 
+/// 左栏：资料库。错题本固定在最上面，下面是自己建的文件夹（一层层嵌套，每个一条彩色圆角条），
+/// 笔记、白板、题集都可以放进任意一个文件夹，没放进文件夹的排在最外层
 struct SidebarView: View {
     @EnvironmentObject var store: AppStore
     @Binding var showImport: Bool
     @Binding var showNoteImport: Bool
     @Binding var showSettings: Bool
 
-    /// 正在输入名字：新建文件夹、重命名文件夹或题集
+    /// 正在输入名字：新建文件夹、重命名文件夹、题集、笔记或白板
     enum NameEdit: Identifiable {
         case newFolder(parent: UUID?)
         case renameFolder(UUID)
@@ -37,62 +39,51 @@ struct SidebarView: View {
         var sets: Set<UUID> = []
     }
 
+    /// 资料库排成一行一行：文件夹条和里面的东西，按层级缩进
+    enum Row: Identifiable {
+        case folder(Folder, depth: Int)
+        case item(LibraryItem, depth: Int)
+        var id: UUID {
+            switch self {
+            case .folder(let f, _): return f.id
+            case .item(let item, _): return item.id
+            }
+        }
+    }
+
     var body: some View {
+        let index = store.libraryIndex()
+        let rows = Self.rows(index)
+        // 选中的东西在哪些文件夹里：收起来的文件夹条画一圈框，知道它在里面
+        let holding = selectionAncestors
         List(selection: selectionBinding) {
             Group {
-            if !store.questionSets.isEmpty {
+                if !store.questionSets.isEmpty {
+                    Section {
+                        mistakeBookRow
+                    }
+                }
                 Section {
-                    HStack(spacing: 10) {
-                        Image(systemName: "bookmark.fill")
-                            .foregroundStyle(Ink.red)
-                        Text("错题本").font(.headline)
-                        Spacer()
-                        let count = store.starredCount
-                        if count > 0 {
-                            Text("\(count)")
-                                .font(.callout).monospacedDigit()
-                                .foregroundStyle(.secondary)
+                    ForEach(rows) { row in
+                        switch row {
+                        case .folder(let folder, let depth):
+                            FolderBar(folder: folder, depth: depth, count: index.counts[folder.id] ?? 0,
+                                      holdsSelection: folder.collapsed && holding.contains(folder.id), actions: actions)
+                        case .item(let item, let depth):
+                            itemRow(item, depth: depth)
                         }
                     }
-                    .padding(.vertical, 6)
-                    .tag(AppStore.mistakeBookID)
-                    .paneRow(AppStore.mistakeBookID, tint: Ink.blue)
-                }
-            }
-            Section {
-                ForEach(store.notes) { doc in
-                    NoteRow(doc: doc, rename: { startEdit(.renameNote(doc.id)) }, delete: { deletingNote = doc },
-                            exportPDF: { pdfRequest = PDFRequest(notes: [doc.id]) })
-                }
-                Button {
-                    showNoteImport = true
-                } label: {
-                    Label("导入资料生成笔记", systemImage: "doc.badge.plus")
-                        .foregroundStyle(Color.accentColor)
-                }
-            } header: {
-                Text("笔记")
-            }
-            boardsSection
-            Section {
-                FolderContents(parent: nil, actions: actions)
-                if !store.questionSets.isEmpty || !store.folders.isEmpty {
-                    Button {
-                        startEdit(.newFolder(parent: nil))
-                    } label: {
-                        Label("新建文件夹", systemImage: "folder.badge.plus")
-                            .foregroundStyle(Color.accentColor)
+                    if !isEmpty {
+                        Button {
+                            startEdit(.newFolder(parent: nil))
+                        } label: {
+                            Label("新建文件夹", systemImage: "folder.badge.plus")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        .listRowInsets(EdgeInsets(top: 6, leading: 18, bottom: 6, trailing: 16))
+                        .selectionDisabled()
                     }
                 }
-            } header: {
-                if !store.folders.isEmpty || !store.questionSets.isEmpty {
-                    Text("题集")
-                        // 拖到这里放回最外层
-                        .dropDestination(for: String.self) { items, _ in
-                            drop(items, into: nil)
-                        }
-                }
-            }
             }
             // 左栏和中间栏自己排在页面旁边（不在系统分栏里），系统给的是一块块卡片：去掉卡片底色和分隔线，
             // 选中的一行自己画圆角底色（见 PaneRowStyle）
@@ -100,24 +91,27 @@ struct SidebarView: View {
         }
         .paneList(selection: selectionBinding.wrappedValue)
         .overlay {
-            if store.questionSets.isEmpty && store.folders.isEmpty && store.notes.isEmpty && store.boards.isEmpty {
+            if isEmpty {
                 ContentUnavailableView {
                     Label("还没有题目", systemImage: "doc.text.magnifyingglass")
                 } description: {
                     Text("导入 PDF、图片或文字，AI 会自动把每道题分开；也可以导入课件、讲义，生成预习和复习笔记")
                 } actions: {
-                    Button("导入题目") { showImport = true }.buttonStyle(.borderedProminent)
-                    Button("导入资料生成笔记") { showNoteImport = true }
+                    Button("导入题目") { openImport(notes: false, into: nil) }.buttonStyle(.borderedProminent)
+                    Button("导入资料生成笔记") { openImport(notes: true, into: nil) }
                 }
             }
         }
-        .navigationTitle("题集")
+        .navigationTitle("资料库")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
-                    Button("导入题目", systemImage: "doc.text") { showImport = true }
-                    Button("导入资料生成笔记", systemImage: "doc.richtext") { showNoteImport = true }
-                    Button("新建白板", systemImage: "rectangle.and.pencil.and.ellipsis") { store.createBoard() }
+                    // 新建、导入的东西放到现在选中的东西所在的文件夹
+                    Button("导入题目", systemImage: "doc.text") { openImport(notes: false, into: nil) }
+                    Button("导入资料生成笔记", systemImage: "doc.richtext") { openImport(notes: true, into: nil) }
+                    Button("新建白板", systemImage: "rectangle.and.pencil.and.ellipsis") { store.createBoard(in: store.currentFolderID) }
+                    Divider()
+                    Button("新建文件夹", systemImage: "folder.badge.plus") { startEdit(.newFolder(parent: nil)) }
                 } label: {
                     Label("导入", systemImage: "plus")
                 }
@@ -146,7 +140,7 @@ struct SidebarView: View {
                 deletingFolder = nil
             }
         } message: {
-            Text("里面的题集和子文件夹会移到上一级，不会删除任何题目。")
+            Text("里面的笔记、白板、题集和子文件夹会移到上一级，不会删除任何内容。")
         }
         .confirmationDialog(
             "删除笔记“\(deletingNote?.title ?? "")”？",
@@ -173,6 +167,85 @@ struct SidebarView: View {
             Text("白板上的笔迹和便签都会删除，不能恢复。")
         }
     }
+
+    private var isEmpty: Bool {
+        store.questionSets.isEmpty && store.folders.isEmpty && store.notes.isEmpty && store.boards.isEmpty
+    }
+
+    /// 展开的文件夹排出里面的子文件夹（在前）和笔记、白板、题集（新的在上）；收起的只排一条
+    static func rows(_ index: AppStore.LibraryIndex) -> [Row] {
+        var out: [Row] = []
+        func walk(_ parent: UUID?, _ depth: Int) {
+            guard depth < 50 else { return }
+            for folder in index.folders[parent] ?? [] {
+                out.append(.folder(folder, depth: depth))
+                if !folder.collapsed { walk(folder.id, depth + 1) }
+            }
+            for item in index.items[parent] ?? [] {
+                out.append(.item(item, depth: depth))
+            }
+        }
+        walk(nil, 0)
+        return out
+    }
+
+    /// 选中的东西所在的文件夹和它的上级文件夹
+    private var selectionAncestors: Set<UUID> {
+        var result: Set<UUID> = []
+        var current = store.currentFolderID
+        while let c = current, result.count < 50, !result.contains(c) {
+            result.insert(c)
+            current = store.folder(c)?.parentID
+        }
+        return result
+    }
+
+    private var mistakeBookRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "bookmark.fill")
+                .foregroundStyle(Ink.red)
+            Text("错题本").font(.headline)
+            Spacer()
+            let count = store.starredCount
+            if count > 0 {
+                Text("\(count)")
+                    .font(.callout).monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 6)
+        .tag(AppStore.mistakeBookID)
+        .libraryRow(depth: 0)
+        .paneRow(AppStore.mistakeBookID, tint: Ink.blue)
+    }
+
+    @ViewBuilder
+    private func itemRow(_ item: LibraryItem, depth: Int) -> some View {
+        // 拖到一篇笔记、一块白板或一个题集上：放进它所在的文件夹
+        let place = store.folder(item.folderID)?.id
+        Group {
+            switch item {
+            case .set(let set):
+                SetRow(set: set, actions: actions)
+            case .note(let doc):
+                NoteRow(doc: doc, actions: actions)
+            case .board(let board):
+                BoardRow(board: board, actions: actions)
+            }
+        }
+        .tag(item.id)
+        .libraryRow(depth: depth)
+        .paneRow(item.id, tint: Ink.blue, indent: SidebarView.indent(depth))
+        .draggable(item.dragKey) {
+            Label(item.title, systemImage: item.icon).padding(8)
+        }
+        .dropDestination(for: String.self) { items, _ in
+            drop(items, into: place)
+        }
+    }
+
+    /// 每深一层往右缩进多少
+    static func indent(_ depth: Int) -> CGFloat { CGFloat(min(depth, 6)) * 14 }
 
     /// 题集、错题本、笔记和白板共用一个选中状态
     private var selectionBinding: Binding<UUID?> {
@@ -201,25 +274,18 @@ struct SidebarView: View {
         })
     }
 
-    private var boardsSection: some View {
-        Section {
-            ForEach(store.boards) { board in
-                BoardRow(board: board, rename: { startEdit(.renameBoard(board.id)) }, delete: { deletingBoard = board })
-            }
-            Button {
-                store.createBoard()
-            } label: {
-                Label("新建白板", systemImage: "rectangle.badge.plus")
-                    .foregroundStyle(Color.accentColor)
-            }
-        } header: {
-            Text("AI 白板")
-        }
+    private var actions: SidebarActions {
+        SidebarActions(edit: startEdit, deleteFolder: { deletingFolder = $0 },
+                       deleteNote: { deletingNote = $0 }, deleteBoard: { deletingBoard = $0 },
+                       drop: drop,
+                       exportPDF: { pdfRequest = $0 },
+                       importInto: openImport)
     }
 
-    private var actions: SidebarActions {
-        SidebarActions(edit: startEdit, deleteFolder: { deletingFolder = $0 }, drop: drop,
-                       exportPDF: { pdfRequest = PDFRequest(sets: [$0]) })
+    /// 打开导入页；into 为文件夹菜单里点的那个文件夹，nil 时默认放到现在选中的东西所在的文件夹
+    private func openImport(notes: Bool, into folderID: UUID?) {
+        store.importFolderHint = folderID
+        if notes { showNoteImport = true } else { showImport = true }
     }
 
     private var alertTitle: String {
@@ -257,112 +323,191 @@ struct SidebarView: View {
         nameEdit = nil
     }
 
-    /// 拖放：题集或文件夹拖到某个文件夹上（nil 为最外层）
+    /// 拖放：笔记、白板、题集或文件夹拖到某个文件夹上（nil 为最外层）
     private func drop(_ items: [String], into folderID: UUID?) -> Bool {
         var moved = false
         for item in items {
-            if item.hasPrefix("set:"), let id = UUID(uuidString: String(item.dropFirst(4))) {
-                store.moveSet(id, to: folderID)
+            guard let colon = item.firstIndex(of: ":"),
+                  let id = UUID(uuidString: String(item[item.index(after: colon)...])) else { continue }
+            switch item[..<colon] {
+            case "set", "note", "board":
+                store.moveItem(id, to: folderID)
                 moved = true
-            } else if item.hasPrefix("folder:"), let id = UUID(uuidString: String(item.dropFirst(7))), id != folderID {
+            case "folder" where id != folderID:
                 store.moveFolder(id, to: folderID)
                 moved = true
+            default:
+                break
             }
         }
         return moved
     }
 }
 
-/// 侧边栏里各行要用到的操作（新建、重命名、删除、拖放）
+/// 侧边栏里各行要用到的操作（新建、重命名、删除、拖放、导出、导入）
 struct SidebarActions {
     let edit: (SidebarView.NameEdit) -> Void
     let deleteFolder: (Folder) -> Void
+    let deleteNote: (NoteDoc) -> Void
+    let deleteBoard: (Whiteboard) -> Void
     let drop: ([String], UUID?) -> Bool
-    /// 把这个题集导出成 PDF
-    let exportPDF: (UUID) -> Void
+    /// 把题集或笔记导出成 PDF
+    let exportPDF: (SidebarView.PDFRequest) -> Void
+    /// 导入题目（notes 为 false）或导入资料生成笔记，放到这个文件夹
+    let importInto: (_ notes: Bool, _ folder: UUID?) -> Void
 }
 
-/// 一个文件夹（或最外层）里的内容：子文件夹在前，题集在后
-struct FolderContents: View {
-    @EnvironmentObject var store: AppStore
-    let parent: UUID?
-    let actions: SidebarActions
-
-    var body: some View {
-        ForEach(store.childFolders(of: parent)) { folder in
-            FolderNode(folder: folder, actions: actions)
-        }
-        ForEach(store.sets(in: parent)) { set in
-            SetRow(set: set, actions: actions)
-        }
-        .onDelete { offsets in
-            let ids = offsets.map { store.sets(in: parent)[$0].id }
-            ids.forEach(store.deleteSet)
+extension LibraryItem {
+    var icon: String {
+        switch self {
+        case .set: return "doc.text"
+        case .note: return "doc.richtext"
+        case .board: return "rectangle.and.pencil.and.ellipsis"
         }
     }
 }
 
-struct FolderNode: View {
+extension FolderColor {
+    var color: Color {
+        switch self {
+        case .red: return .red
+        case .orange: return .orange
+        case .yellow: return .yellow
+        case .green: return .green
+        case .teal: return .teal
+        case .cyan: return .cyan
+        case .blue: return .blue
+        case .indigo: return .indigo
+        case .purple: return .purple
+        // 系统的粉色太接近红色
+        case .pink: return Color(red: 0.96, green: 0.45, blue: 0.68)
+        case .gray: return .gray
+        }
+    }
+}
+
+extension View {
+    /// 资料库里的一行：按层级往右缩进
+    func libraryRow(depth: Int) -> some View {
+        listRowInsets(EdgeInsets(top: 2, leading: 18 + SidebarView.indent(depth), bottom: 2, trailing: 16))
+    }
+}
+
+/// 一个文件夹：一条彩色圆角条，左边彩色圆点，右边里面有几样东西和折叠箭头。点一下展开 / 收起，按住出菜单
+struct FolderBar: View {
     @EnvironmentObject var store: AppStore
     let folder: Folder
+    let depth: Int
+    /// 里面（包括子文件夹）一共几样东西
+    let count: Int
+    /// 收起来了，选中的东西在里面
+    let holdsSelection: Bool
     let actions: SidebarActions
     @State private var targeted = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: Binding(get: { !(store.folder(folder.id)?.collapsed ?? false) },
-                                            set: { store.setCollapsed(folder.id, !$0) })) {
-            FolderContents(parent: folder.id, actions: actions)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: targeted ? "folder.badge.plus" : "folder")
-                    .foregroundStyle(.secondary)
-                Text(folder.name).font(.headline).lineLimit(1)
-                Spacer()
-                let count = store.setCount(inTree: folder.id)
-                if count > 0 {
-                    Text("\(count)").font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                }
-                Menu { menuItems } label: {
-                    Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("文件夹操作")
+        let color = folder.tint.color
+        HStack(spacing: 10) {
+            Circle()
+                .fill(color.gradient)
+                .frame(width: 14, height: 14)
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+            Text(folder.name)
+                .font(.body.weight(.medium))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            if count > 0 {
+                Text("\(count)")
+                    .font(.callout.weight(holdsSelection ? .semibold : .regular)).monospacedDigit()
+                    .foregroundStyle(holdsSelection ? .primary : .secondary)
             }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-            // 点文件夹名展开 / 收起
-            .onTapGesture {
-                withAnimation { store.setCollapsed(folder.id, !(store.folder(folder.id)?.collapsed ?? false)) }
-            }
-            .draggable("folder:\(folder.id.uuidString)") {
-                Label(folder.name, systemImage: "folder.fill").padding(8)
-            }
-            .dropDestination(for: String.self) { items, _ in
-                actions.drop(items, folder.id)
-            } isTargeted: { targeted = $0 }
-            .contextMenu { menuItems }
+            Image(systemName: "chevron.down")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(folder.collapsed ? -90 : 0))
         }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 42)
+        .background(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(color.opacity(targeted ? 0.5 : 0.28))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(Ink.pen, lineWidth: holdsSelection || targeted ? 2 : 0)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.2)) { store.setCollapsed(folder.id, !folder.collapsed) }
+        }
+        .contextMenu { menuItems }
+        .draggable("folder:\(folder.id.uuidString)") {
+            Label(folder.name, systemImage: "folder.fill").padding(8)
+        }
+        .dropDestination(for: String.self) { items, _ in
+            actions.drop(items, folder.id)
+        } isTargeted: { targeted = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        // 文件夹条不是能选中的一行：按住它（没出菜单就松手）时，不能把选中的笔记、题集清掉
+        .selectionDisabled()
+        .listRowInsets(EdgeInsets(top: 3, leading: 10 + SidebarView.indent(depth), bottom: 3, trailing: 10))
     }
 
     @ViewBuilder
     private var menuItems: some View {
-        Button("新建子文件夹", systemImage: "folder.badge.plus") { actions.edit(.newFolder(parent: folder.id)) }
+        Menu {
+            Button("导入题目", systemImage: "doc.text") { actions.importInto(false, folder.id) }
+            Button("导入资料生成笔记", systemImage: "doc.richtext") { actions.importInto(true, folder.id) }
+            Button("新建白板", systemImage: "rectangle.and.pencil.and.ellipsis") { store.createBoard(in: folder.id) }
+            Button("新建子文件夹", systemImage: "folder.badge.plus") { actions.edit(.newFolder(parent: folder.id)) }
+        } label: {
+            Label("在这里新建", systemImage: "plus")
+        }
         Button("重命名", systemImage: "pencil") { actions.edit(.renameFolder(folder.id)) }
+        // 菜单里一排只放得下 6 个颜色，分两排，每个颜色都看得见
+        let colors = FolderColor.allCases
+        colorRow(Array(colors.prefix(6))) { Text("颜色") }
+        colorRow(Array(colors.dropFirst(6))) { EmptyView() }
         MoveMenu(excluding: folder.id, current: folder.parentID) { store.moveFolder(folder.id, to: $0) }
         Button("删除文件夹", systemImage: "trash", role: .destructive) { actions.deleteFolder(folder) }
     }
+
+    private func colorRow(_ colors: [FolderColor], @ViewBuilder title: () -> some View) -> some View {
+        Picker(selection: Binding(get: { folder.tint }, set: { store.setFolderColor(folder.id, $0) })) {
+            ForEach(colors) { c in
+                Label(c.title, systemImage: "circle.fill")
+                    .tint(c.color)
+                    .tag(c)
+            }
+        } label: {
+            title()
+        }
+        .pickerStyle(.palette)
+    }
 }
 
-/// 左侧的一篇笔记
+/// 左侧一行前面的小图标：分得出是题集、笔记还是白板
+private struct ItemIcon: View {
+    let item: LibraryItem
+    var body: some View {
+        Image(systemName: item.icon)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .frame(width: 20)
+            .padding(.top, 1)
+    }
+}
+
 /// 左侧的一块白板
 struct BoardRow: View {
     @EnvironmentObject var store: AppStore
     let board: Whiteboard
-    let rename: () -> Void
-    let delete: () -> Void
+    let actions: SidebarActions
 
     var body: some View {
-        HStack(alignment: .top) {
+        HStack(alignment: .top, spacing: 8) {
+            ItemIcon(item: .board(board))
             VStack(alignment: .leading, spacing: 4) {
                 Text(board.title).font(.headline).lineLimit(2)
                 HStack(spacing: 6) {
@@ -383,33 +528,28 @@ struct BoardRow: View {
             .accessibilityLabel("白板操作")
         }
         .padding(.vertical, 4)
-        .tag(board.id)
-        .paneRow(board.id, tint: Ink.blue)
         .contextMenu { menuItems }
     }
 
     @ViewBuilder
     private var menuItems: some View {
-        Button("重命名", systemImage: "pencil", action: rename)
-        Button("删除", systemImage: "trash", role: .destructive, action: delete)
+        Button("重命名", systemImage: "pencil") { actions.edit(.renameBoard(board.id)) }
+        MoveMenu(excluding: nil, current: store.folder(board.folderID)?.id) { store.moveItem(board.id, to: $0) }
+        Button("删除", systemImage: "trash", role: .destructive) { actions.deleteBoard(board) }
     }
 }
 
+/// 左侧的一篇笔记
 struct NoteRow: View {
     @EnvironmentObject var store: AppStore
     let doc: NoteDoc
-    let rename: () -> Void
-    let delete: () -> Void
-    let exportPDF: () -> Void
+    let actions: SidebarActions
 
     var body: some View {
-        HStack(alignment: .top) {
+        HStack(alignment: .top, spacing: 8) {
+            ItemIcon(item: .note(doc))
             VStack(alignment: .leading, spacing: 4) {
                 Text(doc.title).font(.headline).lineLimit(2)
-                if store.folder(doc.folderID) != nil {
-                    Label(store.folderPath(doc.folderID), systemImage: "folder")
-                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                }
                 HStack(spacing: 6) {
                     if store.noteJobs[doc.id] != nil {
                         ProgressView().controlSize(.mini)
@@ -429,59 +569,54 @@ struct NoteRow: View {
             .accessibilityLabel("笔记操作")
         }
         .padding(.vertical, 4)
-        .tag(doc.id)
-        .paneRow(doc.id, tint: Ink.blue)
         .contextMenu { menuItems }
     }
 
     @ViewBuilder
     private var menuItems: some View {
-        Button("重命名", systemImage: "pencil", action: rename)
-        // 放进和题集同一个文件夹：做这个文件夹里的题卡住时，会先引导去看这篇笔记
-        MoveMenu(excluding: nil, current: store.folder(doc.folderID)?.id) { folderID in
-            store.mutateNote(doc.id) { $0.folderID = folderID }
-        }
-        Button("导出 PDF…", systemImage: "doc.richtext", action: exportPDF)
-        Button("删除", systemImage: "trash", role: .destructive, action: delete)
+        Button("重命名", systemImage: "pencil") { actions.edit(.renameNote(doc.id)) }
+        // 和题集放在同一个文件夹：做这个文件夹里的题卡住时，会先引导去看这篇笔记
+        MoveMenu(excluding: nil, current: store.folder(doc.folderID)?.id) { store.moveItem(doc.id, to: $0) }
+        Button("导出 PDF…", systemImage: "doc.richtext") { actions.exportPDF(.init(notes: [doc.id])) }
+        Button("删除", systemImage: "trash", role: .destructive) { actions.deleteNote(doc) }
     }
 }
 
+/// 左侧的一个题集
 struct SetRow: View {
     @EnvironmentObject var store: AppStore
     let set: QuestionSet
     let actions: SidebarActions
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .top) {
-                Text(set.title).font(.headline).lineLimit(2)
-                Spacer(minLength: 4)
-                Menu { menuItems } label: {
-                    Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 8) {
+            ItemIcon(item: .set(set))
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .top) {
+                    Text(set.title).font(.headline).lineLimit(2)
+                    Spacer(minLength: 4)
+                    Menu { menuItems } label: {
+                        Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("题集操作")
                 }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("题集操作")
-            }
-            HStack {
-                ProgressView(value: Double(set.doneCount), total: Double(max(set.questions.count, 1)))
-                Text("\(set.doneCount)/\(set.questions.count)")
-                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                HStack {
+                    ProgressView(value: Double(set.doneCount), total: Double(max(set.questions.count, 1)))
+                    Text("\(set.doneCount)/\(set.questions.count)")
+                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                }
             }
         }
         .padding(.vertical, 4)
-        .tag(set.id)
-        .paneRow(set.id, tint: Ink.blue)
-        .draggable("set:\(set.id.uuidString)") {
-            Label(set.title, systemImage: "doc.text").padding(8)
-        }
         .contextMenu { menuItems }
     }
 
     @ViewBuilder
     private var menuItems: some View {
         Button("重命名", systemImage: "pencil") { actions.edit(.renameSet(set.id)) }
-        MoveMenu(excluding: nil, current: set.folderID) { store.moveSet(set.id, to: $0) }
-        Button("导出 PDF…", systemImage: "doc.richtext") { actions.exportPDF(set.id) }
+        MoveMenu(excluding: nil, current: store.folder(set.folderID)?.id) { store.moveItem(set.id, to: $0) }
+        Button("导出 PDF…", systemImage: "doc.richtext") { actions.exportPDF(.init(sets: [set.id])) }
         Button("删除", systemImage: "trash", role: .destructive) { store.deleteSet(set.id) }
     }
 }
@@ -671,9 +806,9 @@ extension View {
             .listRowBackground(Color.clear)
     }
 
-    /// 能选中的一行：选中时画一块圆角底色
-    func paneRow(_ id: UUID, tint: Color = Color.primary.opacity(0.08)) -> some View {
-        modifier(PaneRowBackground(id: id, tint: tint))
+    /// 能选中的一行：选中时画一块圆角底色（indent：左边空出多少，跟着资料库的层级缩进）
+    func paneRow(_ id: UUID, tint: Color = Color.primary.opacity(0.08), indent: CGFloat = 0) -> some View {
+        modifier(PaneRowBackground(id: id, tint: tint, indent: indent))
     }
 }
 
@@ -681,12 +816,14 @@ private struct PaneRowBackground: ViewModifier {
     @Environment(\.paneSelection) private var selection
     let id: UUID
     let tint: Color
+    let indent: CGFloat
 
     func body(content: Content) -> some View {
         content.listRowBackground(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(selection == id ? tint : Color.clear)
-                .padding(.horizontal, 10)
+                .padding(.leading, 10 + indent)
+                .padding(.trailing, 10)
                 .padding(.vertical, 2)
         )
     }

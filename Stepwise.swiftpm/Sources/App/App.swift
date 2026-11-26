@@ -207,7 +207,7 @@ struct RootView: View {
                 }
                 .toolbar {
                     // 还没打开题集、笔记（没有目录）而左栏收着：左上角放回左栏。
-                    // 打开了的话左上角是“目录”，目录拉出来以后它的左上角才是“总目录”（见 listAndPage）
+                    // 打开了的话左上角是“目录”，目录拉出来以后它的左上角才是“资料库”（见 listAndPage）
                     if store.sidebarHidden && !store.isFullScreen && store.selectedBoardID == nil && !hasList {
                         ToolbarItem(placement: Self.leading) {
                             Button {
@@ -351,15 +351,15 @@ struct RootView: View {
         }
         // 栏被手指拽开时，露出来的是纸色，不是一条灰缝
         .background(Ink.paper)
-        // 左上角一层一层往外拉：页面左上角是“目录”，拉出目录以后目录的左上角是“总目录”（左栏）。
-        // 全屏时也一样，目录浮在页面上；点“总目录”就退出全屏、放回左栏
+        // 左上角一层一层往外拉：页面左上角是“目录”，拉出目录以后目录的左上角是“资料库”（左栏）。
+        // 全屏时也一样，目录浮在页面上；点“资料库”就退出全屏、放回左栏
         .toolbar {
             if hasList && listShown && store.sidebarHidden {
                 ToolbarItem(placement: .navigation) {
                     Button {
                         setSidebarHidden(false)
                     } label: {
-                        Label("总目录", systemImage: "sidebar.left")
+                        Label("资料库", systemImage: "sidebar.left")
                     }
                 }
             }
