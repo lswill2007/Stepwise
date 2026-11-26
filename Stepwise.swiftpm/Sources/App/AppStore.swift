@@ -12,13 +12,6 @@ struct PendingReply: Equatable {
     var label: String?
 }
 
-/// 错题复习的结果（只在本次打开 App 期间显示）
-enum ReviewOutcome: Equatable {
-    case mastered(rounds: Int)   // 2 轮内做对，已移出收藏
-    case keep(rounds: Int)       // 用了 3 轮以上，留在收藏
-    case revealed                // 看了完整答案，留在收藏
-}
-
 /// AI 请求的用途，决定用哪个模型、是否用快速模式
 enum RequestPurpose {
     case check, hint, solution, chat, newQuestion, presolve, split
@@ -82,8 +75,6 @@ final class AppStore: ObservableObject {
     /// 现在展开着完整答案的那道题。刚看完答案、或点了“再看答案”时设上；
     /// 离开这道题（翻到别的题、换题集）就清掉，回来时答案先盖住，免得重做时照着抄
     @Published var openSolutionQuestion: UUID?
-    /// 错题复习结果提示
-    @Published var reviewOutcomes: [UUID: ReviewOutcome] = [:]
 
     // MARK: 笔记
     /// 笔记模式的文档，单独存在 notes.json
@@ -112,8 +103,6 @@ final class AppStore: ObservableObject {
 
     /// 左侧“收藏”这一项的固定 id
     static let mistakeBookID = UUID(uuidString: "00000000-0000-0000-0000-00000000E001")!
-    /// 收藏里几轮内做对就移出
-    static let masteryRounds = 2
 
     var isMistakeBook: Bool { selectedSetID == Self.mistakeBookID }
     // MARK: 分栏怎么显示
@@ -612,7 +601,6 @@ final class AppStore: ObservableObject {
         selectedNoteID = nil
         selectedSetID = nil
         selectedQuestionID = nil
-        reviewOutcomes = [:]
         noteGuides = [:]
         activeNoteGuide = nil
         selectRecent()
@@ -1005,9 +993,7 @@ final class AppStore: ObservableObject {
             q.status = .todo
             q.hintCount = 0
             q.draftAnswer = ""
-            q.reviewRounds = nil
         }
-        reviewOutcomes[qID] = nil
         noteGuides[qID] = nil
         DrawingStore.delete([qID])
     }
@@ -1027,20 +1013,8 @@ final class AppStore: ObservableObject {
 
     func toggleStar(_ setID: UUID, _ qID: UUID) {
         mutate(setID, qID) { q in
-            if q.isStarred {
-                q.starredAt = nil
-                q.reviewRounds = nil
-            } else {
-                q.starredAt = Date()
-            }
+            q.starredAt = q.isStarred ? nil : Date()
         }
-        reviewOutcomes[qID] = nil
-    }
-
-    /// 从收藏打开一道还没做完的题：从现在开始计轮数
-    func beginReviewIfNeeded(_ setID: UUID, _ qID: UUID) {
-        // 收藏不再计复习轮数、不会自动移出：这里什么都不做（留着是为了旧数据里的 reviewRounds 不再起作用）
-        _ = (setID, qID)
     }
 
     /// 已经做完的错题重新练一遍：之前的作答记录折叠保存，题目恢复成未作答
@@ -1054,18 +1028,9 @@ final class AppStore: ObservableObject {
             q.status = .todo
             q.hintCount = 0
             q.draftAnswer = ""
-            q.reviewRounds = nil
         }
-        reviewOutcomes[qID] = nil
         noteGuides[qID] = nil
         DrawingStore.delete([qID])
-    }
-
-    /// 复习中每完成一次检查或提示调用一次，返回已用轮数
-    private func countReviewRound(_ q: inout Question) -> Int? {
-        // 收藏的题不计轮数、做对也不会自动移出；旧数据里记着的轮数清掉
-        q.reviewRounds = nil
-        return nil
     }
 
     /// 下一道还没通过的题；没有就返回顺序上的下一题
@@ -1151,20 +1116,8 @@ final class AppStore: ObservableObject {
                     prompt: "<verdict>\(correct ? "correct" : "wrong")</verdict>\n\(feedback)")
                 if !correct && !marks.isEmpty { reply.marks = marks }
                 q.messages.append(reply)
-                let rounds = self?.countReviewRound(&q)
                 if correct {
-                    let revealedBefore = q.status == .revealed
                     if q.status != .revealed { q.status = .passed }
-                    if let rounds {
-                        q.reviewRounds = nil
-                        if rounds <= AppStore.masteryRounds && !revealedBefore {
-                            // 收藏里 2 轮内做对：说明掌握了，移出收藏
-                            q.starredAt = nil
-                            self?.reviewOutcomes[qID] = .mastered(rounds: rounds)
-                        } else {
-                            self?.reviewOutcomes[qID] = revealedBefore ? .revealed : .keep(rounds: rounds)
-                        }
-                    }
                 } else if !q.status.isDone {
                     q.status = .wrong
                 }
@@ -1190,7 +1143,6 @@ final class AppStore: ObservableObject {
                 var hint = ChatMessage(role: .assistant, kind: .hint, text: full)
                 hint.hintLevel = level
                 q.messages.append(hint)
-                _ = self?.countReviewRound(&q)
             }
         }
     }
@@ -1210,7 +1162,6 @@ final class AppStore: ObservableObject {
                 var hint = ChatMessage(role: .assistant, kind: .hint, text: full)
                 hint.hintLevel = ChatMessage.stuckHintLevel
                 q.messages.append(hint)
-                _ = self?.countReviewRound(&q)
             }
         }
     }
@@ -1228,7 +1179,6 @@ final class AppStore: ObservableObject {
                 var step = ChatMessage(role: .assistant, kind: .hint, text: full)
                 step.hintLevel = ChatMessage.nextStepHintLevel
                 q.messages.append(step)
-                _ = self?.countReviewRound(&q)
             }
         }
     }
@@ -1239,11 +1189,6 @@ final class AppStore: ObservableObject {
             self?.mutate(setID, qID) { q in
                 q.messages.append(ChatMessage(role: .assistant, kind: .solution, text: full))
                 if q.status != .passed { q.status = .revealed }
-                // 复习中看了完整答案：这轮复习结束，题目留在收藏
-                if q.reviewRounds != nil {
-                    q.reviewRounds = nil
-                    self?.reviewOutcomes[qID] = .revealed
-                }
             }
             // 刚看的答案直接展开
             self?.openSolutionQuestion = qID

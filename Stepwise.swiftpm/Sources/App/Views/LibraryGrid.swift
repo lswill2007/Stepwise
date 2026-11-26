@@ -186,8 +186,13 @@ private struct BoardThumbnail: View {
         .task(id: "\(boardID)-\(colorScheme == .dark)") {
             let id = boardID
             let dark = colorScheme == .dark
+            let key = "\(id)-\(dark)" as NSString
+            // 先摆上次画好的（来回滚动、从白板退回来时不闪一下空白）；笔迹没变就不用重画
+            if image == nil { image = BoardThumbnailCache.shared.object(forKey: key)?.image }
             image = await Task.detached(priority: .utility) { () -> UIImage? in
-                guard let data = DrawingStore.load(id), let drawing = try? PKDrawing(data: data) else { return nil }
+                guard let data = DrawingStore.load(id) else { return nil }
+                if let cached = BoardThumbnailCache.shared.object(forKey: key), cached.data == data { return cached.image }
+                guard let drawing = try? PKDrawing(data: data) else { return nil }
                 let bounds = drawing.bounds
                 guard !bounds.isEmpty, bounds.width > 1, bounds.height > 1 else { return nil }
                 // 白板很大：缩到长边 500 像素左右
@@ -196,6 +201,7 @@ private struct BoardThumbnail: View {
                 UITraitCollection(userInterfaceStyle: dark ? .dark : .light).performAsCurrent {
                     result = drawing.image(from: bounds.insetBy(dx: -8, dy: -8), scale: scale)
                 }
+                if let result { BoardThumbnailCache.shared.setObject(.init(data: data, image: result), forKey: key) }
                 return result
             }.value
         }
@@ -206,3 +212,19 @@ private struct BoardThumbnail: View {
         Image(systemName: "rectangle.and.pencil.and.ellipsis").font(.largeTitle).foregroundStyle(.tertiary)
     }
 }
+
+#if canImport(UIKit)
+/// 画好的白板缩略图，连同画它时的笔迹数据（数据一样就是同一张图）
+private final class BoardThumbnailCache {
+    final class Entry {
+        let data: Data
+        let image: UIImage
+        init(data: Data, image: UIImage) { self.data = data; self.image = image }
+    }
+    static let shared: NSCache<NSString, Entry> = {
+        let cache = NSCache<NSString, Entry>()
+        cache.countLimit = 60
+        return cache
+    }()
+}
+#endif

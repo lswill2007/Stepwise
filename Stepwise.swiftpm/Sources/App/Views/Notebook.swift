@@ -405,8 +405,6 @@ struct QuestionBlock: View {
         }
         // 趁做题的时间在后台把答案解出来，点批改时只需对答案
         if !q.status.isDone { store.presolve(setID, [qID]) }
-        // 收藏里还没做完的题：开始计复习轮数
-        if mistakeMode { store.beginReviewIfNeeded(setID, qID) }
     }
 
     // MARK: 题头
@@ -468,7 +466,7 @@ struct QuestionBlock: View {
     /// 收藏里：做过的题可以重新练习
     @ViewBuilder
     private func reviewLine(_ q: Question) -> some View {
-        if q.status.isDone && q.reviewRounds == nil {
+        if q.status.isDone {
             HStack(spacing: 12) {
                 Label("可以重新练一遍，之前的作答会收起来留着", systemImage: "arrow.counterclockwise")
                     .font(.callout).foregroundStyle(.secondary)

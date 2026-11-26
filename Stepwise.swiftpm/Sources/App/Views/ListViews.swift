@@ -39,10 +39,10 @@ struct SidebarView: View {
         var sets: Set<UUID> = []
     }
 
-    /// 资料库排成一行一行：文件夹条和里面的东西，按层级缩进。tint：所在文件夹的颜色（最外层没有）
+    /// 资料库排成一行一行：文件夹条和里面的东西，按层级缩进。folder：所在的文件夹（最外层没有）
     enum Row: Identifiable {
         case folder(Folder, depth: Int)
-        case item(LibraryItem, depth: Int, tint: FolderColor?)
+        case item(LibraryItem, depth: Int, folder: Folder?)
         var id: UUID {
             switch self {
             case .folder(let f, _): return f.id
@@ -69,8 +69,8 @@ struct SidebarView: View {
                         case .folder(let folder, let depth):
                             FolderBar(folder: folder, depth: depth, count: index.counts[folder.id] ?? 0,
                                       selected: browsing == folder.id, actions: actions)
-                        case .item(let item, let depth, let tint):
-                            itemRow(item, depth: depth, tint: tint)
+                        case .item(let item, let depth, let folder):
+                            itemRow(item, depth: depth, folder: folder)
                         }
                     }
                     if !isEmpty {
@@ -175,17 +175,17 @@ struct SidebarView: View {
     /// 展开的文件夹排出里面的子文件夹（在前）和笔记、白板、题集（新的在上）；收起的只排一条
     static func rows(_ index: AppStore.LibraryIndex) -> [Row] {
         var out: [Row] = []
-        func walk(_ parent: UUID?, _ depth: Int, _ tint: FolderColor?) {
+        func walk(_ parent: Folder?, _ depth: Int) {
             guard depth < 50 else { return }
-            for folder in index.folders[parent] ?? [] {
+            for folder in index.folders[parent?.id] ?? [] {
                 out.append(.folder(folder, depth: depth))
-                if !folder.collapsed { walk(folder.id, depth + 1, folder.tint) }
+                if !folder.collapsed { walk(folder, depth + 1) }
             }
-            for item in index.items[parent] ?? [] {
-                out.append(.item(item, depth: depth, tint: tint))
+            for item in index.items[parent?.id] ?? [] {
+                out.append(.item(item, depth: depth, folder: parent))
             }
         }
-        walk(nil, 0, nil)
+        walk(nil, 0)
         return out
     }
 
@@ -209,11 +209,11 @@ struct SidebarView: View {
     }
 
     /// 一篇笔记、一块白板或一个题集：和文件夹一样是一条浅色的条，颜色跟着所在的文件夹，比文件夹再深一点
-    private func itemRow(_ item: LibraryItem, depth: Int, tint: FolderColor?) -> some View {
+    private func itemRow(_ item: LibraryItem, depth: Int, folder: Folder?) -> some View {
         // 拖到一篇笔记、一块白板或一个题集上：放进它所在的文件夹
-        let place = store.folder(item.folderID)?.id
+        let place = folder?.id
         let selected = (store.selectedBoardID ?? store.selectedNoteID ?? store.selectedSetID) == item.id
-        return LibraryBar(color: tint?.color ?? .gray, depth: depth, selected: selected, symbol: .icon(item.icon)) {
+        return LibraryBar(color: folder?.tint.color ?? .gray, depth: depth, selected: selected, symbol: .icon(item.icon)) {
             switch item {
             case .set(let set):
                 SetRow(set: set, selected: selected, actions: actions)
