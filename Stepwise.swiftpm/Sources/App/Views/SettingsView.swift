@@ -419,7 +419,7 @@ struct SettingsView: View {
             } header: {
                 Text("作答")
             } footer: {
-                Text("默认只用 Apple Pencil 手写作答。")
+                Text("默认用 Apple Pencil 手写作答；手写区下面的“键盘”随时可以唤出键盘打字。")
             }
         }
     }

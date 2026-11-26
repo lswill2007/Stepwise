@@ -1787,8 +1787,27 @@ struct InkPalette: View {
     @State private var shrunk = false
 
     private var isSmall: Bool { !alwaysOpen && (collapsed || shrunk) }
+    /// 屏幕键盘开着：工具条先让开。它贴在页面底边，键盘弹出时会被顶到键盘上面，正好盖住正在打字的输入框
+    @State private var keyboardUp = false
 
     var body: some View {
+        VStack(spacing: 8) {
+            if !keyboardUp { bar }
+        }
+        .animation(.easeOut(duration: 0.2), value: keyboardUp)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            // 接着硬件键盘时只有底边一条快捷栏，不算；浮动的小键盘不占页面，也不算
+            let screen = UIScreen.main.bounds
+            keyboardUp = frame.minY < screen.maxY && frame.height > 150 && frame.width >= screen.width - 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardUp = false
+        }
+    }
+
+    @ViewBuilder
+    private var bar: some View {
         VStack(spacing: 8) {
             if tools.isTemporaryEraser {
                 Text("正在用橡皮擦 · 松开笔身侧边恢复书写")

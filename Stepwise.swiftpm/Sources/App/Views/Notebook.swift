@@ -308,6 +308,10 @@ struct QuestionBlock: View {
     @State private var activity = ActivityClock()
     /// 停笔太久：在按钮下面提醒可以让 AI 写出下一步
     @State private var showNudge = false
+    /// 手写作答时点了“键盘”：打字框先显示出来（设置里没打开“键盘作答”也能打字）
+    @State private var showTyping = false
+    /// 打字框正在输入（键盘开着）
+    @FocusState private var typing: Bool
 
     /// 完整答案放在页边：页面够宽、且没有选择放大到题目下方
     private var solutionInMargin: Bool { wide && !solutionBelow }
@@ -503,6 +507,11 @@ struct QuestionBlock: View {
                     Button {
                         withAnimation(.easeOut(duration: 0.2)) { model.addSpace() }
                     } label: { Label("加长", systemImage: "arrow.down.to.line") }
+                    // 手写也随时能打字：点一下打字框出现、键盘弹出；再点一下收起键盘
+                    Button { toggleKeyboard() } label: {
+                        Label(typing ? L("收起键盘") : L("键盘"),
+                              systemImage: typing ? "keyboard.chevron.compact.down" : "keyboard")
+                    }
                     Spacer()
                     Button(role: .destructive) { confirmClearInk = true } label: { Label("擦掉全部", systemImage: "trash") }
                         .disabled(model.isEmpty)
@@ -515,9 +524,10 @@ struct QuestionBlock: View {
             }
 
             // 打字作答默认隐藏；以前打过的字仍然显示，不会丢
-            if store.keyboardAnswer || !HandwritingModel.isAvailable || !draft.isEmpty {
+            if showsTypingField {
                 TextField(model.isEmpty ? L("在这里打字作答…") : L("可以补充文字说明（可选）"), text: $draft, axis: .vertical)
                     .lineLimit(1...8)
+                    .focused($typing)
                     .padding(10)
                     .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                 if draft.contains("$") || draft.contains("\\(") {
@@ -528,6 +538,27 @@ struct QuestionBlock: View {
             }
         }
         .frame(maxWidth: .infinity)
+        // 点“键盘”临时显示的打字框：收起键盘时什么都没打，就再藏起来
+        .onChange(of: typing) {
+            if !typing && draft.isEmpty { showTyping = false }
+        }
+    }
+
+    /// 打字框默认隐藏（手写作答）；设置里打开了“键盘作答”、点了“键盘”、或者以前打过字（不会丢）时显示
+    private var showsTypingField: Bool {
+        store.keyboardAnswer || !HandwritingModel.isAvailable || !draft.isEmpty || showTyping
+    }
+
+    /// 手写区下面的“键盘”按钮：弹出键盘打字；键盘开着时收起
+    private func toggleKeyboard() {
+        if typing {
+            typing = false
+            return
+        }
+        let wasShown = showsTypingField
+        showTyping = true
+        // 打字框刚显示出来的那一下还不能聚焦，等它排进页面
+        DispatchQueue.main.asyncAfter(deadline: .now() + (wasShown ? 0 : 0.1)) { typing = true }
     }
 
     /// 画在手写区上的标注：这一轮批改标出的错误行（红色波浪线），选中的圈选提问圈住的地方（蓝框）
