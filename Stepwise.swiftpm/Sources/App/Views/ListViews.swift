@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 左栏：资料库。错题本固定在最上面，下面是自己建的文件夹（一层层嵌套，每个一条彩色圆角条），
+/// 左栏：资料库。收藏固定在最上面，下面是自己建的文件夹（一层层嵌套，每个一条荧光笔颜色的圆角条），
 /// 笔记、白板、题集都可以放进任意一个文件夹，没放进文件夹的排在最外层
 struct SidebarView: View {
     @EnvironmentObject var store: AppStore
@@ -39,14 +39,14 @@ struct SidebarView: View {
         var sets: Set<UUID> = []
     }
 
-    /// 资料库排成一行一行：文件夹条和里面的东西，按层级缩进
+    /// 资料库排成一行一行：文件夹条和里面的东西，按层级缩进。tint：所在文件夹的颜色（最外层没有）
     enum Row: Identifiable {
         case folder(Folder, depth: Int)
-        case item(LibraryItem, depth: Int)
+        case item(LibraryItem, depth: Int, tint: FolderColor?)
         var id: UUID {
             switch self {
             case .folder(let f, _): return f.id
-            case .item(let item, _): return item.id
+            case .item(let item, _, _): return item.id
             }
         }
     }
@@ -54,9 +54,9 @@ struct SidebarView: View {
     var body: some View {
         let index = store.libraryIndex()
         let rows = Self.rows(index)
-        // 选中的东西在哪些文件夹里：收起来的文件夹条画一圈框，知道它在里面
-        let holding = selectionAncestors
-        List(selection: selectionBinding) {
+        // 自己管选中（不用 List 的选中：它会把选中那一行的字变白、底色变深）
+        let browsing = store.hasOpenItem ? nil : store.folder(store.selectedFolderID)?.id
+        List {
             Group {
                 if !store.questionSets.isEmpty {
                     Section {
@@ -68,9 +68,9 @@ struct SidebarView: View {
                         switch row {
                         case .folder(let folder, let depth):
                             FolderBar(folder: folder, depth: depth, count: index.counts[folder.id] ?? 0,
-                                      holdsSelection: folder.collapsed && holding.contains(folder.id), actions: actions)
-                        case .item(let item, let depth):
-                            itemRow(item, depth: depth)
+                                      selected: browsing == folder.id, actions: actions)
+                        case .item(let item, let depth, let tint):
+                            itemRow(item, depth: depth, tint: tint)
                         }
                     }
                     if !isEmpty {
@@ -89,7 +89,7 @@ struct SidebarView: View {
             // 选中的一行自己画圆角底色（见 PaneRowStyle）
             .paneRows()
         }
-        .paneList(selection: selectionBinding.wrappedValue)
+        .paneList(selection: nil)
         .overlay {
             if isEmpty {
                 ContentUnavailableView {
@@ -175,67 +175,60 @@ struct SidebarView: View {
     /// 展开的文件夹排出里面的子文件夹（在前）和笔记、白板、题集（新的在上）；收起的只排一条
     static func rows(_ index: AppStore.LibraryIndex) -> [Row] {
         var out: [Row] = []
-        func walk(_ parent: UUID?, _ depth: Int) {
+        func walk(_ parent: UUID?, _ depth: Int, _ tint: FolderColor?) {
             guard depth < 50 else { return }
             for folder in index.folders[parent] ?? [] {
                 out.append(.folder(folder, depth: depth))
-                if !folder.collapsed { walk(folder.id, depth + 1) }
+                if !folder.collapsed { walk(folder.id, depth + 1, folder.tint) }
             }
             for item in index.items[parent] ?? [] {
-                out.append(.item(item, depth: depth))
+                out.append(.item(item, depth: depth, tint: tint))
             }
         }
-        walk(nil, 0)
+        walk(nil, 0, nil)
         return out
     }
 
-    /// 选中的东西所在的文件夹和它的上级文件夹
-    private var selectionAncestors: Set<UUID> {
-        var result: Set<UUID> = []
-        var current = store.currentFolderID
-        while let c = current, result.count < 50, !result.contains(c) {
-            result.insert(c)
-            current = store.folder(c)?.parentID
-        }
-        return result
-    }
-
+    /// 收藏：固定在最上面的一条
     private var mistakeBookRow: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "bookmark.fill")
-                .foregroundStyle(Ink.red)
-            Text("错题本").font(.headline)
-            Spacer()
-            let count = store.starredCount
-            if count > 0 {
-                Text("\(count)")
-                    .font(.callout).monospacedDigit()
-                    .foregroundStyle(.secondary)
+        LibraryBar(color: .yellow, depth: 0, selected: store.isMistakeBook, symbol: .tinted("star.fill", Ink.star)) {
+            HStack {
+                Text("收藏").font(.body.weight(store.isMistakeBook ? .semibold : .medium))
+                Spacer()
+                let count = store.starredCount
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.callout).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
             }
         }
-        .padding(.vertical, 6)
-        .tag(AppStore.mistakeBookID)
-        .libraryRow(depth: 0)
-        .paneRow(AppStore.mistakeBookID, tint: Ink.blue)
+        .onTapGesture { store.openItem(AppStore.mistakeBookID) }
+        .accessibilityAddTraits(.isButton)
+        .listRowInsets(EdgeInsets(top: 3, leading: 10, bottom: 6, trailing: 10))
     }
 
-    @ViewBuilder
-    private func itemRow(_ item: LibraryItem, depth: Int) -> some View {
+    /// 一篇笔记、一块白板或一个题集：和文件夹一样是一条浅色的条，颜色跟着所在的文件夹，比文件夹再深一点
+    private func itemRow(_ item: LibraryItem, depth: Int, tint: FolderColor?) -> some View {
         // 拖到一篇笔记、一块白板或一个题集上：放进它所在的文件夹
         let place = store.folder(item.folderID)?.id
-        Group {
+        let selected = (store.selectedBoardID ?? store.selectedNoteID ?? store.selectedSetID) == item.id
+        return LibraryBar(color: tint?.color ?? .gray, depth: depth, selected: selected, symbol: .icon(item.icon)) {
             switch item {
             case .set(let set):
-                SetRow(set: set, actions: actions)
+                SetRow(set: set, selected: selected, actions: actions)
             case .note(let doc):
-                NoteRow(doc: doc, actions: actions)
+                NoteRow(doc: doc, selected: selected, actions: actions)
             case .board(let board):
-                BoardRow(board: board, actions: actions)
+                BoardRow(board: board, selected: selected, actions: actions)
             }
         }
-        .tag(item.id)
-        .libraryRow(depth: depth)
-        .paneRow(item.id, tint: Ink.blue, indent: SidebarView.indent(depth))
+        .onTapGesture {
+            store.selectedFolderID = place
+            store.openItem(item.id)
+        }
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .listRowInsets(EdgeInsets(top: 3, leading: 10 + SidebarView.indent(depth), bottom: 3, trailing: 10))
         .draggable(item.dragKey) {
             Label(item.title, systemImage: item.icon).padding(8)
         }
@@ -246,33 +239,6 @@ struct SidebarView: View {
 
     /// 每深一层往右缩进多少
     static func indent(_ depth: Int) -> CGFloat { CGFloat(min(depth, 6)) * 14 }
-
-    /// 题集、错题本、笔记和白板共用一个选中状态
-    private var selectionBinding: Binding<UUID?> {
-        Binding(get: { store.selectedBoardID ?? store.selectedNoteID ?? store.selectedSetID }, set: { id in
-            if let id, store.board(id) != nil {
-                store.selectBoard(id)
-                return
-            }
-            store.selectedBoardID = nil
-            if let id, store.note(id) != nil {
-                store.selectNote(id)
-                return
-            }
-            store.selectedNoteID = nil
-            store.selectedSetID = id
-            // 上次看到哪道题就回到哪道题；没看过的从第一道没做完的题开始
-            let last = id.flatMap { ReadingPosition.load($0)?.item }
-            if id == AppStore.mistakeBookID {
-                let entries = store.starredEntries.map(\.question.id)
-                store.selectedQuestionID = entries.first { $0 == last } ?? entries.first
-            } else {
-                let questions = store.set(id)?.questions ?? []
-                store.selectedQuestionID = questions.first(where: { $0.id == last })?.id
-                    ?? questions.first(where: { !$0.status.isDone })?.id ?? questions.first?.id
-            }
-        })
-    }
 
     private var actions: SidebarActions {
         SidebarActions(edit: startEdit, deleteFolder: { deletingFolder = $0 },
@@ -386,59 +352,115 @@ extension FolderColor {
     }
 }
 
-extension View {
-    /// 资料库里的一行：按层级往右缩进
-    func libraryRow(depth: Int) -> some View {
-        listRowInsets(EdgeInsets(top: 2, leading: 18 + SidebarView.indent(depth), bottom: 2, trailing: 16))
+/// 资料库里的一条（文件夹、笔记、白板、题集、收藏都用它）：荧光笔一样的浅色圆角条，越深一层颜色越浓一点，但一直是浅色。
+/// 选中时左边出现一块深色，圆点（图标）反成白色，外面一圈同色的框
+struct LibraryBar<Content: View>: View {
+    enum Symbol {
+        /// 文件夹的彩色圆点
+        case dot
+        /// 笔记、白板、题集的小图标
+        case icon(String)
+        /// 自己带颜色的图标（收藏的星）
+        case tinted(String, Color)
+    }
+
+    let color: Color
+    let depth: Int
+    let selected: Bool
+    var targeted = false
+    let symbol: Symbol
+    @ViewBuilder let content: () -> Content
+
+    /// 浅色有多浓：最外层最淡，每深一层浓一点，到头也还是浅色
+    static func strength(_ depth: Int) -> Double { min(0.16 + 0.07 * Double(max(depth, 0)), 0.44) }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 11, style: .continuous)
+        HStack(spacing: 0) {
+            Group {
+                switch symbol {
+                case .dot:
+                    Circle()
+                        .fill(selected ? AnyShapeStyle(Color.white) : AnyShapeStyle(color.gradient))
+                        .frame(width: 13, height: 13)
+                case .icon(let name):
+                    Image(systemName: name)
+                        .font(.callout)
+                        .foregroundStyle(selected ? AnyShapeStyle(Color.white) : AnyShapeStyle(.secondary))
+                case .tinted(let name, let tint):
+                    Image(systemName: name)
+                        .font(.callout)
+                        .foregroundStyle(selected ? Color.white : tint)
+                }
+            }
+            .frame(width: 34)
+            .frame(maxHeight: .infinity)
+            .background {
+                if selected {
+                    ZStack { color; Color.black.opacity(0.3) }
+                }
+            }
+            content()
+                .padding(.leading, selected ? 10 : 2)
+                .padding(.trailing, 10)
+        }
+        .frame(minHeight: 42)
+        .background(color.opacity(Self.strength(depth) + (targeted ? 0.2 : 0)))
+        .clipShape(shape)
+        .overlay {
+            if selected || targeted {
+                shape.strokeBorder(color, lineWidth: 1.5)
+                shape.strokeBorder(Color.black.opacity(0.3), lineWidth: 1.5)
+            }
+        }
+        .contentShape(shape)
     }
 }
 
-/// 一个文件夹：一条彩色圆角条，左边彩色圆点，右边里面有几样东西和折叠箭头。点一下展开 / 收起，按住出菜单
+/// 一个文件夹：左边彩色圆点，右边里面有几样东西和折叠箭头。点一下选中（右边排出里面的东西），点箭头展开 / 收起，按住出菜单
 struct FolderBar: View {
     @EnvironmentObject var store: AppStore
     let folder: Folder
     let depth: Int
     /// 里面（包括子文件夹）一共几样东西
     let count: Int
-    /// 收起来了，选中的东西在里面
-    let holdsSelection: Bool
+    /// 正在看这个文件夹里的东西
+    let selected: Bool
     let actions: SidebarActions
     @State private var targeted = false
 
     var body: some View {
-        let color = folder.tint.color
-        HStack(spacing: 10) {
-            Circle()
-                .fill(color.gradient)
-                .frame(width: 14, height: 14)
-                .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
-            Text(folder.name)
-                .font(.body.weight(.medium))
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            if count > 0 {
-                Text("\(count)")
-                    .font(.callout.weight(holdsSelection ? .semibold : .regular)).monospacedDigit()
-                    .foregroundStyle(holdsSelection ? .primary : .secondary)
+        LibraryBar(color: folder.tint.color, depth: depth, selected: selected, targeted: targeted, symbol: .dot) {
+            HStack(spacing: 6) {
+                Text(folder.name)
+                    .font(.body.weight(selected ? .semibold : .medium))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.callout.weight(selected ? .semibold : .regular)).monospacedDigit()
+                        .foregroundStyle(selected ? .primary : .secondary)
+                }
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { store.setCollapsed(folder.id, !folder.collapsed) }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(folder.collapsed ? -90 : 0))
+                        .frame(width: 30, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(folder.collapsed ? L("展开") : L("收起"))
+                .padding(.trailing, -8)
             }
-            Image(systemName: "chevron.down")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .rotationEffect(.degrees(folder.collapsed ? -90 : 0))
         }
-        .padding(.horizontal, 12)
-        .frame(minHeight: 42)
-        .background(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(color.opacity(targeted ? 0.5 : 0.28))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(Ink.pen, lineWidth: holdsSelection || targeted ? 2 : 0)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         .onTapGesture {
-            withAnimation(.easeInOut(duration: 0.2)) { store.setCollapsed(folder.id, !folder.collapsed) }
+            store.browseFolder(folder.id)
+            if folder.collapsed {
+                withAnimation(.easeInOut(duration: 0.2)) { store.setCollapsed(folder.id, false) }
+            }
         }
         .contextMenu { menuItems }
         .draggable("folder:\(folder.id.uuidString)") {
@@ -447,10 +469,7 @@ struct FolderBar: View {
         .dropDestination(for: String.self) { items, _ in
             actions.drop(items, folder.id)
         } isTargeted: { targeted = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        // 文件夹条不是能选中的一行：按住它（没出菜单就松手）时，不能把选中的笔记、题集清掉
-        .selectionDisabled()
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .listRowInsets(EdgeInsets(top: 3, leading: 10 + SidebarView.indent(depth), bottom: 3, trailing: 10))
     }
 
@@ -487,29 +506,17 @@ struct FolderBar: View {
     }
 }
 
-/// 左侧一行前面的小图标：分得出是题集、笔记还是白板
-private struct ItemIcon: View {
-    let item: LibraryItem
-    var body: some View {
-        Image(systemName: item.icon)
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .frame(width: 20)
-            .padding(.top, 1)
-    }
-}
-
-/// 左侧的一块白板
+/// 左侧的一块白板（条里面的内容；外面的条见 SidebarView.itemRow）
 struct BoardRow: View {
     @EnvironmentObject var store: AppStore
     let board: Whiteboard
+    let selected: Bool
     let actions: SidebarActions
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            ItemIcon(item: .board(board))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(board.title).font(.headline).lineLimit(2)
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(board.title).font(.body.weight(selected ? .semibold : .medium)).lineLimit(2)
                 HStack(spacing: 6) {
                     if store.boardJobs[board.id] != nil {
                         ProgressView().controlSize(.mini)
@@ -527,7 +534,7 @@ struct BoardRow: View {
             .buttonStyle(.borderless)
             .accessibilityLabel("白板操作")
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 7)
         .contextMenu { menuItems }
     }
 
@@ -543,13 +550,13 @@ struct BoardRow: View {
 struct NoteRow: View {
     @EnvironmentObject var store: AppStore
     let doc: NoteDoc
+    let selected: Bool
     let actions: SidebarActions
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            ItemIcon(item: .note(doc))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(doc.title).font(.headline).lineLimit(2)
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(doc.title).font(.body.weight(selected ? .semibold : .medium)).lineLimit(2)
                 HStack(spacing: 6) {
                     if store.noteJobs[doc.id] != nil {
                         ProgressView().controlSize(.mini)
@@ -568,7 +575,7 @@ struct NoteRow: View {
             .buttonStyle(.borderless)
             .accessibilityLabel("笔记操作")
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 7)
         .contextMenu { menuItems }
     }
 
@@ -586,29 +593,27 @@ struct NoteRow: View {
 struct SetRow: View {
     @EnvironmentObject var store: AppStore
     let set: QuestionSet
+    let selected: Bool
     let actions: SidebarActions
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            ItemIcon(item: .set(set))
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .top) {
-                    Text(set.title).font(.headline).lineLimit(2)
-                    Spacer(minLength: 4)
-                    Menu { menuItems } label: {
-                        Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("题集操作")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top) {
+                Text(set.title).font(.body.weight(selected ? .semibold : .medium)).lineLimit(2)
+                Spacer(minLength: 4)
+                Menu { menuItems } label: {
+                    Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
                 }
-                HStack {
-                    ProgressView(value: Double(set.doneCount), total: Double(max(set.questions.count, 1)))
-                    Text("\(set.doneCount)/\(set.questions.count)")
-                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("题集操作")
+            }
+            HStack {
+                ProgressView(value: Double(set.doneCount), total: Double(max(set.questions.count, 1)))
+                Text("\(set.doneCount)/\(set.questions.count)")
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 7)
         .contextMenu { menuItems }
     }
 
@@ -658,7 +663,8 @@ struct QuestionListView: View {
 
     var body: some View {
         let set = store.set(setID)
-        List(selection: $store.selectedQuestionID) {
+        // 自己管选中：系统的选中会把那一行的字变白
+        List {
             if let set {
                 Section {
                     ForEach(set.questions) { q in
@@ -669,7 +675,7 @@ struct QuestionListView: View {
                                 HStack(spacing: 6) {
                                     Text("第 \(q.label) 题").font(.subheadline.weight(.semibold))
                                     if q.isStarred {
-                                        Image(systemName: "bookmark.fill").font(.caption).foregroundStyle(Ink.red)
+                                        Image(systemName: "star.fill").font(.caption).foregroundStyle(Ink.star)
                                     }
                                     if q.isGenerated {
                                         Text("变式").font(.caption).foregroundStyle(.secondary)
@@ -680,7 +686,10 @@ struct QuestionListView: View {
                             }
                         }
                         .padding(.vertical, 2)
-                        .tag(q.id)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture { store.selectedQuestionID = q.id }
+                        .accessibilityAddTraits(.isButton)
                         .paneRow(q.id)
                     }
                 } header: {
@@ -717,7 +726,7 @@ struct StatusIcon: View {
     }
 }
 
-/// 错题本：所有标记为重点错题的题目，按题集分组
+/// 收藏：所有标记为重点错题的题目，按题集分组
 struct MistakeBookView: View {
     @EnvironmentObject var store: AppStore
 
@@ -727,7 +736,8 @@ struct MistakeBookView: View {
         // 题集顺序按其中最新加入的错题排列
         let setOrder = entries.map(\.setID).reduce(into: [UUID]()) { if !$0.contains($1) { $0.append($1) } }
 
-        List(selection: $store.selectedQuestionID) {
+        // 自己管选中：系统的选中会把那一行的字变白
+        List {
             ForEach(setOrder, id: \.self) { setID in
                 Section {
                     ForEach(groups[setID] ?? [], id: \.question.id) { entry in
@@ -738,20 +748,19 @@ struct MistakeBookView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack(spacing: 6) {
                                     Text("第 \(q.label) 题").font(.subheadline.weight(.semibold))
-                                    if let rounds = q.reviewRounds {
-                                        Text(rounds == 0 ? L("复习中") : String(localized: "复习中 · 已用 \(rounds) 轮"))
-                                            .font(.caption).foregroundStyle(Ink.red)
-                                    }
                                     if store.isBusy(q.id) { ProgressView().controlSize(.mini) }
                                 }
                                 Text(Tutor.plainPreview(q.content)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                             }
                         }
                         .padding(.vertical, 2)
-                        .tag(q.id)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture { store.selectedQuestionID = q.id }
+                        .accessibilityAddTraits(.isButton)
                         .paneRow(q.id)
                         .contextMenu {
-                            Button("移出错题本", systemImage: "bookmark.slash") { store.toggleStar(entry.setID, q.id) }
+                            Button("取消收藏", systemImage: "star.slash") { store.toggleStar(entry.setID, q.id) }
                         }
                     }
                 } header: {
@@ -764,13 +773,13 @@ struct MistakeBookView: View {
         .overlay {
             if entries.isEmpty {
                 ContentUnavailableView {
-                    Label("错题本是空的", systemImage: "bookmark")
+                    Label("还没有收藏的题目", systemImage: "star")
                 } description: {
-                    Text("做题时点题目右上角的“错题”，把需要重点复习的题加进来。\n在错题本里 \(AppStore.masteryRounds) 轮之内做对，就会自动移出。")
+                    Text("做题时点题目右上角的“收藏”，把想留着再看的题收进来。\n收藏的题会一直留着，直到你取消收藏。")
                 }
             }
         }
-        .navigationTitle("错题本")
+        .navigationTitle("收藏")
     }
 }
 

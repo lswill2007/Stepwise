@@ -103,7 +103,7 @@ struct Question: Codable, Identifiable, Equatable {
 
     // 以下字段都是可选的：旧版本保存的数据里没有它们，也能正常读取
 
-    /// 加入错题本的时间；nil 表示不在错题本里
+    /// 加入收藏的时间；nil 表示不在收藏里
     var starredAt: Date?
     /// 错题复习进行到第几轮（每检查一次或请求一次提示算一轮）；nil 表示没有在复习
     var reviewRounds: Int?

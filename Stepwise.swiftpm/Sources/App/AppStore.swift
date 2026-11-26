@@ -14,9 +14,9 @@ struct PendingReply: Equatable {
 
 /// 错题复习的结果（只在本次打开 App 期间显示）
 enum ReviewOutcome: Equatable {
-    case mastered(rounds: Int)   // 2 轮内做对，已移出错题本
-    case keep(rounds: Int)       // 用了 3 轮以上，留在错题本
-    case revealed                // 看了完整答案，留在错题本
+    case mastered(rounds: Int)   // 2 轮内做对，已移出收藏
+    case keep(rounds: Int)       // 用了 3 轮以上，留在收藏
+    case revealed                // 看了完整答案，留在收藏
 }
 
 /// AI 请求的用途，决定用哪个模型、是否用快速模式
@@ -67,9 +67,11 @@ final class AppStore: ObservableObject {
     @Published var sets: [QuestionSet] = [] { didSet { scheduleSave() } }
     /// 左侧的分级文件夹，单独存在 folders.json
     @Published var folders: [Folder] = [] { didSet { saveFolders() } }
+    /// 左栏里点中的文件夹：没有打开笔记、白板、题集时，右边一格一格排出它里面的东西（nil 为最外层）
+    @Published var selectedFolderID: UUID?
     /// 在文件夹菜单里点了“导入题目到这里”“导入资料生成笔记到这里”：导入页默认放到这个文件夹
     var importFolderHint: UUID?
-    /// 选了题集（或错题本）、笔记就不再显示白板
+    /// 选了题集（或收藏）、笔记就不再显示白板
     @Published var selectedSetID: UUID? { didSet { if selectedSetID != nil, selectedBoardID != nil { selectedBoardID = nil }; rememberOpened() } }
     @Published var selectedQuestionID: UUID? {
         didSet {
@@ -108,9 +110,9 @@ final class AppStore: ObservableObject {
     @Published var activeNoteGuide: NoteGuide?
     private var notesSaveTask: Task<Void, Never>?
 
-    /// 左侧“错题本”这一项的固定 id
+    /// 左侧“收藏”这一项的固定 id
     static let mistakeBookID = UUID(uuidString: "00000000-0000-0000-0000-00000000E001")!
-    /// 错题本里几轮内做对就移出
+    /// 收藏里几轮内做对就移出
     static let masteryRounds = 2
 
     var isMistakeBook: Bool { selectedSetID == Self.mistakeBookID }
@@ -1010,15 +1012,15 @@ final class AppStore: ObservableObject {
         DrawingStore.delete([qID])
     }
 
-    // MARK: - 错题本
+    // MARK: - 收藏
 
-    /// 错题本里的所有题，按加入时间从新到旧
+    /// 收藏里的所有题，按加入时间从新到旧
     var starredEntries: [(setID: UUID, question: Question)] {
         sets.flatMap { set in set.questions.filter(\.isStarred).map { (set.id, $0) } }
             .sorted { ($0.question.starredAt ?? .distantPast) > ($1.question.starredAt ?? .distantPast) }
     }
 
-    /// 错题本里有几道题（只数数，不用排序）
+    /// 收藏里有几道题（只数数，不用排序）
     var starredCount: Int {
         sets.reduce(0) { total, set in total + set.questions.reduce(0) { $0 + ($1.isStarred ? 1 : 0) } }
     }
@@ -1035,10 +1037,10 @@ final class AppStore: ObservableObject {
         reviewOutcomes[qID] = nil
     }
 
-    /// 从错题本打开一道还没做完的题：从现在开始计轮数
+    /// 从收藏打开一道还没做完的题：从现在开始计轮数
     func beginReviewIfNeeded(_ setID: UUID, _ qID: UUID) {
-        guard let q = question(setID, qID), q.isStarred, !q.status.isDone, q.reviewRounds == nil else { return }
-        mutate(setID, qID) { $0.reviewRounds = 0 }
+        // 收藏不再计复习轮数、不会自动移出：这里什么都不做（留着是为了旧数据里的 reviewRounds 不再起作用）
+        _ = (setID, qID)
     }
 
     /// 已经做完的错题重新练一遍：之前的作答记录折叠保存，题目恢复成未作答
@@ -1052,7 +1054,7 @@ final class AppStore: ObservableObject {
             q.status = .todo
             q.hintCount = 0
             q.draftAnswer = ""
-            q.reviewRounds = 0
+            q.reviewRounds = nil
         }
         reviewOutcomes[qID] = nil
         noteGuides[qID] = nil
@@ -1061,9 +1063,9 @@ final class AppStore: ObservableObject {
 
     /// 复习中每完成一次检查或提示调用一次，返回已用轮数
     private func countReviewRound(_ q: inout Question) -> Int? {
-        guard let r = q.reviewRounds else { return nil }
-        q.reviewRounds = r + 1
-        return r + 1
+        // 收藏的题不计轮数、做对也不会自动移出；旧数据里记着的轮数清掉
+        q.reviewRounds = nil
+        return nil
     }
 
     /// 下一道还没通过的题；没有就返回顺序上的下一题
@@ -1156,7 +1158,7 @@ final class AppStore: ObservableObject {
                     if let rounds {
                         q.reviewRounds = nil
                         if rounds <= AppStore.masteryRounds && !revealedBefore {
-                            // 错题本里 2 轮内做对：说明掌握了，移出错题本
+                            // 收藏里 2 轮内做对：说明掌握了，移出收藏
                             q.starredAt = nil
                             self?.reviewOutcomes[qID] = .mastered(rounds: rounds)
                         } else {
@@ -1237,7 +1239,7 @@ final class AppStore: ObservableObject {
             self?.mutate(setID, qID) { q in
                 q.messages.append(ChatMessage(role: .assistant, kind: .solution, text: full))
                 if q.status != .passed { q.status = .revealed }
-                // 复习中看了完整答案：这轮复习结束，题目留在错题本
+                // 复习中看了完整答案：这轮复习结束，题目留在收藏
                 if q.reviewRounds != nil {
                     q.reviewRounds = nil
                     self?.reviewOutcomes[qID] = .revealed
@@ -1827,6 +1829,45 @@ extension AppStore {
         return index
     }
 
+    /// 打开着笔记、白板、题集或收藏（右边是页面，不是一格一格的资料库）
+    var hasOpenItem: Bool {
+        board(selectedBoardID) != nil || note(selectedNoteID) != nil || isMistakeBook || set(selectedSetID) != nil
+    }
+
+    /// 点文件夹：关掉打开的东西，右边排出这个文件夹里的东西（nil 为最外层）
+    func browseFolder(_ id: UUID?) {
+        selectedFolderID = folder(id)?.id
+        selectBoard(nil)
+        selectNote(nil)
+        selectedSetID = nil
+        selectedQuestionID = nil
+    }
+
+    /// 打开一篇笔记、一块白板、一个题集或收藏
+    func openItem(_ id: UUID) {
+        if board(id) != nil {
+            selectBoard(id)
+            return
+        }
+        selectedBoardID = nil
+        if note(id) != nil {
+            selectNote(id)
+            return
+        }
+        selectedNoteID = nil
+        selectedSetID = id
+        // 上次看到哪道题就回到哪道题；没看过的从第一道没做完的题开始
+        let last = ReadingPosition.load(id)?.item
+        if id == Self.mistakeBookID {
+            let entries = starredEntries.map(\.question.id)
+            selectedQuestionID = entries.first { $0 == last } ?? entries.first
+        } else {
+            let questions = set(id)?.questions ?? []
+            selectedQuestionID = questions.first(where: { $0.id == last })?.id
+                ?? questions.first(where: { !$0.status.isDone })?.id ?? questions.first?.id
+        }
+    }
+
     /// 导入页默认放到哪个文件夹：文件夹菜单里点的那个，否则是现在选中的东西所在的文件夹
     func takeImportFolder() -> UUID? {
         defer { importFolderHint = nil }
@@ -1835,6 +1876,7 @@ extension AppStore {
 
     /// 现在选中的笔记、白板或题集所在的文件夹：新建、导入时默认放到这里
     var currentFolderID: UUID? {
+        if !hasOpenItem { return folder(selectedFolderID)?.id }
         let raw: UUID?
         if let id = selectedBoardID { raw = board(id)?.folderID }
         else if let id = selectedNoteID { raw = note(id)?.folderID }

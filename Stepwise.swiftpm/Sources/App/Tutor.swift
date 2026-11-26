@@ -507,7 +507,7 @@ enum Tutor {
     /// 检查答案时附在作答记录后面：以这次作答为准重新批改
     static let regradeNoteZH = "以上记录只用来了解我的进展。请只根据下面这次的作答重新批改，不要因为之前错过就判错；之前指出过的错误如果还在，简单点明即可，不要重复整段反馈。"
 
-    /// 出的新题要记住的原题内容：题干和作答记录（包括错题本里重新练习之前的记录）
+    /// 出的新题要记住的原题内容：题干和作答记录（包括收藏里重新练习之前的记录）
     static func originNoteZH(for source: Question) -> String {
         let history = (source.previousAttempts ?? []).flatMap { $0 } + source.messages
         var s = "原题（第 \(source.label) 题）：\n" + clip(source.content, 800) + "\n\n"

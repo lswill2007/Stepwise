@@ -50,7 +50,7 @@ final class NotebookInk: ObservableObject {
 /// 题目印在纸上，下面就是手写区；批改结果、提示写在页边，完整答案折叠在题目下方。
 struct NotebookView: View {
     @EnvironmentObject var store: AppStore
-    /// 题集；为 nil 时显示错题本
+    /// 题集；为 nil 时显示收藏
     let setID: UUID?
 
     struct Entry: Hashable {
@@ -80,7 +80,7 @@ struct NotebookView: View {
     @State private var tracker = ScrollTracker()
     @State private var width: CGFloat = 800
     @State private var showSettings = false
-    /// 错题本里显示的题：做对移出错题本后先留在页面上，免得正看着结果题目就消失了
+    /// 收藏里显示的题：做对移出收藏后先留在页面上，免得正看着结果题目就消失了
     @State private var mistakeEntries: [Entry] = []
     @Environment(\.scenePhase) private var scenePhase
 
@@ -164,12 +164,12 @@ struct NotebookView: View {
             }
         }
         .overlay {
-            // 说明文字在左边的错题本列表里，这里只留标题
+            // 说明文字在左边的收藏列表里，这里只留标题
             if items.isEmpty && setID == nil {
-                ContentUnavailableView("错题本是空的", systemImage: "bookmark")
+                ContentUnavailableView("还没有收藏的题目", systemImage: "star")
             }
         }
-        .navigationTitle(setID.flatMap { store.set($0)?.title } ?? L("错题本"))
+        .navigationTitle(setID.flatMap { store.set($0)?.title } ?? L("收藏"))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -191,8 +191,8 @@ struct NotebookView: View {
                 mistakeEntries = store.starredEntries.map { Entry(setID: $0.setID, qID: $0.question.id) }
             }
         }
-        // 新加入错题本的题接在后面
-        // 只有错题本才算（每次刷新都要把所有题集翻一遍再排序）
+        // 新加入收藏的题接在后面
+        // 只有收藏才算（每次刷新都要把所有题集翻一遍再排序）
         .onChange(of: setID == nil ? store.starredEntries.map(\.question.id) : []) {
             guard setID == nil else { return }
             for entry in store.starredEntries where !mistakeEntries.contains(where: { $0.qID == entry.question.id }) {
@@ -215,7 +215,7 @@ struct NotebookView: View {
     /// 翻到哪道题按导航栏下面多远的一条线算：翻到某道题时题目顶端正好在导航栏下沿，线再往下一点，免得算成上一道
     private static let lineBelowBar: CGFloat = 80
 
-    /// 位置按题集记；错题本用它固定的 id
+    /// 位置按题集记；收藏用它固定的 id
     private var fileID: UUID { setID ?? AppStore.mistakeBookID }
 
     private func savePosition() {
@@ -266,7 +266,7 @@ struct NotebookView: View {
         if store.selectedQuestionID != current { store.selectedQuestionID = current }
     }
 
-    /// 做对后“下一题”跳到哪里：题集里是下一道没做完的题，错题本里是下一道错题
+    /// 做对后“下一题”跳到哪里：题集里是下一道没做完的题，收藏里是下一道错题
     private func next(after entry: Entry, in items: [Entry]) -> UUID? {
         if let setID { return store.nextQuestion(after: entry.qID, in: setID) }
         guard let i = items.firstIndex(of: entry), i + 1 < items.count else { return nil }
@@ -405,7 +405,7 @@ struct QuestionBlock: View {
         }
         // 趁做题的时间在后台把答案解出来，点批改时只需对答案
         if !q.status.isDone { store.presolve(setID, [qID]) }
-        // 错题本里还没做完的题：开始计复习轮数
+        // 收藏里还没做完的题：开始计复习轮数
         if mistakeMode { store.beginReviewIfNeeded(setID, qID) }
     }
 
@@ -425,12 +425,12 @@ struct QuestionBlock: View {
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) { store.toggleStar(setID, qID) }
             } label: {
-                Label(q.isStarred ? L("在错题本里") : L("加入错题本"), systemImage: q.isStarred ? "bookmark.fill" : "bookmark")
+                Label(q.isStarred ? L("已收藏") : L("收藏"), systemImage: q.isStarred ? "star.fill" : "star")
                     .font(.callout)
-                    .foregroundStyle(q.isStarred ? Ink.red : Color.secondary)
+                    .foregroundStyle(q.isStarred ? Ink.star : Color.secondary)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(q.isStarred ? L("移出错题本") : L("加入错题本"))
+            .accessibilityLabel(q.isStarred ? L("取消收藏") : L("收藏"))
             Menu {
                 // 做完之后的快捷操作（出新题、总结技巧……）收在这里，页面上只留批改、提示、看答案
                 if q.status.isDone {
@@ -465,13 +465,13 @@ struct QuestionBlock: View {
         }
     }
 
-    /// 错题本里：做过的题可以重新练习；复习中显示已用轮数
+    /// 收藏里：做过的题可以重新练习
     @ViewBuilder
     private func reviewLine(_ q: Question) -> some View {
         if q.status.isDone && q.reviewRounds == nil {
             HStack(spacing: 12) {
-                Label("可以重新练一遍：\(AppStore.masteryRounds) 轮之内做对，就从错题本移出", systemImage: "arrow.counterclockwise")
-                    .font(.callout).foregroundStyle(Ink.red)
+                Label("可以重新练一遍，之前的作答会收起来留着", systemImage: "arrow.counterclockwise")
+                    .font(.callout).foregroundStyle(.secondary)
                 Spacer()
                 Button {
                     withAnimation { store.startReview(setID, qID) }
@@ -481,15 +481,7 @@ struct QuestionBlock: View {
                     Label("重新练习", systemImage: "play.fill")
                 }
                 .buttonStyle(.bordered)
-                .tint(Ink.red)
             }
-        } else if let rounds = q.reviewRounds {
-            Label(rounds == 0
-                  ? String(localized: "错题复习中 · \(AppStore.masteryRounds) 轮之内做对就移出错题本（检查一次或提示一次算一轮）")
-                  : String(localized: "错题复习中 · 已用 \(rounds) 轮") + (rounds < AppStore.masteryRounds ? L("，这一轮做对就移出错题本") : L("，这次做对也会留在错题本里")),
-                  systemImage: "bookmark.fill")
-                .font(.callout)
-                .foregroundStyle(Ink.red)
         }
     }
 
@@ -995,7 +987,6 @@ struct MarginNotes: View {
                         ReplyFollowUpButtons(setID: setID, qID: qID, reply: current)
                     }
                 }
-                if mistakeMode { reviewOutcome }
                 if items.isEmpty && pending == nil && wide && q.status != .passed {
                     Text("写完点“检查”，结果会标在这里")
                         .font(.callout)
@@ -1282,22 +1273,6 @@ struct MarginNotes: View {
         }
     }
 
-    /// 错题复习结果
-    @ViewBuilder
-    private var reviewOutcome: some View {
-        if let outcome = store.reviewOutcomes[qID] {
-            let (icon, text, color): (String, String, Color) = {
-                switch outcome {
-                case .mastered(let rounds): return ("checkmark", String(localized: "\(rounds) 轮就做对了，已移出错题本。"), Ink.green)
-                case .keep(let rounds): return ("bookmark", String(localized: "这次用了 \(rounds) 轮，先留在错题本里，下次再练一遍。"), Ink.red)
-                case .revealed: return ("bookmark", L("这次看了完整答案，先留在错题本里，过几天再练一遍。"), Ink.red)
-                }
-            }()
-            Label(text, systemImage: icon)
-                .font(.callout.weight(.medium))
-                .foregroundStyle(color)
-        }
-    }
 }
 
 /// 红笔写的勾和叉：笔画有起笔收笔的粗细变化，不用系统图标
@@ -1477,7 +1452,7 @@ struct QuestionNotes: View {
 
 // MARK: - 完整记录
 
-/// 一道题的全部作答、批改、提示和对话（包括错题本重新练习之前的记录）
+/// 一道题的全部作答、批改、提示和对话（包括收藏重新练习之前的记录）
 struct QuestionHistoryView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss

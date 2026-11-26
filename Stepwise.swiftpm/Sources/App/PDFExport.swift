@@ -244,7 +244,7 @@ struct PDFDocumentBuilder {
             }()
             html += "<span class=\"status \(cls)\">\(Self.esc(text))</span>"
         }
-        if q.isStarred { html += "<span class=\"star\">\(Self.esc(L("错题本")))</span>" }
+        if q.isStarred { html += "<span class=\"star\">\(Self.esc(L("收藏")))</span>" }
         html += "</div>"
         body += html
         body += md(q.content)

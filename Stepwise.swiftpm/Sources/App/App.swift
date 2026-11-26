@@ -106,7 +106,7 @@ struct RootView: View {
         SidebarView(showImport: $showImport, showNoteImport: $showNoteImport, showSettings: $showSettings)
     }
 
-    /// 打开了题集、错题本或笔记（中间一栏有东西可显示）
+    /// 打开了题集、收藏或笔记（中间一栏有东西可显示）
     private var hasList: Bool {
         if let noteID = store.selectedNoteID, store.note(noteID) != nil { return true }
         return store.isMistakeBook || store.set(store.selectedSetID) != nil
@@ -222,7 +222,7 @@ struct RootView: View {
             .frame(maxWidth: .infinity)
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { layoutWidth = $0 }
-        // 屏幕窄时在左栏点开题集、笔记、错题本：左栏让开，露出目录和页面
+        // 屏幕窄时在左栏点开题集、笔记、收藏：左栏让开，露出目录和页面
         .onChange(of: store.selectedSetID) { collapseSidebarIfNarrow() }
         .onChange(of: store.selectedNoteID) { collapseSidebarIfNarrow() }
         // 浮着的中间栏里点了一道题、笔记目录里点了一节：收起来，露出整页
@@ -423,7 +423,7 @@ struct RootView: View {
             )
     }
 
-    /// 中间一栏：题目列表、错题本或笔记目录
+    /// 中间一栏：题目列表、收藏或笔记目录
     @ViewBuilder
     private var list: some View {
         if let noteID = store.selectedNoteID, store.note(noteID) != nil {
@@ -438,7 +438,7 @@ struct RootView: View {
         }
     }
 
-    /// 右边的页面：整个题集（或错题本）是一本笔记本，中间的题目列表当目录用
+    /// 右边的页面：整个题集（或收藏）是一本笔记本，中间的题目列表当目录用
     @ViewBuilder
     private var detail: some View {
         if let noteID = store.selectedNoteID, store.note(noteID) != nil {
@@ -451,7 +451,8 @@ struct RootView: View {
             NotebookView(setID: setID)
                 .id(setID)
         } else {
-            ContentUnavailableView("选择一个题集开始", systemImage: "pencil.and.list.clipboard")
+            // 没有打开东西：左栏里点中的文件夹（没点就是最外层）里的东西一格一格排开
+            LibraryGridView()
         }
     }
 

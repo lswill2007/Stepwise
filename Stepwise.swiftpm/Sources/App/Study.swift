@@ -168,7 +168,7 @@ private final class TouchSpy: UIGestureRecognizer, UIGestureRecognizerDelegate {
 
 /// 浮在页面上的时钟：液态玻璃，文字颜色跟随系统深浅色（iPadOS 26 以前用毛玻璃）；
 /// 拖动时跟着手指走，松手后贴到最近的一个角：左上角在顶栏下面、下面的角在工具栏上面；双指缩放大小。
-/// 拖到右上角就收进顶栏（TopBarClock），不再浮在页面上——以前浮在右上角时会挡住题目右上角的“加入错题本”
+/// 拖到右上角就收进顶栏（TopBarClock），不再浮在页面上——以前浮在右上角时会挡住题目右上角的“加入收藏”
 struct FloatingClock: View {
     /// 贴在哪个角：x < 0.5 是左边，y < 0.5 是上面（以前存的是任意位置，按离哪个角近换算）
     @AppStorage("clockX") private var x: Double = 0.85
@@ -343,7 +343,7 @@ extension AppStore {
         var s = Tutor.pick("【每天】\n", "[Each day]\n") + lines.joined(separator: "\n")
         s += Tutor.pick("\n\n【这周卡住过的题】\n", "\n\n[Questions they got stuck on this week]\n")
             + (hard.isEmpty ? Tutor.pick("没有", "None") : hard.prefix(12).joined(separator: "\n"))
-        s += Tutor.pick("\n\n【错题本】现在有 \(starredCount) 道", "\n\n[Review list] \(Tutor.count(starredCount, "question", "questions")) now")
+        s += Tutor.pick("\n\n【收藏的题】现在有 \(starredCount) 道", "\n\n[Favorites] \(Tutor.count(starredCount, "question", "questions")) now")
         if !notes.isEmpty {
             s += Tutor.pick("\n\n【笔记】", "\n\n[Notes] ") + notes.prefix(8).map(\.title).joined(separator: Tutor.pick("、", ", "))
         }

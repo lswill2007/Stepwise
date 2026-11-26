@@ -131,15 +131,12 @@
 "跟随界面语言" = "Same as Interface";
 "%lld 块" = "%lld blocks";
 "%lld 块 · %lld 道练习" = "%lld blocks · %lld exercises";
-"做题时点题目右上角的“错题”，把需要重点复习的题加进来。\n在错题本里 %lld 轮之内做对，就会自动移出。" = "While working on a question, tap “Add to Review List” at its top right to save questions you want to practice again.\nAnswer one correctly within %lld rounds in the Review List and it's removed automatically.";
 "删除文件夹" = "Delete Folder";
 "删除文件夹“%@”？" = "Delete folder “%@”?";
 "删除笔记" = "Delete Notes";
 "删除笔记“%@”？" = "Delete notes “%@”?";
 "变式" = "Variant";
 "名称" = "Name";
-"复习中" = "Reviewing";
-"复习中 · 已用 %lld 轮" = "Reviewing · %lld rounds used";
 "导入" = "Import";
 "导入 PDF、图片或文字，AI 会自动把每道题分开；也可以导入课件、讲义，生成预习和复习笔记" = "Import a PDF, images or text and AI separates every question. You can also import slides or handouts to generate notes for previewing and reviewing.";
 "导入资料生成笔记" = "Generate Notes from Material";
@@ -300,7 +297,6 @@
 "%.0f 秒" = "%.0f s";
 "%.1f 秒" = "%.1f s";
 "%lld 秒" = "%lld s";
-"%lld 轮就做对了，已移出错题本。" = "Correct in %lld rounds — removed from the Review List.";
 "✓ 检查" = "✓ Check";
 "《%@》里讲过" = "Covered in “%@”";
 "下一题 ↓" = "Next Question ↓";
@@ -314,7 +310,6 @@
 "全部显示" = "Show All";
 "关于这道题想问什么…" = "What do you want to ask about this question…";
 "写完点“检查”，结果会标在这里" = "Tap “Check” when you're done — feedback appears here";
-"加入错题本" = "Add to Review List";
 "加长" = "More Space";
 "卡了" = "I'm Stuck";
 "卡住的地方" = "Where You're Stuck";
@@ -322,9 +317,7 @@
 "发送" = "Send";
 "变式题" = "Variant";
 "可以补充文字说明（可选）" = "Add a note if you like (optional)";
-"可以重新练一遍：%lld 轮之内做对，就从错题本移出" = "Practice it again: answer correctly within %lld rounds to remove it from the Review List";
 "在这里打字作答…" = "Type your answer here…";
-"在错题本里" = "In Review List";
 "完整记录" = "Full History";
 "对了" = "Correct";
 "展开说明" = "Show Explanation";
@@ -353,7 +346,6 @@
 "清空这道题的作答、检查记录和手写，重新开始？" = "Clear this question's answers, checks and handwriting and start over?";
 "清空这道题重做" = "Start This Question Over";
 "看答案" = "Show Answer";
-"移出错题本" = "Remove from Review List";
 "笔记" = "Notes";
 "第 %@ 题" = "Question %@";
 "第 %lld 次练习" = "Practice #%lld";
@@ -364,19 +356,11 @@
 "这一步为什么不对？" = "Why is this step wrong?";
 "这一步对吗？" = "Is this step right?";
 "这一步是怎么来的？" = "Where does this step come from?";
-"这次用了 %lld 轮，先留在错题本里，下次再练一遍。" = "This took %lld rounds, so it stays in the Review List — practice it again next time.";
-"这次看了完整答案，先留在错题本里，过几天再练一遍。" = "You viewed the full solution this time, so it stays in the Review List — try it again in a few days.";
 "这道题的更多操作" = "More Actions for This Question";
 "重新练习" = "Practice Again";
-"错题复习中 · %lld 轮之内做对就移出错题本（检查一次或提示一次算一轮）" = "Reviewing · answer correctly within %lld rounds to remove it from the Review List (each check or hint is one round)";
-"错题复习中 · 已用 %lld 轮" = "Reviewing · %lld rounds used";
-"错题本" = "Review List";
-"错题本是空的" = "The Review List is empty";
 "问 %lld" = "Q%lld";
 "问圈出来的这一步" = "Ask About the Circled Step";
 "问这一步" = "Ask About This Step";
-"，这一轮做对就移出错题本" = " — get it right this round to remove it from the Review List";
-"，这次做对也会留在错题本里" = " — it will stay in the Review List even if you get it right now";
 "不出" = "None";
 "出一道练习题" = "Write a Practice Question";
 "只整理笔记，不加练习题。之后可以在任意小节下面点“出例题”。" = "Notes only, no practice questions. You can tap “Practice” under any section later.";
@@ -822,3 +806,15 @@
 "紫色" = "Purple";
 "粉色" = "Pink";
 "灰色" = "Gray";
+
+/* 收藏、资料库的一格一格 */
+"收藏" = "Favorites";
+"已收藏" = "Favorited";
+"取消收藏" = "Remove from Favorites";
+"还没有收藏的题目" = "No favorite questions yet";
+"做题时点题目右上角的“收藏”，把想留着再看的题收进来。\n收藏的题会一直留着，直到你取消收藏。" = "While working on a question, tap “Favorite” at its top right to keep it here.\nFavorites stay until you remove them.";
+"可以重新练一遍，之前的作答会收起来留着" = "You can practice it again; your earlier attempt is kept, folded away";
+"展开" = "Expand";
+"最外层还没有东西" = "Nothing at the top level yet";
+"这个文件夹还是空的" = "This folder is empty";
+"在左栏按住文件夹，可以在里面导入题目、生成笔记、新建白板；也可以把已有的拖进来" = "Touch and hold a folder on the left to import questions, create notes or add a whiteboard inside it. You can also drag existing items in.";
