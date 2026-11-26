@@ -20,17 +20,20 @@ struct RichText: View {
     var host: InkHost?
     /// 临时荧光笔标出的一句话（看笔记时的重点）；找不到这句话就把整块淡淡地标一下
     var highlight: String?
+    /// 网页把内容排好版（量出高度）时回调；内容变高变矮会再调。资料库的预览用它等排好了再截图
+    var onRendered: (() -> Void)?
 
     @State private var height: CGFloat
 
     init(_ text: String, scale: Double = 1, tone: RichTone = .normal, onSelect: ((String) -> Void)? = nil,
-         host: InkHost? = nil, highlight: String? = nil) {
+         host: InkHost? = nil, highlight: String? = nil, onRendered: (() -> Void)? = nil) {
         self.text = text
         self.scale = scale
         self.tone = tone
         self.onSelect = onSelect
         self.host = host
         self.highlight = highlight
+        self.onRendered = onRendered
         // 渲染完成前的高度：排过版的用上次量到的，没排过的估一个，减少跳动
         let lines = text.components(separatedBy: "\n").reduce(0) { $0 + max(1, $1.count / 45 + 1) }
         _height = State(initialValue: Self.measured[Self.key(text, scale, tone)]
@@ -38,7 +41,8 @@ struct RichText: View {
     }
 
     var body: some View {
-        MathWebView(text: text, scale: scale, tone: tone, highlight: highlight, onSelect: onSelect, host: host, height: $height)
+        MathWebView(text: text, scale: scale, tone: tone, highlight: highlight, onSelect: onSelect, host: host, height: $height,
+                    onRendered: onRendered)
             .frame(height: max(height, 18))
             .frame(maxWidth: .infinity, alignment: .leading)
             // 记住量到的高度：页面滚动回收后重建时直接用，不会先按估计高度排再变，把页面顶得跳一下
@@ -60,6 +64,7 @@ struct RichText: View {
 final class MathWebCoordinator: NSObject, WKNavigationDelegate {
     var height: Binding<CGFloat>
     var onSelect: ((String) -> Void)?
+    var onRendered: (() -> Void)?
     weak var webView: WKWebView?
     private var loaded = false
     private var lastContent: String?
@@ -110,6 +115,8 @@ final class MathWebCoordinator: NSObject, WKNavigationDelegate {
 
     func receivedHeight(_ value: CGFloat) {
         if abs(height.wrappedValue - value) > 0.5 { height.wrappedValue = value }
+        // 网页刚载入、内容还没放进去时也会报一次 0
+        if value > 4 { onRendered?() }
     }
 
     func receivedSelection(_ text: String) {
@@ -157,11 +164,13 @@ struct MathWebView: UIViewRepresentable {
     let onSelect: ((String) -> Void)?
     let host: InkHost?
     @Binding var height: CGFloat
+    var onRendered: (() -> Void)?
 
     func makeCoordinator() -> MathWebCoordinator { MathWebCoordinator(height: $height) }
 
     func makeUIView(context: Context) -> WKWebView {
         context.coordinator.onSelect = onSelect
+        context.coordinator.onRendered = onRendered
         let web = context.coordinator.makeWebView()
         context.coordinator.update(text: text, scale: scale, tone: tone, highlight: highlight)
         #if os(iOS)
@@ -173,6 +182,7 @@ struct MathWebView: UIViewRepresentable {
     func updateUIView(_ web: WKWebView, context: Context) {
         context.coordinator.height = $height
         context.coordinator.onSelect = onSelect
+        context.coordinator.onRendered = onRendered
         context.coordinator.update(text: text, scale: scale, tone: tone, highlight: highlight)
     }
 }
@@ -185,11 +195,13 @@ struct MathWebView: NSViewRepresentable {
     let onSelect: ((String) -> Void)?
     let host: InkHost?
     @Binding var height: CGFloat
+    var onRendered: (() -> Void)?
 
     func makeCoordinator() -> MathWebCoordinator { MathWebCoordinator(height: $height) }
 
     func makeNSView(context: Context) -> WKWebView {
         context.coordinator.onSelect = onSelect
+        context.coordinator.onRendered = onRendered
         let web = context.coordinator.makeWebView()
         context.coordinator.update(text: text, scale: scale, tone: tone, highlight: highlight)
         #if os(iOS)
@@ -201,6 +213,7 @@ struct MathWebView: NSViewRepresentable {
     func updateNSView(_ web: WKWebView, context: Context) {
         context.coordinator.height = $height
         context.coordinator.onSelect = onSelect
+        context.coordinator.onRendered = onRendered
         context.coordinator.update(text: text, scale: scale, tone: tone, highlight: highlight)
     }
 }
