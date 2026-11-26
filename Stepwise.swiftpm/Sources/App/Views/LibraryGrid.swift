@@ -113,8 +113,9 @@ private struct LibraryCard: View {
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Ink.systemBackground)
+        .background(Ink.card)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Ink.separator.opacity(0.6), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.10), radius: 5, y: 2)
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement(children: .combine)
@@ -162,6 +163,7 @@ private struct MiniPage: View {
 /// 白板的缩略图：把笔迹缩小画出来（在后台画）
 private struct BoardThumbnail: View {
     let boardID: UUID
+    @Environment(\.colorScheme) private var colorScheme
     #if canImport(UIKit)
     @State private var image: UIImage?
     #endif
@@ -180,8 +182,10 @@ private struct BoardThumbnail: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         #if canImport(UIKit) && canImport(PencilKit)
-        .task(id: boardID) {
+        // 深色模式下笔迹要按深色画（黑笔变成白的），不然画在深色纸上看不见
+        .task(id: "\(boardID)-\(colorScheme == .dark)") {
             let id = boardID
+            let dark = colorScheme == .dark
             image = await Task.detached(priority: .utility) { () -> UIImage? in
                 guard let data = DrawingStore.load(id), let drawing = try? PKDrawing(data: data) else { return nil }
                 let bounds = drawing.bounds
@@ -189,7 +193,7 @@ private struct BoardThumbnail: View {
                 // 白板很大：缩到长边 500 像素左右
                 let scale = min(1, 500 / max(bounds.width, bounds.height))
                 var result: UIImage?
-                UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
+                UITraitCollection(userInterfaceStyle: dark ? .dark : .light).performAsCurrent {
                     result = drawing.image(from: bounds.insetBy(dx: -8, dy: -8), scale: scale)
                 }
                 return result

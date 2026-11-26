@@ -155,6 +155,8 @@ enum Ink {
     static let pen = Color.accentColor
     static let red = adaptive(light: (0.74, 0.16, 0.12), dark: (0.96, 0.47, 0.42))
     static let blue = adaptive(light: (0.14, 0.35, 0.62), dark: (0.56, 0.71, 0.95))
+    /// 资料库里一格卡片的底色：深色模式下比页面亮一点，看得出是一张卡片
+    static let card = adaptive(light: (1, 1, 1), dark: (0.17, 0.17, 0.185))
     /// 收藏的星标
     static let star = adaptive(light: (0.90, 0.62, 0.05), dark: (0.98, 0.78, 0.30))
     static let green = adaptive(light: (0.21, 0.45, 0.28), dark: (0.52, 0.78, 0.57))
@@ -175,7 +177,7 @@ enum Ink {
     static let separator = Color(nsColor: .separatorColor)
     #endif
 
-    private static func adaptive(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
+    static func adaptive(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
         #if os(iOS)
         Color(UIColor { traits in
             let c = traits.userInterfaceStyle == .dark ? dark : light
