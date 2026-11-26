@@ -24,8 +24,10 @@ struct RichText: View {
     var onRendered: (() -> Void)?
 
     @State private var height: CGFloat
-    /// 网页排好版了（公式也排好）：之前摆着几行灰条当加载中，不让这块空白
+    /// 网页排好版了（公式也排好）
     @State private var shown = false
+    /// 摆着几行灰条当加载中：排得快的不摆（免得一闪），过一会儿还没排好才摆
+    @State private var waiting = false
 
     init(_ text: String, scale: Double = 1, tone: RichTone = .normal, onSelect: ((String) -> Void)? = nil,
          host: InkHost? = nil, highlight: String? = nil, onRendered: (() -> Void)? = nil) {
@@ -45,23 +47,35 @@ struct RichText: View {
     var body: some View {
         MathWebView(text: text, scale: scale, tone: tone, highlight: highlight, onSelect: onSelect, host: host, height: $height,
                     shown: $shown, onRendered: onRendered)
-            .opacity(shown ? 1 : 0)
+            .opacity(shown && !waiting ? 1 : 0)
             .frame(height: max(height, 18))
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(alignment: .topLeading) {
-                if !shown { RichTextPlaceholder(height: max(height, 18), scale: scale).transition(.opacity) }
+                if waiting { RichTextPlaceholder(height: max(height, 18), scale: scale).transition(.opacity) }
             }
-            .animation(.easeOut(duration: 0.2), value: shown)
-            // 网页那边万一一直没报排好（公式样式没载进来之类），过一会儿也照样显示出来
-            .task {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                shown = true
-            }
+            .animation(.easeOut(duration: 0.2), value: shown && !waiting)
+            .task { await placeholder() }
             // 记住量到的高度：页面滚动回收后重建时直接用，不会先按估计高度排再变，把页面顶得跳一下
             .onChange(of: height) {
                 if Self.measured.count > 400 { Self.measured.removeAll() }
                 Self.measured[Self.key(text, scale, tone)] = height
             }
+    }
+
+    /// 0.4 秒内排好的直接显示；没排好才摆灰条，摆了至少留 0.6 秒，不一闪而过。
+    /// 网页那边万一一直没报排好（公式样式没载进来之类），3 秒后也照样显示出来
+    private func placeholder() async {
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        guard !shown, !Task.isCancelled else { return }
+        waiting = true
+        let start = Date()
+        while !shown, Date().timeIntervalSince(start) < 2.6, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let held = Date().timeIntervalSince(start)
+        if held < 0.6 { try? await Task.sleep(nanoseconds: UInt64((0.6 - held) * 1_000_000_000)) }
+        shown = true
+        waiting = false
     }
 
     @MainActor private static var measured: [String: CGFloat] = [:]
