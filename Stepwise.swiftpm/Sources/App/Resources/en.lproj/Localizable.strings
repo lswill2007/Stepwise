@@ -820,3 +820,9 @@
 "最外层还没有东西" = "Nothing at the top level yet";
 "这个文件夹还是空的" = "This folder is empty";
 "在左栏按住文件夹，可以在里面导入题目、生成笔记、新建白板；也可以把已有的拖进来" = "Touch and hold a folder on the left to import questions, create notes or add a whiteboard inside it. You can also drag existing items in.";
+"储存位置里的 %@ 打不开（可能是用更新版本的 Stepwise 存的），原文件已经另存了一份备份。为了不覆盖原来的数据，现在的改动不会保存。请更新到最新版本后重新打开 App。" = "Couldn't open %@ at the storage location (it may have been saved by a newer version of Stepwise). A backup copy of the original file was made. To avoid overwriting your data, changes won't be saved for now. Update to the latest version, then reopen the app.";
+"删除题集“%@”？" = "Delete question set “%@”?";
+"删除题集" = "Delete Question Set";
+"题目、手写作答和批改记录都会删除，不能恢复。" = "The questions, handwritten answers and feedback will be deleted. This can’t be undone.";
+"取消导出" = "Cancel Export";
+"模型拒绝处理这个请求（%@），可以换个说法或换个模型试试。" = "The model refused to process this request (%@). Try rephrasing it or switching to another model.";

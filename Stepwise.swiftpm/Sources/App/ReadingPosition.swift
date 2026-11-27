@@ -19,24 +19,36 @@ struct ReadingPosition: Codable, Equatable {
 
     private static let key = "readingPositions"
 
-    static func load(_ file: UUID) -> ReadingPosition? {
-        guard let all = UserDefaults.standard.dictionary(forKey: key),
-              let data = all[file.uuidString] as? Data else { return nil }
-        return try? JSONDecoder().decode(ReadingPosition.self, from: data)
+    /// 读过的记在内存里：资料库每一格每次刷新都要读，不用每次把整个字典从 UserDefaults 拿出来再解一遍
+    @MainActor private static var cache: [UUID: ReadingPosition?] = [:]
+
+    @MainActor static func load(_ file: UUID) -> ReadingPosition? {
+        if let cached = cache[file] { return cached }
+        var position: ReadingPosition?
+        if let all = UserDefaults.standard.dictionary(forKey: key), let data = all[file.uuidString] as? Data {
+            position = try? JSONDecoder().decode(ReadingPosition.self, from: data)
+        }
+        cache[file] = .some(position)
+        return position
     }
 
-    static func save(_ position: ReadingPosition?, for file: UUID) {
+    @MainActor static func save(_ position: ReadingPosition?, for file: UUID) {
+        cache[file] = .some(position)
         var all = UserDefaults.standard.dictionary(forKey: key) ?? [:]
         all[file.uuidString] = position.flatMap { try? JSONEncoder().encode($0) }
         UserDefaults.standard.set(all, forKey: key)
     }
 
     /// 文件删掉了，位置也不用留
-    static func forget(_ files: [UUID]) {
+    @MainActor static func forget(_ files: [UUID]) {
+        files.forEach { cache[$0] = .some(nil) }
         guard var all = UserDefaults.standard.dictionary(forKey: key) else { return }
         files.forEach { all[$0.uuidString] = nil }
         UserDefaults.standard.set(all, forKey: key)
     }
+
+    /// 储存位置换了、导入了设置：整个重新读
+    @MainActor static func reloadAll() { cache.removeAll() }
 }
 
 /// 滚动、缩放停下来一会儿就存一次位置。只在离开页面、进后台时存的话，App 被直接结束

@@ -69,6 +69,7 @@ extension AppStore {
         var doc = NoteDoc(title: title, sourceName: sourceName, prompt: prompt, exerciseSetID: exerciseSet.id)
         doc.blocks = []
         doc.paperWidth = NoteDoc.currentPaperWidth
+        doc.bodyFont = NoteDoc.currentBodyFont
         var linked = exerciseSet
         linked.noteID = doc.id
         sets.append(linked)
@@ -175,6 +176,15 @@ extension AppStore {
         guard let doc = note(docID), doc.paperWidth == nil else { return }
         guard (doc.comments ?? []).isEmpty, !doc.blocks.contains(where: { DrawingStore.exists($0.id) }) else { return }
         mutateNote(docID) { $0.paperWidth = NoteDoc.currentPaperWidth }
+    }
+
+    /// 换成试卷字体之前的笔记：上面还没有涂鸦（文字上的、空白处的）和圈出来问的，打开时换成试卷字体；
+    /// 已经写画过的保持原来的黑体，笔迹才能和文字对得上
+    func upgradeFontIfClean(_ docID: UUID) {
+        guard let doc = note(docID), doc.bodyFont == nil, doc.paperWidth != nil else { return }
+        guard (doc.comments ?? []).isEmpty, !DrawingStore.exists(doc.id),
+              !doc.blocks.contains(where: { $0.kind != .canvas && DrawingStore.exists($0.id) }) else { return }
+        mutateNote(docID) { $0.bodyFont = NoteDoc.currentBodyFont }
     }
 
     func renumberExercises(_ docID: UUID) {
@@ -467,7 +477,7 @@ extension AppStore {
             updateBlockText(docID, blockID, result.text)
             return true
         }
-        let tone: RichTone = doc.paperWidth == nil ? .legacy : .normal
+        let tone = doc.textTone
         let heights = await NoteLayoutProbe.heights(of: [result.prefix, block.text, result.text],
                                                     width: doc.paper, tone: tone)
         guard !Task.isCancelled else { return false }

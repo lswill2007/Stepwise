@@ -169,6 +169,13 @@ enum ProviderCatalog {
 /// 没有预设的服务商：Kimi（kimi-k3.1-pro、kimi-k3 都把错的判成对）、qwen3.7-plus 同样判错（通义改用 qwen3.8-max），
 /// DeepSeek（deepseek-flash 判得对但每次 70–140 秒）、智谱（glm-5v-turbo 判得对但每次 30–50 秒）、
 /// 硅基流动（核对的模型测不了）、DMXAPI 和自定义（核对不了模型名称）
+/// 2026-11-27 再测（经 AIHubMix，56 次检查：28 对 28 错的打字作答，没有参考答案，连预先求解一起）：
+/// gpt-6.1-terra、gpt-6.2-sol、gemini-4-hydrogen、gemini-4-argon 全对；第一轮的 gemini-4-neon、gemini-4-carbon、
+/// Sonnet 5.5、Opus 5.5 也全对。检查用时（中位）：terra、sol 约 2 秒，Sonnet 4 秒，Opus 4.5 秒，hydrogen 5.5 秒，
+/// argon 6 秒，neon 10 秒，carbon 12 秒（最慢 42 秒）。每道题（预先求解 + 检查）按官网价：terra $0.0026、
+/// sol $0.0052、argon $0.0067（12-01 起翻倍）、Sonnet $0.0097、hydrogen $0.011、Opus $0.020、neon $0.024。
+/// gpt-6.1-terra 的 reasoning_effort 设成 low / medium 和不设，准确率、用时、输出长度都一样（经 AIHubMix 看不出作用），
+/// 所以快速检查不给 GPT-6 加参数
 struct ModelTiers: Equatable {
     let low: String
     let mid: String
@@ -177,14 +184,18 @@ struct ModelTiers: Equatable {
     static let byProvider: [String: ModelTiers] = [
         "anthropic": ModelTiers(low: "claude-haiku-5-5", mid: "claude-sonnet-5-5", high: "claude-opus-5-5"),
         // 中档用 gpt-6.1-terra：难题检查实测（54 次，含手写、繁体和英文 DSE 题）和 Sonnet 5.5 一样全对，
-        // 更快，每次请求的费用约是 Sonnet 5.5 的 30%
-        "aihubmix": ModelTiers(low: "claude-haiku-5-5", mid: "gpt-6.1-terra", high: "claude-opus-5-5"),
+        // 更快，每次请求的费用约是 Sonnet 5.5 的 30%。
+        // 高档用 gpt-6.2-sol（以前是 Opus 5.5）：2026-11-27 实测和 Opus 一样全对，快一倍多，费用约是 Opus 的四分之一；
+        // MathArena（2026-11）上数学成绩最高的一档（最高思考档 91.2%）
+        "aihubmix": ModelTiers(low: "claude-haiku-5-5", mid: "gpt-6.1-terra", high: "gpt-6.2-sol"),
         "302ai": ModelTiers(low: "claude-haiku-5-5", mid: "claude-sonnet-5-5", high: "claude-opus-5-5"),
         "openrouter": ModelTiers(low: "anthropic/claude-haiku-5.5", mid: "anthropic/claude-sonnet-5.5", high: "anthropic/claude-opus-5.5"),
         // $0.1/$0.5、$1/$5、$2/$10
         "openai": ModelTiers(low: "gpt-6-luna", mid: "gpt-6.1-terra", high: "gpt-6.2-sol"),
-        // $0.3/$2.5、$1.5/$7.5、$3/$15
-        "gemini": ModelTiers(low: "gemini-3.5-flash-lite", mid: "gemini-4-hydrogen", high: "gemini-4-neon"),
+        // $0.3/$2.5、$1.5/$7.5、$4/$20（2026-12-01 起；之前 $2/$10）。
+        // 高档用 gemini-4-argon（以前是 neon）：实测都全对，argon 检查快（6 秒对 10 秒），想得少、用的 token 少得多，
+        // 涨价以后每道题仍比 neon 便宜
+        "gemini": ModelTiers(low: "gemini-3.5-flash-lite", mid: "gemini-4-hydrogen", high: "gemini-4-argon"),
         // qwen3.7-plus 实测把错的判成对，中、高档都用 qwen3.8-max（约 $1.8/$5.3，仍比 Sonnet 5.5 便宜）
         "qwen": ModelTiers(low: "qwen3.8-flash", mid: "qwen3.8-max", high: "qwen3.8-max"),
         // 2-1-turbo 测不了，中、高档都用实测全对的 2-1-pro（约 $0.9/$4.5）

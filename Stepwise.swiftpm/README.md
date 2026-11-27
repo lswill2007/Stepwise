@@ -56,6 +56,7 @@ Sources/App/
   Tutor.swift            全部提示词和模型输出解析（想调整 AI 行为改这里）
   Views/RichText.swift   Markdown + LaTeX 公式显示
   KatexAssets.swift      内嵌的 KaTeX 0.16.9（MIT 许可），由 Tools/embed_katex.py 生成
+  ExamFont.swift         正文的试卷字体：内置思源宋体（Resources/Fonts，SIL OFL 许可）+ 系统的 Times New Roman
   Providers.swift        服务商预设、模型分类（厂商、能否看图、是否能对话）、推荐模型（快速看图、整理长资料）
   Importer.swift         PDF/图片/文本读取与分段
   Storage.swift          钥匙串、图片存储、图片压缩、手写笔迹
@@ -77,6 +78,22 @@ Sources/App/
     NoteViews.swift      笔记：导入资料生成笔记、目录、笔记页（文字块、练习块、选中提问）
     SettingsView.swift   设置；ModelBrowser.swift 模型浏览器；ConsentView.swift 首次使用说明
 ```
+
+## 正文字体
+
+正文（题目、批改、笔记、导出的 PDF）用试卷上常见的样子：中文宋体，英文和数字 Times New Roman。
+iPad 没有自带宋体，所以内置了思源宋体（Noto Serif SC / HK，SIL Open Font License 1.1，许可全文在 `Sources/App/Resources/Fonts/NotoSerifCJK-OFL.txt`），
+只留常用的九千多个字和标点（GB2312 全部汉字 + Big5 常用字），四个文件一共约 10 MB。字表以外的生僻字用系统的黑体显示。
+
+换字表、换字重时重新生成：
+
+```
+# 从 https://github.com/notofonts/noto-cjk 的 Serif/SubsetOTF/SC、HK 下载 NotoSerifSC/HK-Regular/Bold.otf 放进 <目录>
+pip install fonttools
+python3 Tools/subset_fonts.py <目录> Sources/App/Resources/Fonts
+```
+
+写画过的旧笔记（`NoteDoc.bodyFont` 为空，上面有涂鸦或圈出来问）保持原来的黑体：换了字体每行排的字数就变了，笔迹和文字对不上。
 
 ## 升级 KaTeX
 

@@ -7,6 +7,8 @@ import Combine
 extension PKDrawing {
     /// 中心在 y 以下的笔画往下挪 dy
     func shifted(below y: CGFloat, by dy: CGFloat) -> PKDrawing {
+        // 下面没有笔迹就原样返回：重新赋过 strokes 的 PKDrawing 和原来的比不相等，会白白重画、重存一次
+        guard dy != 0, strokes.contains(where: { $0.renderBounds.midY > y }) else { return self }
         var result = self
         result.strokes = strokes.map { stroke in
             guard stroke.renderBounds.midY > y else { return stroke }
@@ -109,6 +111,15 @@ final class PadCanvasView: PKCanvasView {
 
     /// 有笔落在纸上
     var isPencilDown: Bool { touchWatcher.pencilDown }
+
+    /// 最近写的这一笔是 Apple Pencil 写的（飞线只有笔才有，手指写的不查）
+    var strokeHadPencil: Bool {
+        #if targetEnvironment(simulator)
+        // 模拟器里没有笔：测试时把手指当成笔
+        if UserDefaults.standard.bool(forKey: "inkTestFingerIsPencil") { return true }
+        #endif
+        return touchWatcher.strokeHadPencil
+    }
 
     /// 看着落在纸上的笔和手指（只看不拦）
     private lazy var touchWatcher: InkTouchWatcher = {
@@ -463,6 +474,8 @@ final class InkTouchWatcher: UIGestureRecognizer, UIGestureRecognizerDelegate {
     var onAllLifted: () -> Void = {}
     private var drawing = Set<ObjectIdentifier>()
     private var pencils = Set<ObjectIdentifier>()
+    /// 最近落下的这一笔有 Apple Pencil 参与（手掌先碰到、笔跟着落下也算）
+    private(set) var strokeHadPencil = false
     private var all = Set<ObjectIdentifier>()
 
     /// 有能写字的笔或手指落在纸上
@@ -489,8 +502,13 @@ final class InkTouchWatcher: UIGestureRecognizer, UIGestureRecognizerDelegate {
         for touch in touches {
             let id = ObjectIdentifier(touch)
             all.insert(id)
-            if canDraw(touch) { drawing.insert(id); onDrawTouchBegan(touch) }
-            if touch.type == .pencil { pencils.insert(id); pencil = true }
+            if canDraw(touch) {
+                // 新的一笔：之前没有别的笔、手指在写
+                if drawing.isEmpty { strokeHadPencil = false }
+                drawing.insert(id)
+                onDrawTouchBegan(touch)
+            }
+            if touch.type == .pencil { pencils.insert(id); pencil = true; strokeHadPencil = true }
         }
         onTouchDown()
         if pencil { onPencilDown() }
@@ -777,8 +795,12 @@ final class InkEraserRelay {
         // 局部擦按橡皮的大小；整笔擦碰到就算
         let wholeStrokes = eraser.eraserType == .vector
         let screenRadius: CGFloat = wholeStrokes ? 3 : eraser.width / 2
+        // 橡皮这一下扫过的范围（窗口坐标）：离得远的画布先跳过，不去翻它的每一笔
+        let sweep = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
+            .insetBy(dx: -screenRadius - 4, dy: -screenRadius - 4)
         for model in models.allObjects {
             guard let pad = model.canvas, pad !== origin, pad.window === window, !pad.isHidden,
+                  pad.convert(pad.bounds, to: nil).intersects(sweep),
                   pad.pendingDrawing == nil, !pad.isStroking, !pad.drawing.strokes.isEmpty,
                   // 只擦同一页上的：盖在上面的白板、弹出的页面不会擦到下面笔记的字
                   Self.screenRoot(of: pad) === page else { continue }
@@ -933,6 +955,8 @@ final class HandwritingModel: ObservableObject {
     /// 笔迹属于哪道题；为 nil 时不保存
     private let questionID: UUID?
     private var pendingSave: DispatchWorkItem?
+    /// 上次存盘以后笔迹改过（离开页面、退后台时只存改过的，不把打开过的每一块都重新编码一遍）
+    private var unsaved = false
 
     static let isAvailable = true
     static let minHeight: CGFloat = 260
@@ -1076,6 +1100,7 @@ final class HandwritingModel: ObservableObject {
 
     /// 笔迹变化后稍等片刻再写盘，连续书写时不会频繁保存
     func scheduleSave() {
+        unsaved = true
         pendingSave?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.saveNow() }
         pendingSave = work
@@ -1085,9 +1110,15 @@ final class HandwritingModel: ObservableObject {
     func saveNow() {
         pendingSave?.cancel()
         pendingSave = nil
+        unsaved = false
         guard let questionID else { return }
         let toSave = storedDrawing ?? drawing
         DrawingStore.saveInBackground(for: questionID) { toSave.strokes.isEmpty ? nil : toSave.dataRepresentation() }
+    }
+
+    /// 改过还没存的才存
+    func saveIfChanged() {
+        if unsaved { saveNow() }
     }
 
     /// 笔记这一块中间插进了内容：y 以下的笔迹往下挪 dy，屏幕上和存下的一起改
@@ -1400,10 +1431,17 @@ struct NotebookCanvas: UIViewRepresentable {
                 model.circled(stroke: stroke)
                 return
             }
+            // 飞线：Apple Pencil 落笔、抬笔的那一下偶尔报来一个离得很远的点，纸上就多出一条拉到远处的笔直细线。
+            // 刚写的这几笔里有的话，把飞出去的点拿掉（见 InkShape.withoutSpikes）
+            let oldCount = model.drawing.strokes.count
+            let inking = model.tools.tool == .pen || model.tools.tool == .marker
+            let despiked = byPen && inking && current.strokes.count > oldCount && pad.strokeHadPencil
+                ? Self.withoutSpikes(current, from: oldCount, scale: pad.zoomScale)?.drawing : nil
             // 笔的手感参数（压力灵敏度、笔尖扁平度、稳定性）：把刚写的这一笔重新整理
-            if byPen, model.tools.shapesPenStrokes,
-               current.strokes.count == model.drawing.strokes.count + 1,
-               let shaped = Self.shaped(current, tools: model.tools) {
+            let base = despiked ?? current
+            let shaped = byPen && model.tools.shapesPenStrokes && base.strokes.count == oldCount + 1
+                ? Self.shaped(base, tools: model.tools) : nil
+            if let target = shaped ?? despiked {
                 let before = model.drawing
                 // 先按纸上的样子记下；换成整理后的笔画时再记一次
                 model.drawingChanged(current)
@@ -1411,12 +1449,27 @@ struct NotebookCanvas: UIViewRepresentable {
                     pad.whenIdle { [weak self] in
                         guard let self else { return }
                         // PencilKit 晚报了这一笔、等到下一笔写完才轮到这里：纸上已经多了别的笔画，
-                        // 再换成当时整理好的样子会把后来写的弄丢，撤销记录最上面也不再是这一笔。这一笔就不整理了
-                        guard pad.paperDrawing == current else { return }
+                        // 再换成当时整理好的样子会把后来写的弄丢，撤销记录最上面也不再是这一笔。这一笔就不整理了；
+                        // 飞线还是要拿掉，只动有飞线的那几笔。一次报来好几笔时也一样（撤销记录里不止一条）
+                        guard pad.paperDrawing == current, current.strokes.count == oldCount + 1 || despiked == nil else {
+                            if despiked != nil { self.removeSpikes(pad, from: oldCount) }
+                            return
+                        }
+                        if despiked != nil {
+                            // 带飞线的原样那一笔，PencilKit 以后要是又放回来（和圈出来问的圈一样），认出来再拿掉
+                            Self.withoutSpikes(current, from: oldCount, scale: pad.zoomScale)?.originals.forEach(self.discard)
+                            // 过一会儿逼画布整个重画一遍（见 repaintSoon）
+                            self.repaintSoon(pad)
+                        }
+                        // 整笔就是一条飞线，拿掉以后和写之前一样：放回写之前的笔迹，不留撤销记录
+                        guard target.strokes.count > before.strokes.count else {
+                            self.replace(pad, with: before, undoTo: before, droppingPencilKitUndo: true, registersUndo: false)
+                            return
+                        }
                         // 先换成整理后的笔画，再把 PencilKit 记下的“加了原来那一笔”拿掉：
                         // 以前先撤销再放回，中间有一两帧这一笔不见了，写完一笔字就闪一下。
                         // 原来那一笔已经不在纸上，撤销它什么也不会改，只是从撤销记录里拿掉
-                        self.replace(pad, with: shaped, undoTo: before, droppingPencilKitUndo: true)
+                        self.replace(pad, with: target, undoTo: before, droppingPencilKitUndo: true)
                     }
                 }
                 return
@@ -1427,7 +1480,7 @@ struct NotebookCanvas: UIViewRepresentable {
 
         /// 用代码换掉画布上的笔迹，PencilKit 不会记撤销，自己记：撤销回到写这一笔之前，重做再放回来
         private func replace(_ canvasView: PadCanvasView, with drawing: PKDrawing, undoTo previous: PKDrawing,
-                             droppingPencilKitUndo: Bool = false) {
+                             droppingPencilKitUndo: Bool = false, registersUndo: Bool = true) {
             let undoManager = canvasView.undoManager
             // 换之前垫一张截图（先藏着）：PencilKit 重画好之前又落笔写下一笔时露出来，刚写的字也不会消失。
             // 变了的那几笔在截图上换成新的样子，露出来时和画布上的对得上，不会糊
@@ -1441,11 +1494,64 @@ struct NotebookCanvas: UIViewRepresentable {
             }
             applying = false
             model.drawingChanged(drawing)
+            guard registersUndo else { return }
             // 撤销记录在整个窗口共用的撤销管理器里：不要拉着画布不放（关掉的页面、白板的画布一直留在内存里）
             undoManager?.registerUndo(withTarget: self) { [weak canvasView] coordinator in
                 guard let canvasView else { return }
                 coordinator.replace(canvasView, with: previous, undoTo: drawing)
             }
+        }
+
+        /// 飞线晚了一步才轮到处理（后面又写了别的）：只把那几笔里飞出去的点拿掉，别的笔画原样留着，撤销记录不动
+        private func removeSpikes(_ canvasView: PadCanvasView, from start: Int) {
+            let shown = canvasView.paperDrawing
+            guard let (cleaned, originals) = Self.withoutSpikes(shown, from: min(start, shown.strokes.count),
+                                                                scale: canvasView.zoomScale) else { return }
+            // PencilKit 心里还记着带飞线的原样那一笔，下一笔写完时可能连它一起放回来：认出来再拿掉（和圈出来问的圈一样）
+            originals.forEach(discard)
+            canvasView.coverWhileRedrawing(visible: canvasView.showsCoverWhileReshaping,
+                                           changed: Self.changedBounds(shown, cleaned), becoming: cleaned)
+            applying = true
+            canvasView.paperDrawing = cleaned
+            applying = false
+            model.drawingChanged(cleaned)
+            repaintSoon(canvasView)
+        }
+
+        /// 拿掉飞线以后，过一会儿逼 PencilKit 把整块画布重画一遍。
+        /// 带飞线的一笔占的地方很大（从落笔处一直拉到远处），换掉它时要重画一大片；这一笔要是正好又把手写区撑长了，
+        /// 画布同时在变大，PencilKit 重画到一半就停下，整块手写区的字都不见（笔迹还在，只是没画出来）。
+        /// 等排版停下来再放回一次，垫着截图，不会闪
+        private func repaintSoon(_ canvasView: PadCanvasView) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak canvasView] in canvasView?.refreshRendering() }
+        }
+
+        /// 第 start 笔以后的笔画里飞出去的点拿掉（见 InkShape.withoutSpikes），整笔都是飞线的拿掉这一笔；没有飞线返回 nil。
+        /// scale：画布的缩放，远近、快慢都按屏幕上的算。originals：改动过的那几笔原来的样子
+        static func withoutSpikes(_ drawing: PKDrawing, from start: Int, scale: CGFloat) -> (drawing: PKDrawing, originals: [PKStroke])? {
+            var strokes = drawing.strokes
+            guard start >= 0, start < strokes.count else { return nil }
+            let zoom = scale > 0 ? scale : 1
+            var originals: [PKStroke] = []
+            for i in (start..<strokes.count).reversed() {
+                let stroke = strokes[i]
+                let points = Array(stroke.path)
+                let samples = points.map {
+                    InkShape.Sample(location: CGPoint(x: $0.location.x * zoom, y: $0.location.y * zoom), time: $0.timeOffset)
+                }
+                guard let keep = InkShape.withoutSpikes(samples) else { continue }
+                originals.append(stroke)
+                if keep.isEmpty {
+                    strokes.remove(at: i)
+                } else {
+                    let path = PKStrokePath(controlPoints: keep.map { points[$0] }, creationDate: stroke.path.creationDate)
+                    strokes[i] = PKStroke(ink: stroke.ink, path: path, transform: stroke.transform, mask: stroke.mask)
+                }
+            }
+            guard !originals.isEmpty else { return nil }
+            var result = drawing
+            result.strokes = strokes
+            return (result, originals)
         }
 
         /// 两份笔迹里不一样的笔画占的地方（前面一样的笔画跳过）；变的太多就不算（返回 nil）
@@ -1552,6 +1658,8 @@ final class PageInkLayout {
     /// 记下的笔迹，和记下时每一块的上下边（纸的坐标）。排版变了只改显示的位置，记下的不动：
     /// 排版中途的样子（文字还没排好、高度一下变小）不会把笔迹挤坏
     private var reference: PKDrawing?
+    /// 上次放到画布上时每一笔挪了多少；nil 是都没挪（显示的就是 reference）
+    private var lastShifts: [CGFloat]?
     private var referenceAnchors: [String: [Double]]?
 
     /// 现在每一块的上下边（纸的坐标）；还没排好版（高度是 0、有的块还是上一次排版量的）时为 nil
@@ -1575,6 +1683,7 @@ final class PageInkLayout {
         if reference == nil {
             reference = model.drawing
             referenceAnchors = saved
+            lastShifts = nil
         }
         // 第一次记下排版（以前没写过）
         guard let reference, let referenceAnchors else {
@@ -1583,11 +1692,19 @@ final class PageInkLayout {
         }
         guard !reference.strokes.isEmpty else { return nil }
         let map = Self.mapping(blocks: blocks.map(\.uuidString), saved: referenceAnchors, current: current)
-        var shown = reference
-        shown.strokes = reference.strokes.map { stroke in
+        let strokes = reference.strokes
+        let shifts: [CGFloat] = strokes.map { stroke in
             let y = Double(stroke.renderBounds.midY)
             let dy = CGFloat(map(y) - y)
-            guard abs(dy) > 0.01 else { return stroke }
+            return abs(dy) > 0.01 ? dy : 0
+        }
+        // 每一笔挪的和上次一样（排版动了但笔迹附近没变）：不重画整页涂鸦
+        let key: [CGFloat]? = shifts.contains { $0 != 0 } ? shifts : nil
+        guard key != lastShifts else { return nil }
+        lastShifts = key
+        var shown = reference
+        shown.strokes = zip(strokes, shifts).map { stroke, dy in
+            guard dy != 0 else { return stroke }
             var moved = stroke
             moved.transform = stroke.transform.concatenating(CGAffineTransform(translationX: 0, y: dy))
             return moved
@@ -1599,6 +1716,7 @@ final class PageInkLayout {
     /// 用户写了、擦了：现在显示的就是要记下的，按现在的排版记；返回要存的位置
     func userChanged(_ model: HandwritingModel, blocks: [UUID]) -> [String: [Double]]? {
         reference = model.drawing
+        lastShifts = nil   // 现在显示的就是新的参照，一笔都没挪
         if let current = measure(blocks) { referenceAnchors = current }
         return referenceAnchors
     }
@@ -1828,6 +1946,8 @@ struct InkPalette: View {
                 ViewThatFits(in: .horizontal) {
                     fullBar(labels: true)
                     fullBar(labels: false)
+                    // 分屏 1/3、侧拉、iPad mini 竖屏开着左栏时放不下：左右滑着用，两头的按钮不会被切掉
+                    ScrollView(.horizontal, showsIndicators: false) { fullBar(labels: false) }
                 }
                 .padding(.top, 6).padding(.bottom, 2)
                 .frame(maxWidth: .infinity)
@@ -2212,6 +2332,7 @@ final class HandwritingModel: ObservableObject {
     init(questionID: UUID?, tools: InkTools) { self.tools = tools }
     func clear() {}
     func saveNow() {}
+    func saveIfChanged() {}
     @Published var circledRegion: CGRect?
     @Published var askRegionVisible = false
     var onEraserTouch: ((CGPoint) -> Void)?

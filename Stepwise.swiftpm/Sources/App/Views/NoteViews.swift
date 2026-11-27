@@ -455,6 +455,9 @@ struct NoteDocView: View {
     @State private var showSettings = false
     /// 上次看到哪里：每一块在看得见区域里的位置，离开时记下顶上那条线落在哪一块
     @State private var reading = NoteReading()
+    /// 正在改的标题：打字时先放在这里，停一下、离开输入框再写进笔记（每打一个字都改笔记会把整页重排一遍）
+    @State private var titleDraft: TitleDraft?
+    @FocusState private var titleFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
 
     final class NoteReading {
@@ -628,12 +631,12 @@ struct NoteDocView: View {
             .sheet(isPresented: $showSettings) { SettingsView() }
             .onChange(of: scenePhase) {
                 if scenePhase != .active {
-                    ink.saveAll()
+                    ink.saveAll(wait: scenePhase == .background)
                     savePosition()
                 }
             }
             .onDisappear {
-                ink.saveAll()
+                ink.saveAll(wait: false)
                 savePosition()
             }
             // 问答补进笔记、插在一块中间：这一块插入点下面的笔迹跟着往下挪
@@ -645,6 +648,7 @@ struct NoteDocView: View {
             }
             .onAppear {
                 store.upgradePaperIfClean(noteID)
+                store.upgradeFontIfClean(noteID)
                 store.renumberExercises(noteID)
                 // 空白处写了、擦了：按现在的排版记下笔迹的位置
                 let model = ink.pageModel(for: noteID)
@@ -741,10 +745,29 @@ struct NoteDocView: View {
 
     // MARK: 标题
 
+    struct TitleDraft: Equatable {
+        let note: UUID
+        let text: String
+    }
+
+    private func commitTitle() {
+        guard let draft = titleDraft else { return }
+        titleDraft = nil
+        if store.note(draft.note)?.title != draft.text { store.renameNote(draft.note, to: draft.text) }
+    }
+
     private func header(_ doc: NoteDoc, job: NoteJob?) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            TextField("笔记标题", text: Binding(get: { doc.title }, set: { store.renameNote(noteID, to: $0) }), axis: .vertical)
+            TextField("笔记标题", text: Binding(get: { titleDraft?.note == noteID ? titleDraft!.text : doc.title },
+                                               set: { titleDraft = TitleDraft(note: noteID, text: $0) }), axis: .vertical)
                 .font(.largeTitle.bold())
+                .focused($titleFocused)
+                .onChange(of: titleFocused) { if !titleFocused { commitTitle() } }
+                .task(id: titleDraft) {
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+                    if !Task.isCancelled { commitTitle() }
+                }
+                .onDisappear { commitTitle() }
             let source = [doc.sourceName.isEmpty ? nil : String(localized: "来自 \(doc.sourceName)"),
                           doc.prompt.isEmpty ? nil : String(localized: "要求：\(doc.prompt)")].compactMap { $0 }
             if !source.isEmpty {
@@ -772,7 +795,7 @@ struct NoteDocView: View {
                               commentMargin: commentMargin,
                               marginOpen: marginOpen(doc),
                               paperWidth: doc.paper,
-                              legacyLayout: doc.paperWidth == nil,
+                              textTone: doc.textTone,
                               paperScale: paperScale(doc),
                               guide: store.activeNoteGuide?.noteID == noteID && store.activeNoteGuide?.blockID == block.id
                                   ? store.activeNoteGuide : nil,
@@ -936,7 +959,7 @@ struct NoteDocView: View {
         VStack(alignment: .leading, spacing: 10) {
             // 正在写的这一块，写完就变成正式的笔记块（单独刷新，翻页不卡）
             LiveTextReader(live: store.live(noteID)) { partial in
-                if !partial.isEmpty { RichText(partial).opacity(0.55) }
+                if !partial.isEmpty { RichText(partial, remember: false).opacity(0.55) }
             }
             GeneratingBadge(label: job.label, startedAt: job.startedAt) { store.stopNoteJob(noteID) }
             // 生成整篇笔记时：大概进度、写好几块、用了多久
@@ -951,7 +974,7 @@ struct NoteDocView: View {
         VStack(alignment: .leading, spacing: 10) {
             // 补进笔记时正在写的解释，写完插进上面这一块里提问的地方
             LiveTextReader(live: store.live(noteID)) { partial in
-                if !partial.isEmpty { RichText(partial).opacity(0.55) }
+                if !partial.isEmpty { RichText(partial, remember: false).opacity(0.55) }
             }
             GeneratingBadge(label: job.label, startedAt: job.startedAt) { store.stopNoteJob(noteID) }
         }
@@ -1069,8 +1092,8 @@ struct NoteTextBlockView<MenuContent: View>: View {
     let marginOpen: Bool
     /// 这篇笔记的纸宽，和缩放到页面上的比例
     let paperWidth: CGFloat
-    /// 旧笔记（上面已经写画过）：保持原来的换行方式，笔迹才对得上
-    let legacyLayout: Bool
+    /// 文字按哪种样子排。写画过的旧笔记保持原来的换行方式、原来的字体，笔迹才对得上
+    let textTone: RichTone
     let paperScale: CGFloat
     /// 做题卡住时被引导来看的就是这一块：临时荧光笔标出重点，页边有“详细记录”
     let guide: NoteGuide?
@@ -1198,7 +1221,7 @@ struct NoteTextBlockView<MenuContent: View>: View {
                         // 正在写的回答：单独刷新，写的时候上下翻页不卡
                         LiveTextReader(live: store.live(block.id)) { text in
                             if !text.isEmpty {
-                                RichText(text, tone: legacyLayout ? .legacy : .normal)
+                                RichText(text, tone: textTone, remember: false)
                                     .modifier(NotePaper(width: paperWidth, scale: paperScale))
                             }
                         }
@@ -1210,7 +1233,7 @@ struct NoteTextBlockView<MenuContent: View>: View {
                             .buttonStyle(InkTextButtonStyle(color: .secondary))
                     }
                 } else {
-                    RichText(block.text, tone: legacyLayout ? .legacy : .normal, onSelect: onSelect, host: inkHost,
+                    RichText(block.text, tone: textTone, onSelect: onSelect, host: inkHost,
                              highlight: guide.map { Tutor.highlightKey($0.quote) })
                         // 圈出来问过的地方：淡淡的虚线框和序号，对应页边的批注
                         .overlay(alignment: .topLeading) { circledMarks }

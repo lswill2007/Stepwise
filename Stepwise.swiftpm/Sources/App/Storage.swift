@@ -252,12 +252,31 @@ enum DrawingStore {
         return queue.sync { DataLocation.exists(url) }
     }
 
+    /// 每个文件还有几次后台写盘没写完
+    private static let pendingLock = NSLock()
+    nonisolated(unsafe) private static var pending: [String: Int] = [:]
+
+    private static func pendingCount(_ url: URL) -> Int {
+        pendingLock.lock(); defer { pendingLock.unlock() }
+        return pending[url.path] ?? 0
+    }
+
+    private static func adjustPending(_ url: URL, by delta: Int) {
+        pendingLock.lock(); defer { pendingLock.unlock() }
+        let next = (pending[url.path] ?? 0) + delta
+        pending[url.path] = next > 0 ? next : nil
+    }
+
     static func load(_ id: UUID) -> Data? {
         let url = url(id)
-        return queue.sync {
+        func read() -> Data? {
             guard DataLocation.exists(url) else { return nil }
             return try? DataLocation.read(url)
         }
+        // 这个文件没有排着的写盘：直接读，不用排在别的笔迹的编码、写盘后面
+        // （刚写完一块接着滚到下一块时，下一块不会等上一块存完才出来）
+        guard pendingCount(url) > 0 else { return read() }
+        return queue.sync { read() }
     }
 
     /// data 为 nil 表示没有笔迹，删除文件
@@ -269,7 +288,11 @@ enum DrawingStore {
     /// 在后台编码、写盘；地址现在就定下来（等待期间换了储存位置，也不会写到新位置去）
     static func saveInBackground(for id: UUID, encode: @escaping @Sendable () -> Data?) {
         let url = url(id)
-        queue.async { write(encode(), to: url) }
+        adjustPending(url, by: 1)
+        queue.async {
+            write(encode(), to: url)
+            adjustPending(url, by: -1)
+        }
     }
 
     /// 等排着的写盘都写完（退到后台、换储存位置之前）

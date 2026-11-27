@@ -102,3 +102,84 @@ enum InkShape {
         }
     }
 }
+
+// MARK: - 飞线
+
+extension InkShape {
+    /// 笔画上的一个点：位置，和从落笔算起过了多久（秒）
+    struct Sample {
+        var location: CGPoint
+        var time: TimeInterval
+    }
+
+    /// 一步跨出去至少这么远才可能是飞线
+    static let spikeMinJump: CGFloat = 80
+    /// 手写不出这么快的一步（每秒多少 pt；约每秒两米多，Apple Pencil 每秒报 240 个点，正常写字相邻两点只隔几 pt）
+    static let spikeMinSpeed: CGFloat = 12_000
+    /// 飞出去的那一头最多几个点
+    static let spikeMaxPoints = 3
+
+    /// 去掉笔画里的“飞线”：Apple Pencil 落笔（或抬笔）的那一下，偶尔会报来一个离得很远的点
+    ///（手掌同时碰到屏幕、屏幕贴膜、充电干扰时都见过），PencilKit 照着画，纸上就多出一条从这一笔拉到远处的笔直细线。
+    ///
+    /// 认的是“不可能写出来的一步”：一步跨出很远、快得手写不出来，而且跨过去的那一头只有一两个点，
+    /// 笔画的其余部分都在另一头正常地写着（或者跨出去马上又跨回来）。很快地划一条长线不会被认成飞线：
+    /// 那样每一步都差不多长，不是只有孤零零的一步。
+    ///
+    /// 返回要留下的点的下标；没有飞线返回 nil；整笔留不下东西（就是一条飞线）返回空数组
+    static func withoutSpikes(_ points: [Sample]) -> [Int]? {
+        guard points.count >= 2 else { return nil }
+        var keep = Array(points.indices)
+        var changed = false
+        // 一次去掉一处，去掉以后再从头看；一笔里最多也就两三处
+        for _ in 0..<6 {
+            guard keep.count >= 2, let cut = spike(in: keep.map { points[$0] }) else { break }
+            keep.removeSubrange(cut)
+            changed = true
+        }
+        guard changed else { return nil }
+        return keep.count >= 2 ? keep : []
+    }
+
+    /// 找一处飞线：返回要去掉的那几个点
+    private static func spike(in p: [Sample]) -> Range<Int>? {
+        let n = p.count
+        guard n >= 2 else { return nil }
+        func length(_ i: Int) -> CGFloat { distance(p[i].location, p[i + 1].location) }
+        func isJump(_ i: Int) -> Bool {
+            let l = length(i)
+            guard l >= spikeMinJump else { return false }
+            let dt = CGFloat(p[i + 1].time - p[i].time)
+            return dt <= 0 || l / dt >= spikeMinSpeed
+        }
+        /// 这几个点挤在一起（相对跨出去的那一步来说）
+        func compact(_ range: ClosedRange<Int>, against jump: CGFloat) -> Bool {
+            range.allSatisfy { distance(p[$0].location, p[range.lowerBound].location) <= jump * 0.25 }
+        }
+        let jumps = (0..<(n - 1)).filter(isJump)
+        guard let first = jumps.first, let last = jumps.last else { return nil }
+
+        // 跨出去又跨回来：中间那一两个点是飞出去的
+        for (a, b) in zip(jumps, jumps.dropFirst()) where b - a <= spikeMaxPoints {
+            let back = distance(p[a].location, p[b + 1].location)
+            if back <= min(length(a), length(b)) * 0.35 { return (a + 1)..<(b + 1) }
+        }
+        // 开头的一两个点在远处，然后一步跨到真正落笔的地方接着写
+        if first < spikeMaxPoints, n - (first + 1) >= first + 1, compact(0...first, against: length(first)),
+           first + 2 >= n || length(first + 1) <= length(first) * 0.35 {
+            return 0..<(first + 1)
+        }
+        // 写得好好的，最后一步跨到远处
+        let tail = n - 1 - last
+        if tail <= spikeMaxPoints, last + 1 >= tail, compact((last + 1)...(n - 1), against: length(last)),
+           last == 0 || length(last - 1) <= length(last) * 0.35 {
+            return (last + 1)..<n
+        }
+        return nil
+    }
+
+    private static func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = a.x - b.x, dy = a.y - b.y
+        return (dx * dx + dy * dy).squareRoot()
+    }
+}

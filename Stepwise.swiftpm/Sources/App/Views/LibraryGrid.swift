@@ -140,8 +140,10 @@ private struct LibraryCard: View {
         case .note(let doc):
             // 从上次看到的那一块排起
             let saved = ReadingPosition.load(doc.id)
-            let start = doc.blocks.firstIndex { $0.id == saved?.item } ?? 0
-            PagePreview(id: item.id, text: noteText(doc, from: start, part: saved?.part), icon: item.icon)
+            let found = doc.blocks.firstIndex { $0.id == saved?.item }
+            // 那一块删掉了就从头排，也不按那一块看到几分之几去跳段
+            PagePreview(id: item.id, text: noteText(doc, from: found ?? 0, part: found == nil ? nil : saved?.part), icon: item.icon,
+                        tone: doc.textTone == .normal ? .normal : .sans)
         case .board(let board):
             BoardThumbnail(boardID: board.id)
         }
@@ -175,6 +177,8 @@ private struct PagePreview: View {
     /// 从上次看到的地方起的 Markdown
     let text: String
     let icon: String
+    /// 写画过的旧笔记还是原来的黑体，预览也一样
+    var tone: RichTone = .normal
     @Environment(\.colorScheme) private var colorScheme
     #if canImport(UIKit)
     @State private var host = InkHost()
@@ -207,7 +211,7 @@ private struct PagePreview: View {
         return paragraphs[cut...].joined(separator: "\n\n")
     }
 
-    private var key: NSString { "\(colorScheme == .dark)|\(text)" as NSString }
+    private var key: NSString { "\(colorScheme == .dark)|\(tone.rawValue)|\(text)" as NSString }
 
     var body: some View {
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -229,13 +233,13 @@ private struct PagePreview: View {
                         Image(uiImage: old).resizable()
                             .frame(width: shown, height: shown * old.size.height / max(old.size.width, 1))
                             .background(alignment: .topLeading) {
-                                RichText(text, host: host, onRendered: { capture() }).opacity(0)
+                                RichText(text, tone: tone, host: host, onRendered: { capture() }).opacity(0)
                             }
                     } else {
-                        RichText(text, host: host, onRendered: { capture() })
+                        RichText(text, tone: tone, host: host, onRendered: { capture() })
                     }
                     #else
-                    RichText(text)
+                    RichText(text, tone: tone)
                     #endif
                 }
                 .padding(.horizontal, Self.inset)
@@ -249,7 +253,12 @@ private struct PagePreview: View {
             .allowsHitTesting(false)
             .accessibilityHidden(true)
             #if canImport(UIKit)
-            .onChange(of: key) { shot = nil }
+            .onChange(of: key) {
+                // 还在截的那张是旧内容（旧的深浅色）的，不能等它截完贴上来
+                shotTask?.cancel()
+                shotTask = nil
+                shot = nil
+            }
             .onDisappear { shotTask?.cancel() }
             #endif
         }
@@ -266,10 +275,9 @@ private struct PagePreview: View {
             let config = WKSnapshotConfiguration()
             config.rect = CGRect(x: 0, y: 0, width: web.bounds.width, height: min(web.bounds.height, Self.pageWidth * 1.3))
             guard let image = try? await web.takeSnapshot(configuration: config), !Task.isCancelled else { return }
-            PagePreviewCache.shared.setObject(image, forKey: key)
-            PagePreviewCache.shared.setObject(image, forKey: id.uuidString as NSString)
+            PagePreviewCache.store(image, key: key, for: id)
             // 正摆着上次的图：换成新的
-            if key == self.key { shot = image }
+            shot = image
         }
     }
     #endif
@@ -277,12 +285,24 @@ private struct PagePreview: View {
 
 #if canImport(UIKit)
 /// 排好版的预览截图，按内容（和深浅色）记；每份笔记、题集另记一张最近的，内容变了重排时先摆着
-private enum PagePreviewCache {
+@MainActor private enum PagePreviewCache {
     static let shared: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 160
+        // 一张图大约 3 MB，按占的内存算，最多留 64 MB
+        cache.totalCostLimit = 64 * 1024 * 1024
         return cache
     }()
+    /// 每份笔记、题集最近一张图的内容 key：换了新的就把旧的扔掉，不让过时的图一直占着内存
+    private static var latest: [UUID: NSString] = [:]
+
+    static func store(_ image: UIImage, key: NSString, for id: UUID) {
+        let cost = Int(image.size.width * image.scale * image.size.height * image.scale * 4)
+        if let old = latest[id], old != key { shared.removeObject(forKey: old) }
+        latest[id] = key
+        shared.setObject(image, forKey: key, cost: cost)
+        shared.setObject(image, forKey: id.uuidString as NSString, cost: cost)
+    }
 }
 #endif
 

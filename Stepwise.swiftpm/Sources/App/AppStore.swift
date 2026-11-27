@@ -97,6 +97,8 @@ final class AppStore: ObservableObject {
     /// 做题卡住时找到的相关笔记（题目 id → 引导）；正在找的任务
     @Published var noteGuides: [UUID: NoteGuide] = [:]
     var noteGuideTasks: [UUID: Task<Void, Never>] = [:]
+    /// 这道题找过、没找到（或者关掉了引导）时笔记的样子：笔记没变就不再花钱问一遍
+    var noteGuideChecked: [UUID: Int] = [:]
     /// 正在看的引导：笔记页上临时荧光笔标出重点，页边有“详细记录”
     @Published var activeNoteGuide: NoteGuide?
     private var notesSaveTask: Task<Void, Never>?
@@ -398,6 +400,7 @@ final class AppStore: ObservableObject {
         var folders: [Folder] = []
         /// 存在但读不出来的文件
         var unreadable: [String] = []
+        var undecodable: [String] = []
         var settings: SettingsRead = .missing
     }
 
@@ -418,23 +421,28 @@ final class AppStore: ObservableObject {
                 return nil
             }
         }
-        if let data = load(libraryURL) {
-            if let decoded = try? JSONDecoder().decode([QuestionSet].self, from: data) {
-                snapshot.sets = decoded.map(cleaned)
-            } else {
-                // 读不出来时先把原文件备份，绝不能让之后的保存把题库覆盖掉
-                let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-                let backup = libraryURL.deletingLastPathComponent().appendingPathComponent("library-backup-\(stamp).json")
-                try? DataLocation.write(data, to: backup)
-            }
+        // 读得到但解不开（比如用更新的版本存过、或是 iCloud 冲突文件）：先备份原文件，再挡住保存，
+        // 绝不能让之后的保存把空列表写回去
+        func decode<T: Decodable>(_ type: T.Type, from url: URL) -> T? {
+            guard let data = load(url) else { return nil }
+            if let decoded = try? JSONDecoder().decode(type, from: data) { return decoded }
+            let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+            let name = url.deletingPathExtension().lastPathComponent
+            let backup = url.deletingLastPathComponent().appendingPathComponent("\(name)-backup-\(stamp).json")
+            try? DataLocation.write(data, to: backup)
+            snapshot.undecodable.append(url.lastPathComponent)
+            return nil
         }
-        if let data = load(notesURL), let decoded = try? JSONDecoder().decode([NoteDoc].self, from: data) {
+        if let decoded = decode([QuestionSet].self, from: libraryURL) {
+            snapshot.sets = decoded.map(cleaned)
+        }
+        if let decoded = decode([NoteDoc].self, from: notesURL) {
             snapshot.notes = decoded
         }
-        if let data = load(boardsURL), let decoded = try? JSONDecoder().decode([Whiteboard].self, from: data) {
+        if let decoded = decode([Whiteboard].self, from: boardsURL) {
             snapshot.boards = decoded
         }
-        if let data = load(foldersURL), let decoded = try? JSONDecoder().decode([Folder].self, from: data) {
+        if let decoded = decode([Folder].self, from: foldersURL) {
             snapshot.folders = decoded
         }
         if DataLocation.isCustom {
@@ -454,9 +462,11 @@ final class AppStore: ObservableObject {
     private func apply(_ snapshot: DiskSnapshot) {
         loading = true
         defer { loading = false }
-        writesBlocked = !snapshot.unreadable.isEmpty
-        if writesBlocked {
+        writesBlocked = !snapshot.unreadable.isEmpty || !snapshot.undecodable.isEmpty
+        if !snapshot.unreadable.isEmpty {
             errorMessage = String(localized: "读不到储存位置里的 \(snapshot.unreadable.joined(separator: L("、")))（可能还没从 iCloud 下载完）。为了不覆盖原来的数据，现在的改动不会保存。请确认网络和 iCloud 正常后重新打开 App。")
+        } else if !snapshot.undecodable.isEmpty {
+            errorMessage = String(localized: "储存位置里的 \(snapshot.undecodable.joined(separator: L("、"))) 打不开（可能是用更新版本的 Stepwise 存的），原文件已经另存了一份备份。为了不覆盖原来的数据，现在的改动不会保存。请更新到最新版本后重新打开 App。")
         }
         sets = snapshot.sets
         notes = snapshot.notes
@@ -494,7 +504,7 @@ final class AppStore: ObservableObject {
         for (url, encode) in [(Self.libraryURL, { [sets] in try? JSONEncoder().encode(sets) }),
                               (Self.notesURL, { [notes] in try? JSONEncoder().encode(notes) }),
                               (Self.boardsURL, { [boards] in try? JSONEncoder().encode(boards) })] as [(URL, () -> Data?)]
-        where !SaveLedger.shared.isClean(url) {
+        where SaveLedger.shared.hasPending(url) {
             let generation = SaveLedger.shared.issue(url)
             if let data = encode() { SaveLedger.shared.write(data, to: url, generation: generation) }
         }
@@ -689,11 +699,37 @@ final class AppStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let url = DataLocation.url(DataLocation.settingsFile)
-        // 和上次写的一模一样就不再写（文件夹在 iCloud 里时每写一次都要上传）
-        guard let data = try? encoder.encode(file), data != lastSettingsWrite?.data || url != lastSettingsWrite?.url else { return }
-        if (try? DataLocation.write(data, to: url)) != nil { lastSettingsWrite = (url, data) }
+        // 内容和上次写的（或启动时读到的）一样就不再写（文件夹在 iCloud 里时每写一次都要上传）。
+        // 其他设置按内容比，不按字节比：同样的设置每次打包出来的顺序可能不一样
+        let content = SettingsContent(file, at: url)
+        if let content, let last = lastSettingsWrite, content.matches(last) { return }
+        guard let data = try? encoder.encode(file) else { return }
+        if (try? DataLocation.write(data, to: url)) != nil { lastSettingsWrite = content }
     }
-    private var lastSettingsWrite: (url: URL, data: Data)?
+    private var lastSettingsWrite: SettingsContent?
+
+    /// settings.json 里写了什么：其他设置以外的部分按排好序的 JSON 比，其他设置解开成字典比
+    private struct SettingsContent {
+        let url: URL
+        let core: Data
+        let preferences: NSDictionary
+
+        init?(_ file: SettingsFile, at url: URL) {
+            var core = file
+            core.preferences = nil
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            guard let data = try? encoder.encode(core) else { return nil }
+            self.url = url
+            self.core = data
+            preferences = file.preferences
+                .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? NSDictionary } ?? [:]
+        }
+
+        func matches(_ other: SettingsContent) -> Bool {
+            url == other.url && core == other.core && preferences.isEqual(other.preferences)
+        }
+    }
 
     /// 套用储存文件夹里的 settings.json（已经在后台读好）；没有这个文件时返回 false
     @discardableResult
@@ -730,6 +766,8 @@ final class AppStore: ObservableObject {
         noteModel = file.noteModel
         if let quick = file.quickGrading { quickGrading = quick }
         if let data = file.preferences { restorePreferences(data) }
+        // 记下文件里是什么：套用完和文件一样时，启动后不用马上整个重写一遍（连同 API Key 上传 iCloud）
+        lastSettingsWrite = SettingsContent(file, at: DataLocation.url(DataLocation.settingsFile))
         return true
     }
 
@@ -783,6 +821,7 @@ final class AppStore: ObservableObject {
             }
         }
         // 已经读进内存的设置跟着更新（时钟用 @AppStorage，会自己更新）
+        ReadingPosition.reloadAll()
         aiConsent = d.object(forKey: "aiConsent") as? Bool ?? aiConsent
         showTiming = d.object(forKey: "showTiming") as? Bool ?? showTiming
         keyboardAnswer = d.bool(forKey: "keyboardAnswer")
@@ -956,7 +995,11 @@ final class AppStore: ObservableObject {
     func mutate(_ setID: UUID, _ qID: UUID, _ change: (inout Question) -> Void) {
         guard let si = sets.firstIndex(where: { $0.id == setID }),
               let qi = sets[si].questions.firstIndex(where: { $0.id == qID }) else { return }
-        change(&sets[si].questions[qi])
+        // 先改一份副本：没变就不动 sets，免得整个 App 重新渲染、题库重新写盘（滚动时每道题移出屏幕都会来这里）
+        var q = sets[si].questions[qi]
+        change(&q)
+        guard q != sets[si].questions[qi] else { return }
+        sets[si].questions[qi] = q
     }
 
     func addSet(_ newSet: QuestionSet) {
@@ -995,6 +1038,7 @@ final class AppStore: ObservableObject {
             q.draftAnswer = ""
         }
         noteGuides[qID] = nil
+        noteGuideChecked[qID] = nil
         DrawingStore.delete([qID])
     }
 
@@ -1030,6 +1074,7 @@ final class AppStore: ObservableObject {
             q.draftAnswer = ""
         }
         noteGuides[qID] = nil
+        noteGuideChecked[qID] = nil
         DrawingStore.delete([qID])
     }
 
@@ -1503,7 +1548,7 @@ final class AppStore: ObservableObject {
         // 几部分同时拆（最多 3 部分），比一部分一部分等快得多；拆完按原来的顺序合并
         let tracker = SplitTracker(chunks: chunks, report: progress)
         tracker.report(force: true)
-        typealias Parsed = (title: String?, items: [Tutor.SplitItem])
+        typealias Parsed = (title: String?, items: [Tutor.SplitItem], truncated: Bool)
         var results = [Result<Parsed, Error>?](repeating: nil, count: chunks.count)
         let makeTask = { (i: Int) -> @Sendable () async throws -> (Int, Result<Parsed, Error>) in
             { [self] in
@@ -1565,6 +1610,8 @@ final class AppStore: ObservableObject {
                 continue
             }
             if suggestedTitle == nil { suggestedTitle = parsed.title }
+            // 回答写到长度上限被截断：最后一道写了一半被丢掉，告诉用户这一部分可能漏了题
+            if parsed.truncated { failedParts.append(index + 1) }
 
             for item in parsed.items {
                 let key = Tutor.labelKey(item.label)
@@ -1632,7 +1679,7 @@ extension AppStore {
 
     /// 拆一部分：边收边数已经写出来的题，写完检查选择题有没有漏选项
     fileprivate func splitChunk(_ index: Int, _ chunk: SplitChunk, count: Int, client: LLMClient, requirement: String,
-                                tracker: SplitTracker) async throws -> (title: String?, items: [Tutor.SplitItem]) {
+                                tracker: SplitTracker) async throws -> (title: String?, items: [Tutor.SplitItem], truncated: Bool) {
         var parts: [LLMContent] = chunk.images.map(LLMContent.image)
         var text = count > 1
             ? Tutor.pick("以下是题目文件的第 \(index + 1)/\(count) 部分（与前后部分各有一页重叠）。",
@@ -1643,9 +1690,11 @@ extension AppStore {
         let system = Tutor.splitSystem(requirement: requirement, hasImages: !chunk.images.isEmpty, multiPart: count > 1)
 
         var output = ""
+        var written = 0   // 边收边数：每来一小段都把整段 output 数一遍，越往后越慢
         for try await piece in client.stream(system: system, messages: [LLMMessage(role: .user, parts: parts)]) {
             output += piece
-            tracker.update(index, output: output)
+            written += piece.count
+            tracker.update(index, output: output, written: written)
         }
         try Task.checkCancellation()
         var parsed = try Tutor.parseSplit(output)
@@ -1669,7 +1718,7 @@ extension AppStore {
             }
         }
         tracker.finish(index)
-        return parsed
+        return (parsed.title, parsed.items, output.contains(L("\n\n（回答因长度限制被截断）")))
     }
 }
 
@@ -1691,8 +1740,8 @@ final class SplitTracker {
         self.report = report
     }
 
-    func update(_ i: Int, output: String) {
-        estimator.update(i, written: output.count)
+    func update(_ i: Int, output: String, written: Int) {
+        estimator.update(i, written: written)
         guard Date().timeIntervalSince(lastReport) > 0.25 else { return }
         labels[i] = Self.labels(in: output)
         report(force: false)
@@ -1964,6 +2013,8 @@ final class SaveLedger: @unchecked Sendable {
     private let lock = NSLock()
     private var issued: [String: Int] = [:]
     private var written: [String: Int] = [:]
+    /// 每个文件一把写盘锁：写大文件（尤其是 iCloud 里的）时，主线程排号、查状态不用等它写完
+    private var fileLocks: [String: NSLock] = [:]
 
     func issue(_ url: URL) -> Int {
         lock.lock(); defer { lock.unlock() }
@@ -1972,24 +2023,28 @@ final class SaveLedger: @unchecked Sendable {
         return next
     }
 
-    /// 排过号、而且最后排的号已经写好了
-    func isClean(_ url: URL) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        guard let last = issued[url.path] else { return false }
-        return written[url.path] == last
-    }
-
-    /// 排过号、还没写好
+    /// 排过号、还没写好（读进来以后没改过的不算）
     func hasPending(_ url: URL) -> Bool {
         lock.lock(); defer { lock.unlock() }
         guard let last = issued[url.path] else { return false }
         return written[url.path] != last
     }
 
-    /// 写的时候拿着锁，同一时间只有一处在写
+    /// 同一个文件同一时间只有一处在写；写盘时只拿这个文件的锁，不挡住主线程排号
     func write(_ data: Data, to url: URL, generation: Int) {
-        lock.lock(); defer { lock.unlock() }
-        guard generation > (written[url.path] ?? 0) else { return }
-        if (try? DataLocation.write(data, to: url)) != nil { written[url.path] = generation }
+        let fileLock: NSLock = {
+            lock.lock(); defer { lock.unlock() }
+            if let existing = fileLocks[url.path] { return existing }
+            let created = NSLock()
+            fileLocks[url.path] = created
+            return created
+        }()
+        fileLock.lock(); defer { fileLock.unlock() }
+        let latest: Int = { lock.lock(); defer { lock.unlock() }; return written[url.path] ?? 0 }()
+        guard generation > latest else { return }
+        if (try? DataLocation.write(data, to: url)) != nil {
+            lock.lock(); defer { lock.unlock() }
+            written[url.path] = max(written[url.path] ?? 0, generation)
+        }
     }
 }

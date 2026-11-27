@@ -4,8 +4,10 @@ import WebKit
 /// 文字颜色：默认跟随深浅色；red 是页边的红笔批注
 enum RichTone: String {
     case normal = "", red
-    /// 旧笔记：保持原来的换行方式（行内公式可以拆开），上面的笔迹才和文字对得上
+    /// 旧笔记：保持原来的换行方式（行内公式可以拆开），上面的笔迹才和文字对得上。字体也是原来的黑体
     case legacy
+    /// 换成试卷字体之前就写画过的笔记：字体还用原来的黑体，换了字每行排的字数就变了，笔迹和文字对不上
+    case sans
 }
 
 /// 显示 Markdown + LaTeX 公式（KaTeX 排版）。
@@ -22,15 +24,18 @@ struct RichText: View {
     var highlight: String?
     /// 网页把内容排好版（量出高度）时回调；内容变高变矮会再调。资料库的预览用它等排好了再截图
     var onRendered: (() -> Void)?
+    /// 记不记量到的高度：流式生成、正在打字的文字每次都不一样，记下来只会把真正要用的挤掉
+    var remember = true
 
     @State private var height: CGFloat
     /// 网页排好版了（公式也排好）
     @State private var shown = false
     /// 摆着几行灰条当加载中：排得快的不摆（免得一闪），过一会儿还没排好才摆
     @State private var waiting = false
+    @State private var waitStart: Date?
 
     init(_ text: String, scale: Double = 1, tone: RichTone = .normal, onSelect: ((String) -> Void)? = nil,
-         host: InkHost? = nil, highlight: String? = nil, onRendered: (() -> Void)? = nil) {
+         host: InkHost? = nil, highlight: String? = nil, onRendered: (() -> Void)? = nil, remember: Bool = true) {
         self.text = text
         self.scale = scale
         self.tone = tone
@@ -38,9 +43,10 @@ struct RichText: View {
         self.host = host
         self.highlight = highlight
         self.onRendered = onRendered
+        self.remember = remember
         // 渲染完成前的高度：排过版的用上次量到的，没排过的估一个，减少跳动
         let lines = text.components(separatedBy: "\n").reduce(0) { $0 + max(1, $1.count / 45 + 1) }
-        _height = State(initialValue: Self.measured[Self.key(text, scale, tone)]
+        _height = State(initialValue: (remember ? Self.measured[HeightKey(text: text, scale: scale, tone: tone)] : nil)
                         ?? CGFloat(min(lines, 40)) * 26 * CGFloat(scale))
     }
 
@@ -54,34 +60,45 @@ struct RichText: View {
                 if waiting { RichTextPlaceholder(height: max(height, 18), scale: scale).transition(.opacity) }
             }
             .animation(.easeOut(duration: 0.2), value: shown && !waiting)
-            .task { await placeholder() }
+            .task(id: shown) { await placeholder() }
             // 记住量到的高度：页面滚动回收后重建时直接用，不会先按估计高度排再变，把页面顶得跳一下
             .onChange(of: height) {
-                if Self.measured.count > 400 { Self.measured.removeAll() }
-                Self.measured[Self.key(text, scale, tone)] = height
+                guard remember, shown else { return }
+                // 满了只扔掉一半，不把正在看的几块的高度一起清掉
+                if Self.measured.count > 400 {
+                    for key in Self.measured.keys.shuffled().prefix(200) { Self.measured[key] = nil }
+                }
+                Self.measured[HeightKey(text: text, scale: scale, tone: tone)] = height
             }
     }
 
     /// 0.4 秒内排好的直接显示；没排好才摆灰条，摆了至少留 0.6 秒，不一闪而过。
-    /// 网页那边万一一直没报排好（公式样式没载进来之类），3 秒后也照样显示出来
+    /// 网页那边万一一直没报排好（公式样式没载进来之类），3 秒后也照样显示出来。
+    /// 跟着 shown 重新跑：排好时才醒来收灰条，不用每 50 毫秒看一次
     private func placeholder() async {
+        if shown {
+            guard waiting else { return }
+            let held = Date().timeIntervalSince(waitStart ?? .distantPast)
+            if held < 0.6 { try? await Task.sleep(nanoseconds: UInt64((0.6 - held) * 1_000_000_000)) }
+            guard !Task.isCancelled else { return }
+            waiting = false
+            return
+        }
         try? await Task.sleep(nanoseconds: 400_000_000)
         guard !shown, !Task.isCancelled else { return }
         waiting = true
-        let start = Date()
-        while !shown, Date().timeIntervalSince(start) < 2.6, !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
-        let held = Date().timeIntervalSince(start)
-        if held < 0.6 { try? await Task.sleep(nanoseconds: UInt64((0.6 - held) * 1_000_000_000)) }
-        shown = true
-        waiting = false
+        waitStart = Date()
+        try? await Task.sleep(nanoseconds: 2_600_000_000)
+        guard !shown, !Task.isCancelled else { return }
+        shown = true   // 再跑一次上面那段：已经摆够 0.6 秒，马上收掉灰条
     }
 
-    @MainActor private static var measured: [String: CGFloat] = [:]
-    private static func key(_ text: String, _ scale: Double, _ tone: RichTone) -> String {
-        "\(scale)|\(tone.rawValue)|\(text)"
+    private struct HeightKey: Hashable {
+        let text: String
+        let scale: Double
+        let tone: RichTone
     }
+    @MainActor private static var measured: [HeightKey: CGFloat] = [:]
 }
 
 /// 排版中的占位：按这块的高度画几行灰条（最后一行短一点），轻轻地一明一暗
@@ -298,7 +315,11 @@ struct MathWebView: NSViewRepresentable {
 /// 首次使用时把内嵌的 KaTeX 写到本地目录，之后所有公式都离线排版。
 enum MathAssets {
     /// 本地页面地址；写入失败时为 nil，页面改用 CDN 加载 KaTeX
-    static let pageURL: URL? = {
+    static var pageURL: URL? { installed?.page }
+    /// 正文的试卷字体（ExamFont）放进网页目录了；没放进去就照旧用系统字体
+    static var serif: Bool { installed?.serif ?? false }
+
+    private static let installed: (page: URL, serif: Bool)? = {
         guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
         return try? install(into: support.appendingPathComponent("katex-\(KatexAssets.version)", isDirectory: true))
     }()
@@ -326,11 +347,11 @@ enum MathAssets {
         if let page = pageURL {
             web.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
         } else {
-            web.loadHTMLString(MathTemplate.html, baseURL: URL(string: "https://stepwise.app/"))
+            web.loadHTMLString(MathTemplate.html(serif: false), baseURL: URL(string: "https://stepwise.app/"))
         }
     }
 
-    static func install(into dir: URL) throws -> URL {
+    static func install(into dir: URL) throws -> (page: URL, serif: Bool) {
         let fm = FileManager.default
         let marker = dir.appendingPathComponent(".complete")
         if !fm.fileExists(atPath: marker.path) {
@@ -347,13 +368,15 @@ enum MathAssets {
             }
             try Data().write(to: marker)
         }
+        // 正文的试卷字体：每次启动检查一遍，缺了、换了就重放
+        let serif = ExamFont.install(into: dir.appendingPathComponent("fonts", isDirectory: true))
         // 页面模板每次启动都检查一遍，App 更新后自动换成新模板
         let page = dir.appendingPathComponent("page.html")
-        let html = Data(MathTemplate.html.utf8)
+        let html = Data(MathTemplate.html(serif: serif).utf8)
         if (try? Data(contentsOf: page)) != html {
             try html.write(to: page, options: .atomic)
         }
-        return page
+        return (page, serif)
     }
 }
 
@@ -444,8 +467,24 @@ enum MathTemplate {
 
     """#
 
+    /// 正文字体的样式。serif：试卷字体（ExamFont）可用。写画过的旧笔记（.sans / .legacy）一直用原来的黑体。
+    /// 公式里的中文（\text{…}）KaTeX 自己不带字，跟着正文走
+    static func fontCSS(serif: Bool) -> String {
+        guard serif else { return "body{font-family:\(ExamFont.sansStack)}" }
+        return """
+        \(ExamFont.fontFaceCSS)
+        body{font-family:\(ExamFont.serifStack())}
+        body.sans,body.legacy{font-family:\(ExamFont.sansStack)}
+        body:not(.sans):not(.legacy) .katex .cjk_fallback{font-family:ExamSong,ExamSongAlt,"PingFang SC",sans-serif}
+        """
+    }
+
     /// 优先加载同目录下的本地 KaTeX；本地失败时依次尝试国内外 CDN 镜像。
-    static let html = #"""
+    static func html(serif: Bool) -> String {
+        template.replacingOccurrences(of: "/*FONTS*/", with: fontCSS(serif: serif))
+    }
+
+    private static let template = #"""
     <!doctype html>
     <html><head>
     <meta charset="utf-8">
@@ -454,7 +493,8 @@ enum MathTemplate {
     :root{color-scheme:light dark;--scale:1}
     html{font:-apple-system-body}
     html,body{margin:0;padding:0;background:transparent}
-    body{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Helvetica Neue",sans-serif;font-size:calc(1em * var(--scale));line-height:1.7;color:#1c1c1e;overflow-wrap:anywhere;-webkit-text-size-adjust:100%;-webkit-user-select:text;-webkit-touch-callout:default}
+    /*FONTS*/
+    body{font-size:calc(1em * var(--scale));line-height:1.7;color:#1c1c1e;overflow-wrap:anywhere;-webkit-text-size-adjust:100%;-webkit-user-select:text;-webkit-touch-callout:default}
     @media (prefers-color-scheme: dark){body{color:#f2f2f7}}
     body.red{color:#bd291f}
     @media (prefers-color-scheme: dark){body.red{color:#f5786b}}
@@ -602,15 +642,25 @@ enum MathTemplate {
 
     // 排好了告诉 App（去掉加载中的灰条）：没有公式的马上算好；有公式的等 KaTeX 和它的样式都载好，或者载不到了
     function ready() {
-      if (!GOT) return;
+      if (!GOT || !FONTS) return;
       if (!(FAILED || (READY && window.CSS_OK) || !/\$|\\[(\[]|\\begin\{/.test(SRC))) return;
       try { window.webkit.messageHandlers.ready.postMessage(1); } catch (e) {}
     }
 
+    // 这次排版用到的字体（正文的宋体、公式字体）都载好了。没载好之前字是空的，量出来的高度也不准：载好再告诉 App 排好了
+    var FONTS = false, DRAWN = 0;
     function draw() {
-      box.innerHTML = md(SRC); applyHL(); fit(); lastWidth = box.clientWidth; post(); ready();
-      // 字体（公式字体、中文字体）加载完宽度会变：再量一次，表格、公式按真正的宽度缩放
-      if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { fit(); post(); });
+      box.innerHTML = md(SRC); applyHL(); fit(); lastWidth = box.clientWidth; post();
+      var seq = ++DRAWN;
+      FONTS = false;
+      // 字体加载完宽度会变：再量一次，表格、公式按真正的宽度缩放
+      var loaded = function () {
+        if (seq !== DRAWN || FONTS) return;
+        FONTS = true; fit(); post(); ready();
+      };
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(loaded); else loaded();
+      // 字体一直载不到也不一直等
+      setTimeout(loaded, 1200);
     }
 
     function setContent(s, scale, tone, hl) {

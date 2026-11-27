@@ -87,25 +87,51 @@ extension AppStore {
     func findRelatedNote(_ setID: UUID, _ qID: UUID, wrong: Bool) {
         guard aiConsent == true, noteGuideTasks[qID] == nil, noteGuides[qID] == nil,
               let q = question(setID, qID) else { return }
-        // 每篇最多 8 节，一共最多 24 节：请求小，回得快
-        var sections: [Tutor.NoteSection] = []
-        for doc in notesNear(setID: setID).prefix(4) {
-            for block in doc.blocks where block.kind == .text && !block.text.isEmpty {
-                sections.append(Tutor.NoteSection(noteID: doc.id, blockID: block.id, text: block.text))
-            }
-        }
-        sections = Array(sections.prefix(24))
-        guard !sections.isEmpty, let client = try? makeClient(for: .check) else { return }
+        let sections = relatedSections(setID)
+        let fingerprint = Self.fingerprint(sections)
+        // 上次没找到、或者看过关掉了，笔记也没变：不再发一遍一样的请求
+        guard !sections.isEmpty, noteGuideChecked[qID] != fingerprint,
+              let client = try? makeClient(for: .check) else { return }
         let system = Tutor.relatedNoteSystem()
         let messages = [LLMMessage(role: .user, parts: [.text(Tutor.relatedNoteInstruction(question: q, sections: sections, wrong: wrong))])]
         noteGuideTasks[qID] = Task { [weak self] in
             let output = try? await client.complete(system: system, messages: messages, options: RequestOptions(fast: true))
             guard let self else { return }
             self.noteGuideTasks[qID] = nil
-            guard let output, let match = Tutor.parseRelatedNote(output, sections: sections) else { return }
+            guard let output else { return }   // 没连上：下次再试
+            guard let match = Tutor.parseRelatedNote(output, sections: sections) else {
+                self.noteGuideChecked[qID] = fingerprint
+                return
+            }
             self.noteGuides[qID] = NoteGuide(noteID: match.section.noteID, blockID: match.section.blockID,
                                              quote: match.quote, summary: match.summary, setID: setID, questionID: qID)
         }
+    }
+
+    /// 发给模型挑的小节：每篇最多 8 节，一共最多 24 节，请求小，回得快
+    func relatedSections(_ setID: UUID) -> [Tutor.NoteSection] {
+        var sections: [Tutor.NoteSection] = []
+        for doc in notesNear(setID: setID).prefix(4) {
+            for block in doc.blocks where block.kind == .text && !block.text.isEmpty {
+                sections.append(Tutor.NoteSection(noteID: doc.id, blockID: block.id, text: block.text))
+            }
+        }
+        return Array(sections.prefix(24))
+    }
+
+    private static func fingerprint(_ sections: [Tutor.NoteSection]) -> Int {
+        var hasher = Hasher()
+        for section in sections {
+            hasher.combine(section.blockID)
+            hasher.combine(section.text)
+        }
+        return hasher.finalize()
+    }
+
+    /// 关掉了引导：笔记没变之前，这道题不再自动找
+    func dismissNoteGuide(_ guide: NoteGuide) {
+        noteGuides[guide.questionID] = nil
+        noteGuideChecked[guide.questionID] = Self.fingerprint(relatedSections(guide.setID))
     }
 
     /// 去看笔记：打开那篇笔记，翻到那一块，临时荧光笔标出重点

@@ -158,18 +158,29 @@ enum Importer {
         return result
     }
 
-    /// 单页过长时按行切开
+    /// 单页过长时按行切开；一行本身就超长时（没有换行的大段文字）按字数硬切
     private static func splitLong(_ text: String, maxChars: Int) -> [String] {
         var parts: [String] = []
         var current = ""
-        for line in text.components(separatedBy: "\n") {
-            if current.count + line.count > maxChars && !current.isEmpty {
-                parts.append(current)
-                current = ""
-            }
-            current += line + "\n"
+        var currentCount = 0   // 记着字数：每行都数一遍 current 会越来越慢
+        func flush() {
+            if !current.isEmpty { parts.append(current) }
+            current = ""
+            currentCount = 0
         }
-        if !current.isEmpty { parts.append(current) }
+        for line in text.components(separatedBy: "\n") {
+            var rest = Substring(line)
+            while rest.count > maxChars {
+                flush()
+                parts.append(String(rest.prefix(maxChars)))
+                rest = rest.dropFirst(maxChars)
+            }
+            let count = rest.count
+            if currentCount + count > maxChars && !current.isEmpty { flush() }
+            current += rest + "\n"
+            currentCount += count + 1
+        }
+        flush()
         return parts
     }
 }

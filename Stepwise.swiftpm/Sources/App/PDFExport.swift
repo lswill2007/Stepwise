@@ -47,6 +47,8 @@ final class PDFExporter: ObservableObject {
                     next += 1
                 }
                 while let (k, text) = await group.next() {
+                    // 点了“取消导出”：不再发新的转写
+                    if Task.isCancelled { group.cancelAll(); break }
                     results[k] = text
                     done += 1
                     phase = String(localized: "AI 正在转写手写（\(done)/\(total)）…")
@@ -57,11 +59,13 @@ final class PDFExporter: ObservableObject {
                     }
                 }
             }
+            try Task.checkCancellation()
             doc.fillTranscripts(results)
         } else {
             doc.fillTranscripts([:])
         }
 
+        try Task.checkCancellation()
         phase = L("正在排版…")
         let html = doc.page()
         #if os(iOS)
@@ -104,7 +108,8 @@ final class PDFExporter: ObservableObject {
             guard let text = try? await reader.complete(
                 system: system,
                 messages: [LLMMessage(role: .user, parts: [.image(strip), .text(Tutor.pick("请转写。", "Transcribe it."))])],
-                options: RequestOptions(fast: true, transcribing: true)) else { return nil }
+                // 识图模型卡住（VPN 断了、代理不回）时最多等一分钟，不让导出一直停在这里
+                options: RequestOptions(fast: true, transcribing: true, responseTimeout: 60)) else { return nil }
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             return blank.contains(trimmed) ? "" : trimmed
         }
@@ -442,6 +447,10 @@ struct PDFDocumentBuilder {
         // 在 <script> 里：避免原文里的 </script> 提前结束脚本
         let safeJSON = sourcesJSON.replacingOccurrences(of: "</", with: "<\\/")
         let cjk = UILanguage.isTraditional ? "\"PingFang HK\",\"PingFang TC\",\"PingFang SC\"" : "\"PingFang SC\",\"PingFang TC\""
+        // 正文和 App 里一样用试卷字体（宋体 + Times New Roman）；字体没放进网页目录时照旧用系统字体
+        let serif = MathAssets.pageURL != nil && MathAssets.serif
+        let fontFaces = serif ? ExamFont.fontFaceCSS : ""
+        let family = serif ? ExamFont.serifStack(cjk: cjk) : "-apple-system,\"Helvetica Neue\",\(cjk),sans-serif"
         let katexBase = MathAssets.pageURL == nil ? "https://cdn.jsdelivr.net/npm/katex@\(KatexAssets.version)/dist/" : ""
         return """
         <!doctype html>
@@ -453,7 +462,8 @@ struct PDFDocumentBuilder {
         :root{color-scheme:light}
         *{-webkit-print-color-adjust:exact;print-color-adjust:exact;box-sizing:border-box}
         html,body{margin:0;padding:0;background:#fff}
-        body{font-family:-apple-system,"Helvetica Neue",\(cjk),sans-serif;font-size:10.5pt;line-height:1.7;color:#1d1d1f;
+        \(fontFaces)
+        body{font-family:\(family);font-size:10.5pt;line-height:1.7;color:#1d1d1f;
              overflow-wrap:anywhere;-webkit-text-size-adjust:100%;text-rendering:optimizeLegibility}
         .doc + .doc{break-before:page}
         .cover{padding-top:120px}
@@ -486,6 +496,7 @@ struct PDFDocumentBuilder {
         hr{border:none;border-top:.75px solid #c7c7cc;margin:.9em 0}
         blockquote{margin:0 0 .5em;padding:.1em 0 .1em .8em;border-left:2px solid #c7c7cc;color:#48484a}
         .katex{font-size:1.1em}
+        \(serif ? ".katex .cjk_fallback{font-family:ExamSong,ExamSongAlt,\(cjk),sans-serif}" : "")
         .katex-display{margin:.5em 0;padding:.1em 0;overflow:hidden;break-inside:avoid}
         .im{white-space:nowrap}
         .im.wrap{white-space:normal}
@@ -623,9 +634,12 @@ enum PDFRenderer {
         // 打印排版要在窗口里的网页上做；放在屏幕外，用户看不到
         let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
         window?.addSubview(web)
+        // 写出来给网页读的 export.html 里有整份导出的手写图片（常常几十 MB）：排完就删，不一直留在 App 的资料里
+        var tempFile: URL?
         defer {
             web.removeFromSuperview()
             config.userContentController.removeScriptMessageHandler(forName: "done")
+            if let tempFile { try? FileManager.default.removeItem(at: tempFile) }
         }
 
         if let page = MathAssets.pageURL {
@@ -634,6 +648,7 @@ enum PDFRenderer {
             let file = dir.appendingPathComponent("export.html")
             try Data(html.utf8).write(to: file, options: .atomic)
             web.loadFileURL(file, allowingReadAccessTo: dir)
+            tempFile = file
         } else {
             web.loadHTMLString(html, baseURL: URL(string: "https://stepwise.app/"))
         }

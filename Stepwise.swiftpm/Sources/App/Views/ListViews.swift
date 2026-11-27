@@ -30,6 +30,7 @@ struct SidebarView: View {
     @State private var deletingFolder: Folder?
     @State private var deletingNote: NoteDoc?
     @State private var deletingBoard: Whiteboard?
+    @State private var deletingSet: QuestionSet?
     /// 从笔记或题集的菜单里点了“导出 PDF”
     @State private var pdfRequest: PDFRequest?
 
@@ -167,6 +168,19 @@ struct SidebarView: View {
         } message: {
             Text("白板上的笔迹和便签都会删除，不能恢复。")
         }
+        // 题集以前点了“删除”马上就删：手写作答都在里面，删之前问一下
+        .confirmationDialog(
+            "删除题集“\(deletingSet?.title ?? "")”？",
+            isPresented: Binding(get: { deletingSet != nil }, set: { if !$0 { deletingSet = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("删除题集", role: .destructive) {
+                if let id = deletingSet?.id { store.deleteSet(id) }
+                deletingSet = nil
+            }
+        } message: {
+            Text("题目、手写作答和批改记录都会删除，不能恢复。")
+        }
     }
 
     private var isEmpty: Bool {
@@ -255,6 +269,7 @@ struct SidebarView: View {
     private var actions: SidebarActions {
         SidebarActions(edit: startEdit, deleteFolder: { deletingFolder = $0 },
                        deleteNote: { deletingNote = $0 }, deleteBoard: { deletingBoard = $0 },
+                       deleteSet: { deletingSet = $0 },
                        drop: drop,
                        exportPDF: { pdfRequest = $0 },
                        importInto: openImport)
@@ -328,6 +343,7 @@ struct SidebarActions {
     let deleteFolder: (Folder) -> Void
     let deleteNote: (NoteDoc) -> Void
     let deleteBoard: (Whiteboard) -> Void
+    let deleteSet: (QuestionSet) -> Void
     let drop: ([String], UUID?) -> Bool
     /// 把题集或笔记导出成 PDF
     let exportPDF: (SidebarView.PDFRequest) -> Void
@@ -634,7 +650,7 @@ struct SetRow: View {
         Button("重命名", systemImage: "pencil") { actions.edit(.renameSet(set.id)) }
         MoveMenu(excluding: nil, current: store.folder(set.folderID)?.id) { store.moveItem(set.id, to: $0) }
         Button("导出 PDF…", systemImage: "doc.richtext") { actions.exportPDF(.init(sets: [set.id])) }
-        Button("删除", systemImage: "trash", role: .destructive) { store.deleteSet(set.id) }
+        Button("删除", systemImage: "trash", role: .destructive) { actions.deleteSet(set) }
     }
 }
 

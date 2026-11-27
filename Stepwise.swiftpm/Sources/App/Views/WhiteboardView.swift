@@ -827,12 +827,12 @@ struct WhiteboardView: View {
             }
             .onChange(of: scenePhase) {
                 if scenePhase != .active {
-                    ink.saveAll()
+                    ink.saveAll(wait: scenePhase == .background)
                     savePosition()
                 }
             }
             .onDisappear {
-                ink.saveAll()
+                ink.saveAll(wait: false)
                 savePosition()
             }
         } else {
@@ -876,6 +876,8 @@ private struct BoardOverlay: View {
     let board: Whiteboard
     @ObservedObject var state: BoardState
     @ObservedObject var viewport: BoardViewport
+    /// 框选后操作条的大小：放的时候不超出看得见的白板
+    @State private var barSize = CGSize(width: 220, height: 44)
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -906,8 +908,11 @@ private struct BoardOverlay: View {
                     state.selection = nil
                 }
                 .fixedSize()
-                // 放在框住的地方上面；太靠上就放下面
-                .offset(x: max(8, rect.minX), y: rect.minY > 70 ? rect.minY - 56 : rect.maxY + 10)
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { barSize = $0 }
+                // 放在框住的地方上面；太靠上就放下面。框在右边、框得很高时也整条留在看得见的地方（下面让出工具条）
+                .offset(x: min(max(8, rect.minX), max(8, state.visibleSize.width - barSize.width - 8)),
+                        y: min(max(8, rect.minY > 70 ? rect.minY - 56 : rect.maxY + 10),
+                               max(8, state.visibleSize.height - barSize.height - 80)))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

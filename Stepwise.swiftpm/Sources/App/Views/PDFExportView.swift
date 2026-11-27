@@ -14,6 +14,7 @@ struct PDFExportView: View {
     @AppStorage("pdfTranscribe") private var transcribe = false
     @State private var result: URL?
     @State private var failure: String?
+    @State private var exportTask: Task<Void, Never>?
     /// 放在设置的导航里（没有自己的关闭按钮）还是单独弹出来
     let inSheet: Bool
 
@@ -36,8 +37,10 @@ struct PDFExportView: View {
         .toolbar {
             if inSheet {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(result == nil ? L("取消") : L("完成")) { dismiss() }
-                        .disabled(exporter.phase != nil)
+                    // 导出中：先停下导出（转写的请求一起取消），不用等到它做完
+                    Button(exporter.phase != nil ? L("取消导出") : result == nil ? L("取消") : L("完成")) {
+                        if exporter.phase != nil { exportTask?.cancel() } else { dismiss() }
+                    }
                 }
             }
             if let result {
@@ -54,6 +57,8 @@ struct PDFExportView: View {
             Text(failure ?? "")
         }
         .interactiveDismissDisabled(exporter.phase != nil)
+        // 从设置里返回、关掉页面：导出和转写请求一起停下
+        .onDisappear { exportTask?.cancel() }
     }
 
     // MARK: 选择
@@ -171,12 +176,15 @@ struct PDFExportView: View {
         let notes = store.notes.filter { selectedNotes.contains($0.id) }
         let sets = store.questionSets.filter { selectedSets.contains($0.id) }
         let options = PDFExportOptions(answers: answers, myWork: myWork, feedback: feedback, transcribe: transcribe && canTranscribe)
-        Task {
+        exportTask = Task {
             do {
                 result = try await exporter.export(sets: sets, notes: notes, store: store, options: options)
+            } catch is CancellationError {
+                // 自己取消的：回到选择页，不提示出错
             } catch {
-                failure = error.localizedDescription
+                if !Task.isCancelled { failure = error.localizedDescription }
             }
+            exportTask = nil
         }
     }
 

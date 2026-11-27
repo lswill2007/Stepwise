@@ -14,8 +14,6 @@ struct ImportView: View {
     @State private var readingID: UUID?
     @State private var pastedText = ""
     @State private var pdfAsImages = false
-    /// 程序根据自动判断结果同步开关时，不要触发重新渲染
-    @State private var syncingToggle = false
     @State private var requirement = ""
     @State private var title = ""
     /// 放到哪个文件夹；默认是当前打开的题集所在的文件夹
@@ -84,8 +82,9 @@ struct ImportView: View {
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                             }
-                            .onChange(of: pdfAsImages) {
-                                if syncingToggle { syncingToggle = false } else { reloadPDF() }
+                            // 和读好的不一样（用户拨了开关）才重读；读好以后开关跟着读到的走，不会来回重读
+                            .onChange(of: pdfAsImages) { _, want in
+                                if want != !(self.material?.images.isEmpty ?? true) { reloadPDF() }
                             }
                         }
                     }
@@ -219,18 +218,17 @@ struct ImportView: View {
         }
         readMaterial { try Importer.load(url: url) } then: { loaded in
             material = loaded
-            let detected = !loaded.images.isEmpty && loaded.pdfData != nil
-            if detected != pdfAsImages {
-                syncingToggle = true
-                pdfAsImages = detected
-            }
+            pdfAsImages = !loaded.images.isEmpty && loaded.pdfData != nil
         }
     }
 
     private func reloadPDF() {
         guard let m = material, let data = m.pdfData else { return }
         let mode: Importer.PDFMode = pdfAsImages ? .images : .text
-        readMaterial { try Importer.loadPDF(data: data, name: m.name, mode: mode) } then: { material = $0 }
+        readMaterial { try Importer.loadPDF(data: data, name: m.name, mode: mode) } then: { loaded in
+            material = loaded
+            pdfAsImages = !loaded.images.isEmpty
+        }
     }
 
     /// 在后台读材料，读好了回到主线程；后读的覆盖先读的，先读的晚到了就不要

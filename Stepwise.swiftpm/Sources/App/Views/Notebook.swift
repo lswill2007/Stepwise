@@ -19,10 +19,11 @@ final class NotebookInk: ObservableObject {
         return model
     }
 
-    /// 退到后台时用：等笔迹都写好再返回
-    func saveAll() {
-        models.values.forEach { $0.saveNow() }
-        DrawingStore.flush()
+    /// 存改过的笔迹。退到后台时 wait 为 true：等都写好再返回（之后可能被系统结束）；
+    /// 离开页面、拉下控制中心时不用等：之后的读、写都排在同一条队列上，顺序不会乱，主线程不用卡着等编码写盘
+    func saveAll(wait: Bool) {
+        models.values.forEach { $0.saveIfChanged() }
+        if wait { DrawingStore.flush() }
     }
 
     /// 已经建好的笔迹模型（没打开过的不新建）
@@ -201,12 +202,12 @@ struct NotebookView: View {
         }
         .onChange(of: scenePhase) {
             if scenePhase != .active {
-                ink.saveAll()
+                ink.saveAll(wait: scenePhase == .background)
                 savePosition()
             }
         }
         .onDisappear {
-            ink.saveAll()
+            ink.saveAll(wait: false)
             savePosition()
         }
     }
@@ -531,7 +532,7 @@ struct QuestionBlock: View {
                     .padding(10)
                     .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                 if draft.contains("$") || draft.contains("\\(") {
-                    RichText(draft, scale: 0.95)
+                    RichText(draft, scale: 0.95, remember: false)
                         .padding(8)
                         .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
                 }
@@ -1371,7 +1372,7 @@ struct PendingNote: View {
                 Spacer(minLength: 0)
             }
             if !shown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                RichText(shown, scale: 0.92)
+                RichText(shown, scale: 0.92, remember: false)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1538,7 +1539,7 @@ struct NoteGuideBanner: View {
             Button("去看笔记 →") { store.openNoteGuide(guide) }
                 .buttonStyle(InkTextButtonStyle(color: Ink.blue))
             Button {
-                store.noteGuides[guide.questionID] = nil
+                store.dismissNoteGuide(guide)
             } label: {
                 Image(systemName: "xmark").font(.caption.weight(.semibold))
             }

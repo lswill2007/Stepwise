@@ -710,19 +710,25 @@ enum Tutor {
         blocks(name, in: text).first?.body.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// 属性值：模型多半写 "3"，有时写 '3'、“3”，或者干脆不加引号；都认，不然整道题被悄悄丢掉
+    private static let attributeValue = #"(?:"[^"]*"|'[^']*'|“[^”]*”|[^\s>"'“”]+)"#
+    private static let attributeRegex = try? NSRegularExpression(
+        pattern: #"([a-zA-Z_]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|“([^”]*)”|([^\s>"'“”]+))"#)
+
     /// 所有 <name attr="…">…</name> 块
     static func blocks(_ name: String, in text: String) -> [TagBlock] {
-        let pattern = "<\(name)((?:\\s+[a-zA-Z_]+\\s*=\\s*\"[^\"]*\")*)\\s*>([\\s\\S]*?)</\(name)>"
+        let pattern = "<\(name)((?:\\s+[a-zA-Z_]+\\s*=\\s*\(attributeValue))*)\\s*>([\\s\\S]*?)</\(name)>"
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let ns = text as NSString
         return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap { match in
             guard let range = Range(match.range, in: text) else { return nil }
             var attributes: [String: String] = [:]
             let attrText = ns.substring(with: match.range(at: 1))
-            if let attrRegex = try? NSRegularExpression(pattern: "([a-zA-Z_]+)\\s*=\\s*\"([^\"]*)\"") {
+            if let attrRegex = attributeRegex {
                 let attrNS = attrText as NSString
                 for m in attrRegex.matches(in: attrText, range: NSRange(location: 0, length: attrNS.length)) {
-                    attributes[attrNS.substring(with: m.range(at: 1))] = attrNS.substring(with: m.range(at: 2))
+                    guard let value = (2...5).lazy.map({ m.range(at: $0) }).first(where: { $0.location != NSNotFound }) else { continue }
+                    attributes[attrNS.substring(with: m.range(at: 1))] = attrNS.substring(with: value)
                 }
             }
             return TagBlock(attributes: attributes, body: unescapeEntities(ns.substring(with: match.range(at: 2))), range: range)

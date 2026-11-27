@@ -457,7 +457,12 @@ struct LLMClient {
         case .openAI:
             guard let choice = (json["choices"] as? [[String: Any]])?.first else { return nil }
             var text = (choice["delta"] as? [String: Any])?["content"] as? String ?? ""
-            if choice["finish_reason"] as? String == "length" { text += L("\n\n（回答因长度限制被截断）") }
+            switch choice["finish_reason"] as? String {
+            case "length": text += L("\n\n（回答因长度限制被截断）")
+            // 被服务商的内容审核拦下：以前什么也不说，看起来像回答到一半就停了
+            case "content_filter": text += L("\n\n（模型拒绝回答这个请求，可以换个说法或换个模型试试）")
+            default: break
+            }
             return text
 
         case .anthropic:
@@ -476,9 +481,20 @@ struct LLMClient {
             }
 
         case .gemini:
+            // 整个请求被拦下（没有 candidates）：说清楚，不只显示“模型没有返回内容”
+            if let reason = (json["promptFeedback"] as? [String: Any])?["blockReason"] as? String {
+                throw LLMError(message: String(localized: "模型拒绝处理这个请求（\(reason)），可以换个说法或换个模型试试。"))
+            }
             guard let candidate = (json["candidates"] as? [[String: Any]])?.first else { return nil }
             let parts = (candidate["content"] as? [String: Any])?["parts"] as? [[String: Any]] ?? []
-            return parts.filter { ($0["thought"] as? Bool) != true }.compactMap { $0["text"] as? String }.joined()
+            var text = parts.filter { ($0["thought"] as? Bool) != true }.compactMap { $0["text"] as? String }.joined()
+            switch candidate["finishReason"] as? String {
+            case "MAX_TOKENS": text += L("\n\n（回答因长度限制被截断）")
+            case "SAFETY", "RECITATION", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII":
+                text += L("\n\n（模型拒绝回答这个请求，可以换个说法或换个模型试试）")
+            default: break
+            }
+            return text
         }
     }
 

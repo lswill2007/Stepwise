@@ -277,9 +277,16 @@ struct NoteDoc: Codable, Identifiable, Equatable {
     /// 块变高、插入、挪动时，空白处的笔迹跟着块挪（旧数据没有）
     var pageInkAnchors: [String: [Double]]?
 
+    /// 正文字体。新笔记是试卷字体（宋体 + Times New Roman）；旧笔记没有，按原来的黑体排。
+    /// 写画过的笔记字体不能换：换了字每行排的字数就变了，涂鸦、圈出来问的位置会和文字对不上
+    var bodyFont: String?
+
     static let legacyPaperWidth: Double = 460
     static let currentPaperWidth: Double = 540
+    static let currentBodyFont = "song"
     var paper: Double { paperWidth ?? Self.legacyPaperWidth }
+    /// 这篇笔记的文字按哪种样子排
+    var textTone: RichTone { paperWidth == nil ? .legacy : (bodyFont == nil ? .sans : .normal) }
 }
 
 /// 笔记页边的一条批注：用笔圈住一段，问一句，AI 的回答像小字写在页边
