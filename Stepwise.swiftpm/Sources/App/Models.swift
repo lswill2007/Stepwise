@@ -111,8 +111,19 @@ struct Question: Codable, Identifiable, Equatable {
     var originNote: String?
     /// 没有参考答案的题，由 AI 在后台预先求解的答案（学生看不到）。批改时只需对答案，更快更准
     var aiAnswer: String?
+    /// 和相邻几道题共用的题干（材料、已知条件、图表说明）：共用的部分放在这里，content 只是这一题（这一小问）自己的内容
+    var stem: String?
+    /// 共用同一段题干的几道题，这个值相同
+    var stemGroup: UUID?
+    /// 学生在“有疑问”里补充的、题目原文没有写出的数据或条件；批改、提示、答案都当作已知条件
+    var supplements: [String]?
 
     var isStarred: Bool { starredAt != nil }
+    /// 题目全文：共用题干连同这一题自己的内容
+    var fullText: String {
+        guard let stem, !stem.isEmpty else { return content }
+        return stem + "\n\n" + content
+    }
 }
 
 /// 左侧资料库的分级文件夹：文件夹里可以放笔记、白板、题集，也可以再放文件夹

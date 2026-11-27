@@ -826,3 +826,15 @@
 "题目、手写作答和批改记录都会删除，不能恢复。" = "The questions, handwritten answers and feedback will be deleted. This can’t be undone.";
 "取消导出" = "Cancel Export";
 "模型拒绝处理这个请求（%@），可以换个说法或换个模型试试。" = "The model refused to process this request (%@). Try rephrasing it or switching to another model.";
+
+/* 共用题干、补充条件 */
+"共用题干" = "Shared stem";
+"共用题干（同上一题）" = "Shared stem (same as the previous question)";
+"收起题干" = "Collapse the stem";
+"展开题干" = "Expand the stem";
+"补充的条件" = "Added information";
+"删掉这条补充的条件" = "Remove this added information";
+"题目里没写出来的数据或条件（比如图上的数值、漏掉的已知条件）也可以写在这里：AI 会当作已知条件，记在题目下面，之后批改都按它来。" = "You can also add data or conditions the question leaves out (such as values from a figure or missing given information): the AI treats them as given, lists them under the question, and uses them in every later check.";
+"和相邻几道题共用的题干：在这里改，共用它的几道题一起改。清空就只把这道题的共用题干去掉。" = "The stem shared with the neighboring questions: edits here apply to all questions that share it. Clear it to remove the shared stem from this question only.";
+"：" = ": ";
+"；" = "; ";

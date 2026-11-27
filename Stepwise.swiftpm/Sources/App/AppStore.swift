@@ -1002,6 +1002,45 @@ final class AppStore: ObservableObject {
         sets[si].questions[qi] = q
     }
 
+    /// 和这道题共用题干的其他题（按题集里的顺序，不含它自己）
+    func stemSiblings(_ setID: UUID, _ qID: UUID) -> [Question] {
+        guard let questions = set(setID)?.questions,
+              let group = questions.first(where: { $0.id == qID })?.stemGroup else { return [] }
+        return questions.filter { $0.stemGroup == group && $0.id != qID }
+    }
+
+    /// 学生在“有疑问”里补充了题目原文没有的数据或条件：记在这道题上；共用题干的几道题一起记
+    /// （缺的多半是题干、图上的数据，每一问都用得着）。预先求解的答案是缺着条件解的，作废重解
+    func addSupplements(_ setID: UUID, _ qID: UUID, _ items: [String]) {
+        let items = items.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard !items.isEmpty else { return }
+        let ids = [qID] + stemSiblings(setID, qID).map(\.id)
+        for id in ids {
+            mutate(setID, id) { q in
+                var all = q.supplements ?? []
+                for item in items where !all.contains(item) { all.append(item) }
+                guard all != (q.supplements ?? []) else { return }
+                q.supplements = all
+                q.aiAnswer = nil
+            }
+        }
+        presolve(setID, ids)
+    }
+
+    /// 删掉一条补充的条件（共用题干的几道题一起删）
+    func removeSupplement(_ setID: UUID, _ qID: UUID, _ item: String) {
+        let ids = [qID] + stemSiblings(setID, qID).map(\.id)
+        for id in ids {
+            mutate(setID, id) { q in
+                guard let all = q.supplements, all.contains(item) else { return }
+                let rest = all.filter { $0 != item }
+                q.supplements = rest.isEmpty ? nil : rest
+                q.aiAnswer = nil
+            }
+        }
+        presolve(setID, ids)
+    }
+
     func addSet(_ newSet: QuestionSet) {
         sets.insert(newSet, at: 0)
         selectedSetID = newSet.id
@@ -1102,7 +1141,8 @@ final class AppStore: ObservableObject {
         let jobs: [(UUID, String, [LLMMessage])] = todo.compactMap { id in
             guard let q = question(setID, id) else { return nil }
             let images = q.imageIDs.compactMap(ImageStore.load).map(LLMContent.image)
-            return (id, Tutor.presolveSystem(for: q), [LLMMessage(role: .user, parts: images + [.text(Tutor.presolveInstruction)])])
+            return (id, Tutor.presolveSystem(for: q, siblings: stemSiblings(setID, id)),
+                    [LLMMessage(role: .user, parts: images + [.text(Tutor.presolveInstruction)])])
         }
         Task { [weak self] in
             for start in stride(from: 0, to: jobs.count, by: 2) {
@@ -1284,11 +1324,14 @@ final class AppStore: ObservableObject {
         message.about = follow
         run(setID, qID, userMessage: message, replyKind: .chat, purpose: .chat, inMargin: true,
             waitingLabel: L("正在想你问的…")) { [weak self] full in
+            // 疑问里补充了题目没有的数据：AI 用 <given> 记下来，存到题目上，之后批改都按它来
+            let (text, given) = Tutor.extractGiven(full)
             self?.mutate(setID, qID) { q in
-                var answer = ChatMessage(role: .assistant, kind: .chat, text: full)
+                var answer = ChatMessage(role: .assistant, kind: .chat, text: text, prompt: given.isEmpty ? nil : full)
                 answer.about = follow
                 q.messages.append(answer)
             }
+            self?.addSupplements(setID, qID, given)
         }
     }
 
@@ -1356,7 +1399,8 @@ final class AppStore: ObservableObject {
         mutate(setID, qID) { $0.messages.append(userMessage) }
         guard let q = question(setID, qID) else { return }
 
-        let system = Tutor.tutorSystem(for: q, origin: q.originNote ?? legacyOrigin(of: q, in: setID))
+        let system = Tutor.tutorSystem(for: q, origin: q.originNote ?? legacyOrigin(of: q, in: setID),
+                                       siblings: stemSiblings(setID, qID))
         func makeHistory(_ q: Question, _ current: ChatMessage) -> [LLMMessage] {
             var history = Self.context(for: q, current: current, purpose: purpose)
             // 之前的回复也在上下文里，模型容易照着它们的开头和用字写（“同学你好！”、繁体题用简体回答），在这次的请求最后再提醒一次
@@ -1592,6 +1636,7 @@ final class AppStore: ObservableObject {
 
         var questions: [Question] = []
         var keys: [String] = []          // 与 questions 一一对应的题号，用于合并重叠页产生的重复题
+        var stemGroups: [String: UUID] = [:]   // “第几部分:题干编号” → 共用这段题干的那一组
         var suggestedTitle: String?
         var failedParts: [Int] = []
         var firstError: Error?
@@ -1613,16 +1658,33 @@ final class AppStore: ObservableObject {
             // 回答写到长度上限被截断：最后一道写了一半被丢掉，告诉用户这一部分可能漏了题
             if parsed.truncated { failedParts.append(index + 1) }
 
+            // 重叠页里重复的题已经分过组：这一部分里同一段题干的其他题跟着进同一组
+            for item in parsed.items {
+                guard let id = item.stemID, let existing = keys.firstIndex(of: Tutor.labelKey(item.label)),
+                      let group = questions[existing].stemGroup else { continue }
+                stemGroups["\(index):\(id)"] = group
+            }
             for item in parsed.items {
                 let key = Tutor.labelKey(item.label)
+                let groupKey = item.stem == nil ? nil : item.stemID.map { "\(index):\($0)" }
                 if let existing = keys.firstIndex(of: key) {
+                    // 先拆到的那份没认出共用题干，这一份认出来了
+                    if let stem = item.stem, let groupKey, questions[existing].stem == nil {
+                        let group = stemGroups[groupKey] ?? UUID()
+                        stemGroups[groupKey] = group
+                        questions[existing].stem = stem
+                        questions[existing].stemGroup = group
+                        questions[existing].content = item.content
+                    }
                     // 重叠页里的同一道题：补上缺失的答案，题干取更完整的那份
                     if questions[existing].referenceAnswer == nil, let answer = item.answer {
                         questions[existing].referenceAnswer = answer
                     } else if let answer = item.answer, answer.count > (questions[existing].referenceAnswer?.count ?? 0) {
                         questions[existing].referenceAnswer = answer
                     }
-                    if item.content.count > questions[existing].content.count {
+                    // 题干取更完整的那份（一份带共用题干、一份不带时不比：不带的那份把题干也写进了内容，本来就长）
+                    if (item.stem == nil) == (questions[existing].stem == nil),
+                       item.content.count > questions[existing].content.count {
                         questions[existing].content = item.content
                     }
                     // 先拆到的那份没认出图，这一份认出来了
@@ -1632,8 +1694,15 @@ final class AppStore: ObservableObject {
                     continue
                 }
                 let imageIDs = await Self.figureImages(for: item, in: chunk.images).map(ImageStore.save)
-                questions.append(Question(label: item.label, content: item.content,
-                                          referenceAnswer: item.answer, imageIDs: imageIDs))
+                var question = Question(label: item.label, content: item.content,
+                                        referenceAnswer: item.answer, imageIDs: imageIDs)
+                if let stem = item.stem, let groupKey {
+                    let group = stemGroups[groupKey] ?? UUID()
+                    stemGroups[groupKey] = group
+                    question.stem = stem
+                    question.stemGroup = group
+                }
+                questions.append(question)
                 keys.append(key)
             }
         }

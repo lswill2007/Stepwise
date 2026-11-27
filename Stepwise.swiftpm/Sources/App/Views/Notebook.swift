@@ -323,9 +323,17 @@ struct QuestionBlock: View {
         if let q = store.question(setID, qID) {
             VStack(alignment: .leading, spacing: 14) {
                 header(q)
+                // 几道题共用的题干：排在这一问上面；上一题就是同一段题干时先收起，点一下展开
+                if let stem = q.stem, !stem.isEmpty {
+                    SharedStemView(stem: stem, repeated: stemRepeats(q))
+                }
                 RichText(q.content, scale: 1.08)
                 ForEach(q.imageIDs, id: \.self) { id in
                     StoredImage(id: id, maxHeight: 420)
+                }
+                // 在“有疑问”里补充的、题目原文没有的条件：一直列在题目下面，批改都按它来
+                if let given = q.supplements, !given.isEmpty {
+                    SupplementList(items: given) { store.removeSupplement(setID, qID, $0) }
                 }
                 if mistakeMode { reviewLine(q) }
 
@@ -545,6 +553,13 @@ struct QuestionBlock: View {
         .onChange(of: typing) {
             if !typing && draft.isEmpty { showTyping = false }
         }
+    }
+
+    /// 上一道题用的也是这段题干（收藏里的题不挨着，不算）
+    private func stemRepeats(_ q: Question) -> Bool {
+        guard !mistakeMode, let group = q.stemGroup, let questions = store.set(setID)?.questions,
+              let index = questions.firstIndex(where: { $0.id == qID }), index > 0 else { return false }
+        return questions[index - 1].stemGroup == group
     }
 
     /// 打字框默认隐藏（手写作答）；设置里打开了“键盘作答”、点了“键盘”、或者以前打过字（不会丢）时显示
@@ -1572,6 +1587,73 @@ final class ActivityClock {
 
 // MARK: - 追问一条回复
 
+/// 几道题共用的题干。一组里的第一道题整段显示；后面的题默认收起（题干就在上一题上面），点一下展开
+struct SharedStemView: View {
+    let stem: String
+    /// 上一道题用的也是这段题干
+    let repeated: Bool
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if repeated {
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() }
+                } label: {
+                    HStack(spacing: 6) {
+                        title(L("共用题干（同上一题）"))
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint(expanded ? L("收起题干") : L("展开题干"))
+            } else {
+                title(L("共用题干"))
+            }
+            if !repeated || expanded {
+                RichText(stem, scale: 1.08)
+            }
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func title(_ text: String) -> some View {
+        Label(text, systemImage: "text.quote").font(.caption.weight(.semibold))
+    }
+}
+
+/// 学生在“有疑问”里补充的题目条件：列在题目下面，可以删
+struct SupplementList: View {
+    let items: [String]
+    let remove: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(L("补充的条件"), systemImage: "plus.bubble")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(items, id: \.self) { item in
+                HStack(alignment: .top, spacing: 8) {
+                    RichText(item, scale: 0.95)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button { remove(item) } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(L("删掉这条补充的条件"))
+                }
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
 /// AI 回复下面的两个小按钮：有疑问（直接写下哪里不明白）、没学过（换成学过的方法重讲）
 struct ReplyFollowUpButtons: View {
     @EnvironmentObject var store: AppStore
@@ -1607,7 +1689,8 @@ struct ReplyFollowUpButtons: View {
         switch kind {
         case .doubt:
             FollowUpPopover(title: L("对这条回复有疑问"), prompt: L("哪里不明白？例如：这一步为什么要两边平方"),
-                            footnote: nil, text: $text, button: L("发送"), allowsEmpty: false) {
+                            footnote: L("题目里没写出来的数据或条件（比如图上的数值、漏掉的已知条件）也可以写在这里：AI 会当作已知条件，记在题目下面，之后批改都按它来。"),
+                            text: $text, button: L("发送"), allowsEmpty: false) {
                 store.askAboutReply(setID, qID, about: reply, text: text)
                 asking = nil
             }

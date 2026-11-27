@@ -142,10 +142,28 @@ struct EditQuestionView: View {
 
     @State private var content = ""
     @State private var answer = ""
+    /// 共用题干（这道题有共用题干时才能改；改了，共用它的几道题一起改）
+    @State private var stem = ""
+    @State private var hadStem = false
 
     var body: some View {
         NavigationStack {
             Form {
+                if hadStem {
+                    Section {
+                        TextEditor(text: $stem)
+                            .font(.body.monospaced())
+                            .frame(minHeight: 120)
+                            .autocorrectionDisabled()
+                            #if os(iOS)
+                            .textInputAutocapitalization(.never)
+                            #endif
+                    } header: {
+                        Text("共用题干")
+                    } footer: {
+                        Text("和相邻几道题共用的题干：在这里改，共用它的几道题一起改。清空就只把这道题的共用题干去掉。")
+                    }
+                }
                 Section {
                     TextEditor(text: $content)
                         .font(.body.monospaced())
@@ -160,6 +178,9 @@ struct EditQuestionView: View {
                     Text("公式用 LaTeX：行内 $...$，单独一行 $$...$$。选择题的选项每个单独一行，例如 A. $x>0$")
                 }
                 Section("预览") {
+                    if hadStem, !stem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        RichText(stem, scale: 1.05)
+                    }
                     RichText(content, scale: 1.05)
                 }
                 Section {
@@ -186,11 +207,28 @@ struct EditQuestionView: View {
                     Button("保存") {
                         let newContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
                         let newAnswer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let newStem = stem.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let siblings = store.stemSiblings(setID, qID).map(\.id)
+                        var stemChanged = false
                         store.mutate(setID, qID) { q in
+                            stemChanged = hadStem && (q.stem ?? "") != newStem
                             // 题目改了，之前预先求解的答案就不能用了
-                            if q.content != newContent { q.aiAnswer = nil }
+                            if q.content != newContent || stemChanged { q.aiAnswer = nil }
                             q.content = newContent
                             q.referenceAnswer = newAnswer.isEmpty ? nil : newAnswer
+                            if hadStem {
+                                q.stem = newStem.isEmpty ? nil : newStem
+                                if newStem.isEmpty { q.stemGroup = nil }
+                            }
+                        }
+                        // 共用题干改了：共用它的几道题一起改
+                        if stemChanged, !newStem.isEmpty {
+                            for id in siblings {
+                                store.mutate(setID, id) { q in
+                                    q.stem = newStem
+                                    q.aiAnswer = nil
+                                }
+                            }
                         }
                         dismiss()
                     }
@@ -201,6 +239,8 @@ struct EditQuestionView: View {
                 if let q = store.question(setID, qID) {
                     content = q.content
                     answer = q.referenceAnswer ?? ""
+                    stem = q.stem ?? ""
+                    hadStem = q.stem?.isEmpty == false
                 }
             }
         }

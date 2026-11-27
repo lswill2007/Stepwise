@@ -26,6 +26,7 @@ enum Tutor {
         2. 题号 label 使用原文的题号（如 1、二(3)），原文没有题号就按顺序编号。
         3. 如果原文附带该题的答案或解析，放进 <answer>，没有就省略 <answer>。答案部分本身不要当成题目。
         4. 默认一道大题和它的所有小问作为一道题；如果“拆分要求”另有说明，以拆分要求为准。
+        4a. 【共用题干】几道题连在一起、共用同一段题干时——原文写着“根据以下材料回答第 5–7 题”“第 3、4 题共用题干”这类说明，或者后一题要用前一题题干里的条件、数据、图表才能做，或者按拆分要求把一道大题的各个小问分开成几道题——共用的那段题干只写一次，放进 <stem id="S1">…</stem>（和 <question> 并列，写在这几道题前面；第二组用 S2，依此类推），这几道题都加上 stem="S1"，各自的 <content> 里只写这一题（这一小问）自己的内容，不要重复题干。共用题干不能丢，也不能只放进第一道题里。共用题干带图时，这几道题每一道都要标出图。不共用题干的题不要写 stem。
         5. 忽略页眉页脚、页码、试卷说明等不属于题目的内容。
         6. 题中所有公式都转写成标准 LaTeX（行内 $...$，独立成行 $$...$$，化学式 $\\ce{...}$），保证和原题完全一致。
         7. 题目中的图形无法照录时，用一句话描述它在题中的作用，如“（见图：直角三角形 $ABC$，$\\angle C=90^\\circ$）”。
@@ -60,6 +61,18 @@ enum Tutor {
         <question label="2"\(hasImages ? " page=\"1\"" : "")>
         ……
         </question>
+        （只有几道题共用题干时才这样写：）
+        <stem id="S1">
+        这几道题共用的题干
+        </stem>
+        <question label="3(1)" stem="S1"\(hasImages ? " page=\"1\"" : "")>
+        <content>
+        这一小问自己的内容
+        </content>
+        </question>
+        <question label="3(2)" stem="S1"\(hasImages ? " page=\"1\"" : "")>
+        ……
+        </question>
         """
         return s
     }
@@ -68,6 +81,9 @@ enum Tutor {
         var label: String
         var content: String
         var answer: String?
+        /// 和相邻几道题共用的题干；stemID 是模型给这段题干起的编号（只在这一次输出里有意义）
+        var stem: String?
+        var stemID: String?
         var page: Int?
         var hasFigure = false
         /// 图形在页面上的大致位置；只写了 figure="1" 时为空，附上整页
@@ -87,21 +103,38 @@ enum Tutor {
 
     static func parseSplit(_ text: String) throws -> (title: String?, items: [SplitItem]) {
         let title = tag("title", in: text)
+        // 几道题共用的题干：<stem id="S1">…</stem> 写在题目外面，题目用 stem="S1" 指过来
+        var stems: [String: String] = [:]
+        for block in blocks("stem", in: text) {
+            let body = block.body.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let id = block.attributes["id"], !id.isEmpty, !body.isEmpty { stems[id] = body }
+        }
         var items: [SplitItem] = []
         for (index, block) in blocks("question", in: text).enumerated() {
+            let hasContentTag = tag("content", in: block.body) != nil
             var content = (tag("content", in: block.body) ?? block.body).trimmingCharacters(in: .whitespacesAndNewlines)
             // 模型有时把选项放在 <content> 外面（比如自己加一个 <options> 标签），拼回题干，不能丢
-            if tag("content", in: block.body) != nil {
-                let extra = textOutsideTags(["content", "answer"], in: block.body)
+            if hasContentTag {
+                let extra = textOutsideTags(["content", "answer", "stem"], in: block.body)
                 if !extra.isEmpty { content += "\n" + extra }
             }
             guard !content.isEmpty else { continue }
             let label = displayLabel(block.attributes["label"].flatMap { $0.isEmpty ? nil : $0 } ?? "\(index + 1)")
             let answer = tag("answer", in: block.body).flatMap { $0.isEmpty ? nil : $0 }
             let figure = FigureCrop.parse(block.attributes["figure"])
-            items.append(SplitItem(label: label, content: stripLeadingLabel(content, label: label), answer: answer,
-                                   page: block.attributes["page"].flatMap { Int($0.filter(\.isNumber)) },
-                                   hasFigure: figure.hasFigure, figures: figure.boxes))
+            var item = SplitItem(label: label, content: stripLeadingLabel(content, label: label), answer: answer,
+                                 page: block.attributes["page"].flatMap { Int($0.filter(\.isNumber)) },
+                                 hasFigure: figure.hasFigure, figures: figure.boxes)
+            // 共用题干：按编号去找；模型把题干直接写在题目里面（<stem>…</stem>）也认
+            if let id = block.attributes["stem"], let stem = stems[id] {
+                item.stem = stem
+                item.stemID = id
+            } else if hasContentTag, let inline = tag("stem", in: block.body)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !inline.isEmpty {
+                item.stem = inline
+                item.stemID = "inline:" + inline
+            }
+            items.append(item)
         }
         if !items.isEmpty { return (title, items) }
         if text.contains("<title") && !text.contains("<question") { return (title, []) }
@@ -124,8 +157,43 @@ enum Tutor {
 
     // MARK: - 辅导
 
+    /// 发给 AI 的题目全文：共用题干、这一题自己的内容、同一题干下的其他题、学生补充的条件。
+    /// siblings：和这道题共用题干的其他题（按题集里的顺序）
+    static func problemStatement(for q: Question, siblings: [Question] = []) -> String {
+        let english = AILanguage.isEnglish
+        var s: String
+        if let stem = q.stem, !stem.isEmpty {
+            s = english
+                ? "[Shared stem] (this question and the neighboring ones share the stem below; it is part of this question's given information)\n"
+                : "【共用题干】（这道题和相邻的几道题共用下面这段题干，是本题已知条件的一部分）\n"
+            s += stem + "\n\n"
+            s += english
+                ? "[This question: \(q.label)] (tutor and grade this part only; the student only needs to answer this part here)\n"
+                : "【本题：第 \(q.label) 题】（只辅导、只批改这一问；学生在这里只需要回答这一问）\n"
+            s += q.content
+            if !siblings.isEmpty {
+                s += english
+                    ? "\n\n[Other questions under the same stem] (only so you know how the parts relate, e.g. \"using the result of (a)\". Do not grade them, do not ask the student to answer them here, and do not give away their answers.)"
+                    : "\n\n【同一题干下的其他题】（只用来了解前后关系，比如“由(1)可知”。不要批改它们，不要要求学生在这里回答它们，也不要泄露它们的答案）"
+                for other in siblings {
+                    s += (english ? "\nQuestion \(other.label): " : "\n第 \(other.label) 题：") + clip(other.content, 400)
+                }
+            }
+        } else {
+            s = (english ? "[Question] " : "【题目】") + q.label + "\n" + q.content
+        }
+        let given = (q.supplements ?? []).filter { !$0.isEmpty }
+        if !given.isEmpty {
+            s += english
+                ? "\n\n[Information added by the student] (data or conditions the question text above leaves out; the student supplied them from the original paper. Treat them as given, and do not say the question doesn't provide them.)"
+                : "\n\n【学生补充的题目信息】（上面的题目原文没有写全，学生对照原卷补上的数据或条件。当作本题的已知条件，不要再说题目没有给出）"
+            for item in given { s += "\n- " + item }
+        }
+        return s
+    }
+
     /// origin：这道题是 AI 出的新题时，原题的内容和作答记录
-    static func tutorSystemZH(for q: Question, origin: String? = nil) -> String {
+    static func tutorSystemZH(for q: Question, origin: String? = nil, siblings: [Question] = []) -> String {
         var answerSection: String
         if let ref = q.referenceAnswer, !ref.isEmpty {
             answerSection = "【参考答案】（只供你判断对错，学生看不到。在学生请求完整答案之前不要泄露）\n\(ref)"
@@ -145,8 +213,7 @@ enum Tutor {
         return """
         你是一位耐心、严谨的学习辅导老师，正在一对一辅导学生做下面这道题。
 
-        【题目】\(q.label)
-        \(q.content)
+        \(problemStatement(for: q, siblings: siblings))
 
         \(answerSection)
 
@@ -158,7 +225,7 @@ enum Tutor {
         <answer>参考答案和简要解析</answer>
         </new_question>
 
-        \(formatRule)\(traditionalRule(for: q.content))
+        \(formatRule)\(traditionalRule(for: q.fullText))
         """
     }
 
@@ -171,7 +238,7 @@ enum Tutor {
     /// 每次请求最后附上的一句提醒：开门见山；繁体题用繁体回答
     static func replyReminder(for q: Question) -> String {
         if AILanguage.isEnglish { return "(Get straight to the point: no greeting or opening line.)" }
-        if AILanguage.isCantonese || isTraditional(q.content) {
+        if AILanguage.isCantonese || isTraditional(q.fullText) {
             return "（直接講重點，不要打招呼、不要開場白。全部用繁體字。）"
         }
         return "（直接说重点，不要打招呼、不要开场白。）"
@@ -401,7 +468,23 @@ enum Tutor {
         if !done && m.kind != .solution {
             s += "这道题我还没做完：不要借机给出最终答案或完整解法。"
         }
-        return s + "简洁，控制在几句话以内。"
+        return s + "简洁，控制在几句话以内。\n\n" + supplementRuleZH
+    }
+
+    /// “有疑问”里可以补充题目原文没有的数据：AI 当作已知条件，并用 <given> 记下来，之后批改都按它来
+    static let supplementRuleZH = "如果我的疑问里补充了题目原文没有写出来的数据或条件（比如图上的数值、导入时漏掉的已知条件、别的小问或共用题干里的内容），就把它当作本题的已知条件：按它重新判断你这条回复，之前因为缺这个条件而判错、讲错或讲不下去的地方直接改正，并明确告诉我按补充的条件我原来的作答对不对（批改结果需要更新时，提醒我再点一次“检查”）；然后在回复的最后另起一行，把我补充的条件整理成一句完整、单独看也能看懂的话，写进 <given>…</given>（补充了几条就写几个标签，公式用 LaTeX，标签里不要加别的话）。我没有补充题目条件时不要写 <given>。"
+
+    /// 取出回复里的 <given>…</given>（学生补充的题目条件），返回去掉标签的正文和这些条件
+    static func extractGiven(_ text: String) -> (text: String, given: [String]) {
+        var rest = text
+        var given: [String] = []
+        while let start = rest.range(of: "<given>"),
+              let end = rest.range(of: "</given>", range: start.upperBound..<rest.endIndex) {
+            let item = rest[start.upperBound..<end.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !item.isEmpty { given.append(item) }
+            rest.removeSubrange(start.lowerBound..<end.upperBound)
+        }
+        return (rest.trimmingCharacters(in: .whitespacesAndNewlines), given)
     }
 
     /// 没学过：换成学过的方法重讲这条回复。topic 为空：学生说不出名字，让 AI 判断
@@ -450,19 +533,18 @@ enum Tutor {
 
     // MARK: - 预先求解
 
-    static func presolveSystemZH(for q: Question) -> String {
+    static func presolveSystemZH(for q: Question, siblings: [Question] = []) -> String {
         """
-        你是严谨的解题老师。请认真求解下面这道题，结果用于之后批改学生的作答，学生看不到。
+        你是严谨的解题老师。请认真求解下面这道题，结果用于之后批改学生的作答，学生看不到。\(q.stem?.isEmpty == false ? "只求解【本题】这一问。" : "")
 
-        【题目】\(q.label)
-        \(q.content)
+        \(problemStatement(for: q, siblings: siblings))
 
         要求：
         - 先在心里仔细验算，再输出。
         - 只输出最终答案和关键步骤，简洁，不超过 12 行；选择题写明正确选项的字母；有多个小问时逐问给出答案。
         - 不要寒暄，不要解释你在做什么。
 
-        \(formatRule)\(traditionalRule(for: q.content))
+        \(formatRule)\(traditionalRule(for: q.fullText))
         """
     }
 
@@ -510,7 +592,7 @@ enum Tutor {
     /// 出的新题要记住的原题内容：题干和作答记录（包括收藏里重新练习之前的记录）
     static func originNoteZH(for source: Question) -> String {
         let history = (source.previousAttempts ?? []).flatMap { $0 } + source.messages
-        var s = "原题（第 \(source.label) 题）：\n" + clip(source.content, 800) + "\n\n"
+        var s = "原题（第 \(source.label) 题）：\n" + clip(source.fullText, 800) + "\n\n"
         s += progressSummary(history) ?? "学生在原题上没有错误记录。"
         // 新题再出新题时，最早那道原题的记录也带上
         if let earlier = source.originNote {
@@ -604,6 +686,7 @@ enum Tutor {
         var shown = extractMarks(extractNewQuestions(text).display).text
         if let r = shown.range(of: "<mark") { shown = String(shown[..<r.lowerBound]) }
         if let r = shown.range(of: "<topic") { shown = String(shown[..<r.lowerBound]) }
+        if let r = shown.range(of: "<given") { shown = String(shown[..<r.lowerBound]) }
         if let r = shown.range(of: "<new_question") {
             return String(shown[..<r.lowerBound]) + "\n\n" + L("（正在出题…）")
         }

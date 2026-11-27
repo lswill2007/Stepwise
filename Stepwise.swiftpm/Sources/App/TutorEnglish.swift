@@ -35,6 +35,7 @@ extension Tutor {
         2. Use the original question number as the label (e.g. 1, 2(3), II.4). If there is none, number the questions in order.
         3. If the file includes the answer or worked solution for a question, put it in <answer>; otherwise leave out <answer>. Do not treat the answer section itself as questions.
         4. By default a question and all its sub-parts count as one question; if the splitting instructions say otherwise, follow them.
+        4a. [Shared stem] When several consecutive questions share one stem — the original says something like "Questions 5–7 refer to the following information", or a later question needs the conditions, data or figure from an earlier question's stem, or the splitting instructions ask you to separate the sub-parts of one question into several questions — write the shared stem only once, inside <stem id="S1">…</stem> (a sibling of <question>, placed before those questions; use S2 for the second group, and so on), add stem="S1" to each of those questions, and put only that question's (that sub-part's) own text in its <content>, without repeating the stem. Never drop the shared stem, and never put it only in the first question. If the shared stem has a figure, mark the figure on every one of those questions. Questions that do not share a stem get no stem.
         5. Ignore headers, footers, page numbers, exam instructions and anything else that is not a question.
         6. Transcribe every formula in standard LaTeX (inline $...$, on its own line $$...$$, chemistry $\\ce{...}$), exactly matching the original.
         7. If a figure in a question cannot be transcribed, describe its role in one sentence, e.g. "(See figure: right triangle $ABC$, $\\angle C=90^\\circ$)".
@@ -69,6 +70,18 @@ extension Tutor {
         <question label="2"\(hasImages ? " page=\"1\"" : "")>
         ...
         </question>
+        (only when several questions share a stem:)
+        <stem id="S1">
+        The stem these questions share
+        </stem>
+        <question label="3(a)" stem="S1"\(hasImages ? " page=\"1\"" : "")>
+        <content>
+        This sub-part's own text
+        </content>
+        </question>
+        <question label="3(b)" stem="S1"\(hasImages ? " page=\"1\"" : "")>
+        ...
+        </question>
         """
         return s
     }
@@ -84,8 +97,8 @@ extension Tutor {
 
     // MARK: 辅导
 
-    static func tutorSystem(for q: Question, origin: String? = nil) -> String {
-        guard AILanguage.isEnglish else { return tutorSystemZH(for: q, origin: origin) }
+    static func tutorSystem(for q: Question, origin: String? = nil, siblings: [Question] = []) -> String {
+        guard AILanguage.isEnglish else { return tutorSystemZH(for: q, origin: origin, siblings: siblings) }
         var answerSection: String
         if let ref = q.referenceAnswer, !ref.isEmpty {
             answerSection = "[Reference answer] (for judging correctness only; the student cannot see it. Do not reveal it before the student asks for the full solution.)\n\(ref)"
@@ -105,8 +118,7 @@ extension Tutor {
         return """
         You are a patient, rigorous tutor working one-on-one with a student on the question below.
 
-        [Question] \(q.label)
-        \(q.content)
+        \(problemStatement(for: q, siblings: siblings))
 
         \(answerSection)
 
@@ -222,8 +234,11 @@ extension Tutor {
         if !done && m.kind != .solution {
             s += " I haven't finished this question yet: don't use this as a chance to give the final answer or the full solution."
         }
-        return s + " Keep it short, a few sentences at most."
+        return s + " Keep it short, a few sentences at most.\n\n" + supplementRuleEN
     }
+
+    /// See supplementRuleZH: data the student adds in "I have a question" becomes part of the given information
+    static let supplementRuleEN = "If my question adds data or conditions that the question text does not state (for example values read off a figure, given information lost on import, or something from another part or the shared stem), treat it as given for this question: re-judge your reply with it, correct anything you got wrong or couldn't explain because it was missing, and tell me plainly whether my earlier work is right under the added condition (if the check result needs updating, remind me to tap \"Check\" again). Then, on a new line at the very end of your reply, restate what I added as one complete sentence that makes sense on its own, inside <given>…</given> (one tag per item, formulas in LaTeX, nothing else inside the tag). If I did not add any given information, do not write <given>."
 
     static func unlearnedInstruction(about m: ChatMessage, topic: String, done: Bool) -> String {
         guard AILanguage.isEnglish else { return unlearnedInstructionZH(about: m, topic: topic, done: done) }
@@ -260,13 +275,12 @@ extension Tutor {
 
     // MARK: 预先求解
 
-    static func presolveSystem(for q: Question) -> String {
-        guard AILanguage.isEnglish else { return presolveSystemZH(for: q) }
+    static func presolveSystem(for q: Question, siblings: [Question] = []) -> String {
+        guard AILanguage.isEnglish else { return presolveSystemZH(for: q, siblings: siblings) }
         return """
-        You are a rigorous problem solver. Solve the question below carefully. The result will be used later to check the student's work; the student cannot see it.
+        You are a rigorous problem solver. Solve the question below carefully. The result will be used later to check the student's work; the student cannot see it.\(q.stem?.isEmpty == false ? " Solve only the part marked [This question]." : "")
 
-        [Question] \(q.label)
-        \(q.content)
+        \(problemStatement(for: q, siblings: siblings))
 
         Requirements:
         - Double-check your work before writing it out.
@@ -320,7 +334,7 @@ extension Tutor {
     static func originNote(for source: Question) -> String {
         guard AILanguage.isEnglish else { return originNoteZH(for: source) }
         let history = (source.previousAttempts ?? []).flatMap { $0 } + source.messages
-        var s = "Original question (question \(source.label)):\n" + clip(source.content, 800) + "\n\n"
+        var s = "Original question (question \(source.label)):\n" + clip(source.fullText, 800) + "\n\n"
         s += progressSummary(history) ?? "The student has no recorded mistakes on the original question."
         if let earlier = source.originNote {
             s += "\n\nAn earlier original question:\n" + clip(earlier, 800)

@@ -136,6 +136,8 @@ struct PDFDocumentBuilder {
     /// 要转写的手写图片（JPEG），HTML 里在 \u{1}INK序号\u{1} 的位置放转写结果
     private(set) var inks: [Data] = []
     private var body = ""
+    /// 上一道题共用题干的那一组：同一组的题干只印一次
+    private var lastStemGroup: UUID?
 
     init(store: AppStore, options: PDFExportOptions) {
         self.store = store
@@ -252,7 +254,14 @@ struct PDFDocumentBuilder {
         if q.isStarred { html += "<span class=\"star\">\(Self.esc(L("收藏")))</span>" }
         html += "</div>"
         body += html
+        if let stem = q.stem, !stem.isEmpty, q.stemGroup == nil || q.stemGroup != lastStemGroup {
+            body += md(stem)
+        }
+        lastStemGroup = q.stemGroup
         body += md(q.content)
+        if let given = q.supplements, !given.isEmpty {
+            body += md(L("补充的条件") + L("：") + given.joined(separator: L("；")))
+        }
         for id in q.imageIDs {
             if let data = ImageStore.load(id) { body += "<div class=\"figure\">" + image(data, width: nil) + "</div>" }
         }
