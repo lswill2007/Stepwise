@@ -17,6 +17,8 @@ struct StepwiseApp: App {
                 .environmentObject(tracker)
                 // 一分钟内有操作就算学习时间
                 .background(ActivityDetector { tracker.touch() })
+                // 双击任何能打字的地方，弹出屏幕键盘（刚用过笔、接着硬件键盘时系统不会自己弹）
+                .background(KeyboardSummoner())
                 .onAppear { tracker.start() }
         }
         // 退到后台时立即保存题库，避免被系统关闭时丢失最后的改动

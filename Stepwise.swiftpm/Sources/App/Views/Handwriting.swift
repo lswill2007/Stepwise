@@ -1912,7 +1912,10 @@ struct InkPalette: View {
         VStack(spacing: 8) {
             if !keyboardUp { bar }
         }
-        .animation(.easeOut(duration: 0.2), value: keyboardUp)
+        // 让开时马上拿掉、不做淡出：淡出的那一小会儿它正被键盘顶到输入框上面，还接得到触摸，
+        // 双击输入框的第二下会点到工具上（换了工具）。回来时照常淡入
+        .allowsHitTesting(!keyboardUp)
+        .animation(keyboardUp ? nil : .easeOut(duration: 0.2), value: keyboardUp)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
             guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
             // 接着硬件键盘时只有底边一条快捷栏，不算；浮动的小键盘不占页面，也不算

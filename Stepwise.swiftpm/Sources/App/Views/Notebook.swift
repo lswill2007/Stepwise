@@ -161,7 +161,9 @@ struct NotebookView: View {
         .overlay { InkOptionsDismissLayer(tools: ink.tools) }
         .overlay(alignment: .bottom) {
             if HandwritingModel.isAvailable && !items.isEmpty {
+                // 不跟着键盘往上挪：键盘弹出的那一下它会被顶到输入框上面，双击输入框的第二下正好点到工具上
                 InkPalette(tools: ink.tools)
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
             }
         }
         .overlay {
@@ -553,11 +555,15 @@ struct QuestionBlock: View {
     /// 手写区下面的“键盘”按钮：弹出键盘打字；键盘开着时收起
     private func toggleKeyboard() {
         if typing {
+            // 打字框有光标、屏幕键盘却没出来（刚用过笔时系统只给一条小工具条）：把键盘要出来，不是收起
+            if KeyboardSummon.summonCurrentIfHeldBack() { return }
             typing = false
             return
         }
         let wasShown = showsTypingField
         showTyping = true
+        // 用笔点的这一下，系统默认不弹屏幕键盘：明确告诉它要
+        KeyboardSummon.summonNextFocus()
         // 打字框刚显示出来的那一下还不能聚焦，等它排进页面
         DispatchQueue.main.asyncAfter(deadline: .now() + (wasShown ? 0 : 0.1)) { typing = true }
     }
