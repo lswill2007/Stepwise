@@ -416,6 +416,9 @@ struct SettingsView: View {
                         Text("打开后每道题的手写区下面会多一个打字框").font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                #if os(iOS)
+                KeyboardCheckRow()
+                #endif
             } header: {
                 Text("作答")
             } footer: {

@@ -838,3 +838,15 @@
 "和相邻几道题共用的题干：在这里改，共用它的几道题一起改。清空就只把这道题的共用题干去掉。" = "The stem shared with the neighboring questions: edits here apply to all questions that share it. Clear it to remove the shared stem from this question only.";
 "：" = ": ";
 "；" = "; ";
+
+/* 键盘检查 */
+"键盘检查" = "Keyboard check";
+"点输入框键盘不出来时，打开这里看看卡在哪一步" = "If the keyboard doesn't appear when you tap a text field, open this to see where it gets stuck";
+"先用手指点一下下面两个输入框，再看最下面列出的状态。点“拷贝结果”可以把它发出去。" = "Tap the two fields below with a finger, then look at the status listed at the bottom. Tap “Copy result” to share it.";
+"① 系统原生输入框" = "① Plain system text field";
+"② 和 App 里一样的输入框" = "② Same kind of field the app uses";
+"点这里试试" = "Tap here to try";
+"让①聚焦" = "Focus ①";
+"先设为主窗口再聚焦" = "Make window key, then focus";
+"已拷贝" = "Copied";
+"拷贝结果" = "Copy result";

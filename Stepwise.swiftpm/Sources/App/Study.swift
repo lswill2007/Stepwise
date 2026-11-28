@@ -135,7 +135,12 @@ private struct ActivityDetectorView: UIViewRepresentable {
         override func didMoveToWindow() {
             super.didMoveToWindow()
             guard let window, spy == nil else { return }
-            let spy = TouchSpy { [weak self] in self?.onTouch() }
+            let spy = TouchSpy { [weak self] in
+                // 被触摸的就是这个窗口，它却不是主窗口（在 Swift Playgrounds 里运行时见过）：
+                // 不是主窗口的输入框拿不到焦点，点了没有光标、键盘也不出来。碰到就设回来
+                if let window = self?.window, !window.isKeyWindow { window.makeKey() }
+                self?.onTouch()
+            }
             window.addGestureRecognizer(spy)
             self.spy = spy
         }
