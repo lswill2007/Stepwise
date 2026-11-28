@@ -419,7 +419,10 @@ enum MathTemplate {
         codes.push(c); return "\n\u0001" + (codes.length - 1) + "\u0001\n";
       });
       // 行内公式用 \u0002 标记，独立公式用 \u0003 标记（独立公式两侧不再额外换行）
-      function put(t, d) { maths.push([t, d]); var k = d ? "\u0003" : "\u0002"; return k + (maths.length - 1) + k; }
+      // 公式里放回 \$（KaTeX 的美元符号命令），正文里放回 $
+      function put(t, d) { maths.push([t.replace(/\u0004/g, "\\$"), d]); var k = d ? "\u0003" : "\u0002"; return k + (maths.length - 1) + k; }
+      // 转义的美元符号 \$（如 \$50）是金额不是公式边界：先换成 \u0004 藏起来（\\$ 是换行加公式边界，不算）
+      src = src.replace(/(?<!\\)((?:\\\\)*)\\\$/g, "$1\u0004");
       src = src
         .replace(/\$\$([\s\S]+?)\$\$/g, function (m, t) { return put(t, true); })
         .replace(/\\\[([\s\S]+?)\\\]/g, function (m, t) { return put(t, true); })
@@ -458,6 +461,7 @@ enum MathTemplate {
       flushPara(); flushList();
 
       return out.join("")
+        .replace(/\u0004/g, "$")
         .replace(/(?:<br>)?\u0003(\d+)\u0003(?:<br>)?/g, function (m, k) { return math(maths[k][0], true); })
         .replace(/\u0002(\d+)\u0002([，。、；：！？）」』”’,.;:!?)\]]*)/g, function (m, k, p) {
           return '<span class="im">' + math(maths[k][0], false) + p + "</span>";
