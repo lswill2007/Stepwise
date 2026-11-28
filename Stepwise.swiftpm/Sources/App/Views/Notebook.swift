@@ -59,9 +59,59 @@ struct NotebookView: View {
         let qID: UUID
     }
 
+    /// 一道题在页面上的位置，和排它的时候页面多宽
+    struct Placement: Equatable {
+        var frame: CGRect
+        var page: CGFloat
+    }
+
+    /// 要按住的一处：题目里的哪一点，按在屏幕上的哪条线上
+    struct Anchor {
+        var position: ReadingPosition
+        /// 按在页面最顶上（导航栏下沿）；否则按在记“看到哪里”的那条线上
+        var atTop: Bool
+    }
+
     /// 各题在屏幕上的位置。滚动时每一帧都在变，不放进会刷新页面的状态里
     final class ScrollTracker {
         var frames: [UUID: CGRect] = [:]
+        /// 各题的位置是第几次报上来的（越大越新）
+        private var stamps: [UUID: Int] = [:]
+        private var tick = 0
+
+        /// 记下一道题刚报上来的位置
+        func record(_ id: UUID, _ frame: CGRect) {
+            tick += 1
+            frames[id] = frame
+            stamps[id] = tick
+        }
+
+        func forget(_ id: UUID) {
+            frames[id] = nil
+            stamps[id] = nil
+        }
+
+        // 滚出屏幕的题有时不报“消失”、也不再报位置，frames 里留下的还是它以前在屏幕上的位置。
+        // 那条线正好落在这种旧位置里，就会认成正在看它：目录选到别的题，记下的位置也成了别的题，下次重排就跳过去。
+        // 排好的页面上题和题不会叠在一起，所以两道题的位置叠着时，后报上来的那个才是现在的
+
+        /// 这道题现在的位置；留下的是旧位置（有后来报的题叠在它上面）就当作量不到
+        func frame(of id: UUID) -> CGRect? {
+            guard let frame = frames[id], let stamp = stamps[id] else { return nil }
+            let stale = frames.contains { other, rect in
+                other != id && (stamps[other] ?? 0) > stamp && min(rect.maxY, frame.maxY) - max(rect.minY, frame.minY) > 1
+            }
+            return stale ? nil : frame
+        }
+
+        /// 那条线落在哪道题里；不在任何一道题里（题和题之间、第一题上面）就是线下面最近的那道
+        func question(at line: CGFloat) -> UUID? {
+            let inside = frames.filter { $0.value.minY <= line && $0.value.maxY > line }
+            if let id = inside.max(by: { (stamps[$0.key] ?? 0) < (stamps[$1.key] ?? 0) })?.key { return id }
+            return frames.filter { $0.value.minY > line && frame(of: $0.key) != nil }
+                .min { $0.value.minY < $1.value.minY }?.key
+        }
+
         /// 最近一次报给左边目录的题（或主动翻到的题）
         var reported: UUID?
         /// 主动翻页的动画期间不报
@@ -71,10 +121,80 @@ struct NotebookView: View {
         /// 刚打开时先翻到选中的那道题，翻完才开始报。
         /// 否则页面一排出来（第一题在最上面）就把“第一题”报上去，盖掉了要翻到的题，页面就停在第一题
         var ready = false
-        /// 现在看到哪里（顶上那条线在哪道题里、离题目顶端多远），离开页面时存下来
+        /// 现在看到哪里（顶上那条线在哪道题的哪一段里），离开页面时存下来
         var position: ReadingPosition?
+        /// 记下 position 时页面多宽。宽度不一样了说明题目正在重排（进出全屏、拉出收起左栏、转屏）：
+        /// 这时要把原来看着的那一处按回去，不能拿新排版量出来的位置盖掉它。
+        /// 和题目的位置一起量、一起报上来（见 Placement）：另外量的页面宽度可能晚一步才到
+        var layoutWidth: CGFloat?
+        /// 每道题里“作答”“批改”“笔记”几段的位置，从这道题的顶端算（只在重新排版时变，滚动时不变）。
+        /// 题目滚出屏幕后也留着：再滚回来时排版没变就不会重新报
+        var sections: [UUID: [QuestionSection: CGRect]] = [:]
         let restorer = ScrollRestorer()
         let autosave = PositionAutosave()
+        /// 正在把哪一处按回去（见 hold）；按完为 nil
+        var holding: Anchor?
+        /// 刚按回去的那一处，和按完时页面滚到哪里。之后页面没再滚过，下次重排还按它来，不重新量：
+        /// 重排以后同一行上是哪些字、挨着哪一段都变了（宽的时候作答和批改还左右并排），重新量出来的不是原来那一处，
+        /// 全屏、半屏来回切就回不到原位。clamped：页面已经到底、没对上，本来要对的是它
+        var intent: (anchor: Anchor, offset: CGFloat, clamped: Bool)?
+        /// 翻到某道题用。重排时要对的那道题被滚出屏幕收走了（量不到它的位置），先翻回它那里
+        var proxy: ScrollViewProxy?
+        /// 题目里有一段的位置要变了，传的是排它的时候页面多宽（做题页看是不是在重排）；变完以后（重新记看到哪里）
+        var sectionWillChange: ((CGFloat) -> Void)?
+        var sectionDidChange: (() -> Void)?
+
+        /// 这道题从上到下各段现在在哪里（从题目顶端算）。canvasHeight：手写区的高度，没有手写区为 0
+        func layout(of id: UUID, canvasHeight: CGFloat) -> [QuestionSection: CGRect] {
+            guard let reported = sections[id], let work = reported[.work] else { return [:] }
+            // 空的段（还没有批改结果、没记笔记）不算
+            var all = reported.filter { $0.value.height > 1 }
+            // 题目：从这道题的顶端到作答上面
+            all[.head] = CGRect(x: 0, y: 0, width: work.width, height: max(0, work.minY))
+            // 作答拆成手写区和它下面的打字框、按钮：手写区的高度不跟着页面宽窄变，下面那些会换行
+            let canvas = min(max(0, canvasHeight), work.height)
+            all[.canvas] = canvas > 1 ? CGRect(x: work.minX, y: work.minY, width: work.width, height: canvas) : nil
+            all[.work] = work.height - canvas > 1
+                ? CGRect(x: work.minX, y: work.minY + canvas, width: work.width, height: work.height - canvas) : nil
+            return all
+        }
+
+        /// 离题目顶端 y 的那条线落在哪一段、这一段的几分之几处
+        func locate(_ y: CGFloat, in item: UUID, canvasHeight: CGFloat) -> ReadingPosition {
+            var position = ReadingPosition(item: item, y: y)
+            let all = layout(of: item, canvasHeight: canvasHeight)
+            guard !all.isEmpty else { return position }
+            let order = QuestionSection.allCases
+            // 线穿过的那一段；宽的时候作答和批改左右并排，先算左边的。
+            // 落在两段之间的空隙、题目最底下的留白里：算它上面最近的那一段，另记过了段底多远
+            let inside = order.first { all[$0].map { $0.minY <= y && y < $0.maxY } ?? false }
+            let above = order.filter { all[$0].map { $0.maxY <= y } ?? false }
+                .max { (all[$0]?.maxY ?? 0) < (all[$1]?.maxY ?? 0) }
+            guard let section = inside ?? above, let rect = all[section] else {
+                // 线还在这道题上面
+                position.section = QuestionSection.head.rawValue
+                position.part = 0
+                position.past = y
+                return position
+            }
+            position.section = section.rawValue
+            if inside != nil {
+                position.part = (y - rect.minY) / max(rect.height, 1)
+            } else {
+                position.part = 1
+                position.past = y - rect.maxY
+            }
+            return position
+        }
+
+        /// 这个位置现在离题目顶端多远
+        func offset(of position: ReadingPosition, canvasHeight: CGFloat) -> CGFloat {
+            guard let item = position.item, let raw = position.section, let section = QuestionSection(rawValue: raw),
+                  let part = position.part, let rect = layout(of: item, canvasHeight: canvasHeight)[section] else {
+                return CGFloat(position.y)
+            }
+            return rect.minY + CGFloat(part) * rect.height + CGFloat(position.past ?? 0)
+        }
     }
 
     @StateObject private var ink = NotebookInk()
@@ -103,13 +223,17 @@ struct NotebookView: View {
                     ForEach(items, id: \.qID) { entry in
                         QuestionBlock(setID: entry.setID, qID: entry.qID, model: ink.model(for: entry.qID),
                                       wide: width >= 760, mistakeMode: setID == nil,
-                                      nextID: next(after: entry, in: items))
+                                      nextID: next(after: entry, in: items), tracker: tracker)
                             .id(entry.qID)
-                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.scrollSpace)) } action: {
-                                tracker.frames[entry.qID] = $0
+                            .onGeometryChange(for: Placement.self) {
+                                Placement(frame: $0.frame(in: .named(Self.scrollSpace)),
+                                          page: $0.bounds(of: .scrollView)?.width ?? 0)
+                            } action: {
+                                noteLayout(page: $0.page)
+                                tracker.record(entry.qID, $0.frame)
                                 reportScrolledQuestion()
                             }
-                            .onDisappear { tracker.frames[entry.qID] = nil }
+                            .onDisappear { tracker.forget(entry.qID) }
                     }
                     // 给底部的工具条留位置
                     Color.clear.frame(height: 110)
@@ -123,6 +247,10 @@ struct NotebookView: View {
             // 页面从导航栏下面开始，翻到哪道题按导航栏下面那一条线算
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { tracker.topInset = $0 }
             .onAppear {
+                tracker.proxy = proxy
+                tracker.sectionWillChange = { noteLayout(page: $0) }
+                // 题目里的内容陆续排出来（公式、批改结果）：各段高度变了，同一条线落在哪一段要重新算
+                tracker.sectionDidChange = { reportScrolledQuestion() }
                 // 等页面排好版再翻到选中的题；上次就停在这道题，回到上次看到的地方
                 DispatchQueue.main.async {
                     let target = store.selectedQuestionID
@@ -132,8 +260,7 @@ struct NotebookView: View {
                         return
                     }
                     tracker.position = saved
-                    tracker.quietUntil = .distantFuture
-                    hold(saved)
+                    hold(Anchor(position: saved, atTop: false))
                 }
             }
             // 左边目录点了哪道题，就翻到哪道题（翻页时自己报上去的不算）
@@ -155,8 +282,9 @@ struct NotebookView: View {
         // 收起、拉出左栏：手写区留着不重建，宽度停下来后逼画布重画一遍
         .onChange(of: width) {
             ink.redrawAfterResize()
-            // 页面变宽变窄（拉出、收起左栏）：题目重新排版，顶上还是原来看着的那一处
-            if tracker.ready, let position = tracker.position { hold(position) }
+            // 页面变宽变窄（进出全屏、拉出收起左栏）：题目重新排版，顶上还是原来看着的那一处。
+            // 一般题目的位置先报上来、在 noteLayout 里就按住了；这里是没报上来时的后手
+            if tracker.ready { holdThroughReflow() }
         }
         .overlay { InkOptionsDismissLayer(tools: ink.tools) }
         .overlay(alignment: .bottom) {
@@ -211,10 +339,16 @@ struct NotebookView: View {
         .onDisappear {
             ink.saveAll(wait: false)
             savePosition()
+            // 这两样里装着这一页自己，不放掉的话离开以后整页都留在内存里
+            tracker.sectionWillChange = nil
+            tracker.sectionDidChange = nil
+            tracker.proxy = nil
         }
     }
 
     private static let scrollSpace = "notebookScroll"
+    /// 页面最顶上（导航栏下沿）。滚动视图的坐标从导航栏下沿算起
+    private static let topLine: CGFloat = 0
     /// 翻到哪道题按导航栏下面多远的一条线算：翻到某道题时题目顶端正好在导航栏下沿，线再往下一点，免得算成上一道
     private static let lineBelowBar: CGFloat = 80
 
@@ -225,25 +359,70 @@ struct NotebookView: View {
         if let position = tracker.position { ReadingPosition.save(position, for: fileID) }
     }
 
-    /// 把页面挪到这个位置，等排版稳定下来；这期间不报题、不记新位置
-    private func hold(_ position: ReadingPosition) {
-        guard let item = position.item else { return }
-        tracker.position = position
+    /// 把这一处按回去，等排版稳定下来；这期间不报题、不记新位置
+    private func hold(_ anchor: Anchor, eager: Bool = false) {
+        guard let item = anchor.position.item else { return }
+        tracker.holding = anchor
         tracker.ready = false
         tracker.quietUntil = .distantFuture
-        tracker.restorer.restore {
-            tracker.frames[item].map { CGFloat(position.y) - (tracker.topInset + Self.lineBelowBar - $0.minY) }
+        tracker.restorer.restore(eager: eager) { [tracker, ink] in
+            // 量不到要对的那道题：它被滚出屏幕收走了（重排、内容排好以后页面短了一大截，
+            // 原来的滚动位置已经在内容外面，屏幕上一片空白）。先翻回它那里，下一次再对准
+            if tracker.frame(of: item) == nil { tracker.proxy?.scrollTo(item, anchor: .top) }
+            return Self.gap(to: anchor, tracker, ink)
         } done: {
+            tracker.holding = nil
+            // 只记重排时按住的（页面最顶上的那一处）；打开题集回到上次位置时按的是另一条线，之后重排不沿用
+            tracker.intent = !anchor.atTop ? nil : tracker.restorer.offset.map {
+                (anchor, $0, clamped: abs(Self.gap(to: anchor, tracker, ink) ?? 0) > 1)
+            }
             tracker.quietUntil = Date()
             tracker.ready = true
             reportScrolledQuestion()
         }
     }
 
+    /// 还要往下滚多少，这一处才回到它的那条线上；量不到这道题（还没排出来、被收走了）为 nil
+    private static func gap(to anchor: Anchor, _ tracker: ScrollTracker, _ ink: NotebookInk) -> CGFloat? {
+        guard let item = anchor.position.item else { return nil }
+        let line = anchor.atTop ? topLine : tracker.topInset + lineBelowBar
+        return tracker.frame(of: item).map {
+            tracker.offset(of: anchor.position, canvasHeight: canvasHeight(item, ink)) - (line - $0.minY)
+        }
+    }
+
+    /// 页面最顶上现在是哪道题的哪一处
+    private func topAnchor() -> Anchor? {
+        guard let item = tracker.question(at: Self.topLine), let frame = tracker.frames[item] else { return nil }
+        return Anchor(position: tracker.locate(Self.topLine - frame.minY, in: item, canvasHeight: Self.canvasHeight(item, ink)),
+                      atTop: true)
+    }
+
+    /// 刚按回去的那一处还算不算数：之后页面没再滚过，它也还在原来那条线上（到底了没对上的不看这一条）
+    private func intentHolds() -> Bool {
+        guard let intent = tracker.intent, let offset = tracker.restorer.offset, abs(offset - intent.offset) < 1 else { return false }
+        return intent.clamped || abs(Self.gap(to: intent.anchor, tracker, ink) ?? .infinity) < 1
+    }
+
+    /// 页面要重排了（变宽变窄）：把顶上看着的那一处按住。
+    /// 正在按着的接着按（排版又变了一次）；刚按过、之后没滚动过的还按原来那一处；否则按现在页面最顶上的那一处
+    private func holdThroughReflow() {
+        if let anchor = tracker.holding ?? (intentHolds() ? tracker.intent?.anchor : nil) ?? topAnchor() {
+            hold(anchor, eager: true)
+        }
+    }
+
+    /// 这道题手写区的高度（没有手写区、还没打开过为 0）
+    private static func canvasHeight(_ id: UUID, _ ink: NotebookInk) -> CGFloat {
+        guard HandwritingModel.isAvailable else { return 0 }
+        return ink.existingModel(for: id)?.height ?? 0
+    }
+
     /// 主动翻到某道题。翻页动画经过的题不报给左边目录，免得目录跟着闪
     private func scroll(_ proxy: ScrollViewProxy, to id: UUID?, animated: Bool) {
         guard let id else { return }
         tracker.reported = id
+        tracker.intent = nil
         tracker.quietUntil = Date().addingTimeInterval(animated ? 0.6 : 0.2)
         if animated {
             withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(id, anchor: .top) }
@@ -252,18 +431,30 @@ struct NotebookView: View {
         }
     }
 
+    /// 题目、题目里的一段报位置时先过这里（在记下它的新位置之前）。
+    /// 页面的宽度变了：题目在重排。各题的高度都变了，原来的滚动位置上已经是别的内容，
+    /// 把原来顶上看着的那一处按回去，不拿新排版量到的当成新位置。
+    /// 这是新排版报上来的第一个位置，记着的各题、各段都还是重排之前的，正好用来量“原来顶上是哪一处”
+    /// - Parameter page: 刚报上来的这一项是按页面多宽排的
+    private func noteLayout(page: CGFloat) {
+        guard page > 0 else { return }
+        let last = tracker.layoutWidth
+        tracker.layoutWidth = page
+        if let last, abs(last - page) > 0.5 { holdThroughReflow() }
+    }
+
     /// 翻到哪道题，左边目录就跟着选中哪道题：页面顶上那一条线落在哪道题里就是哪道
     private func reportScrolledQuestion() {
         guard tracker.ready else { return }
         let line = tracker.topInset + Self.lineBelowBar
-        let frames = tracker.frames
-        let current = frames.first { $0.value.minY <= line && $0.value.maxY > line }?.key
-            ?? frames.filter { $0.value.minY > line }.min { $0.value.minY < $1.value.minY }?.key
+        let current = tracker.question(at: line)
         // 翻页动画期间也记：动画停下来以后不会再报位置
-        if let current, let frame = frames[current] {
-            tracker.position = ReadingPosition(item: current, y: line - frame.minY)
+        if let current, let frame = tracker.frames[current] {
+            tracker.position = tracker.locate(line - frame.minY, in: current, canvasHeight: Self.canvasHeight(current, ink))
             tracker.autosave.changed(fileID) { [tracker] in tracker.position }
         }
+        // 页面滚过了、内容变了：刚按回去的那一处不算数了
+        if tracker.intent != nil, !intentHolds() { tracker.intent = nil }
         guard Date() >= tracker.quietUntil, let current, current != tracker.reported else { return }
         tracker.reported = current
         if store.selectedQuestionID != current { store.selectedQuestionID = current }
@@ -279,6 +470,36 @@ struct NotebookView: View {
 
 // MARK: - 一道题
 
+/// 一道题从上到下的几段。做题页记“看到哪里”记到段里：页面变宽变窄时各段的高度变得不一样，
+/// 记到段里，重排以后顶上还是原来那一处
+enum QuestionSection: Int, CaseIterable {
+    /// 题号、题干、题目、图
+    case head
+    /// 手写区
+    case canvas
+    /// 手写区下面的打字框、按钮（报上来的是整个作答，连手写区在内，用的时候再拆开，见 ScrollTracker.layout）
+    case work
+    /// 批改结果、提示、答案（窄的时候在作答下面，宽的时候在右边页边）
+    case margin
+    /// 题目下面记的笔记
+    case notes
+}
+
+private extension View {
+    /// 把这一段在题目里的位置报给做题页
+    func reportsSection(_ section: QuestionSection, of id: UUID, to tracker: NotebookView.ScrollTracker?,
+                        in space: String) -> some View {
+        onGeometryChange(for: NotebookView.Placement.self) {
+            NotebookView.Placement(frame: $0.frame(in: .named(space)), page: $0.bounds(of: .scrollView)?.width ?? 0)
+        } action: {
+            // 先让做题页看是不是在重排（要用重排之前记的位置），再记下新的
+            tracker?.sectionWillChange?($0.page)
+            tracker?.sections[id, default: [:]][section] = $0.frame
+            tracker?.sectionDidChange?()
+        }
+    }
+}
+
 struct QuestionBlock: View {
     @EnvironmentObject var store: AppStore
     let setID: UUID
@@ -288,6 +509,11 @@ struct QuestionBlock: View {
     let wide: Bool
     let mistakeMode: Bool
     let nextID: UUID?
+    /// 做题页：各段的位置报给它，用来记看到哪里（笔记里的练习题不用）
+    var tracker: NotebookView.ScrollTracker?
+
+    /// 这道题自己的坐标（各段的位置从题目顶端算）
+    private static let space = "questionBlock"
 
     @State private var draft = ""
     @State private var loaded = false
@@ -356,14 +582,18 @@ struct QuestionBlock: View {
                                    : AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
                 arrange {
                     work
+                        .reportsSection(.work, of: qID, to: tracker, in: Self.space)
                     MarginNotes(setID: setID, qID: qID, mistakeMode: mistakeMode, wide: wide,
                                 selection: $selectedNote, onSelect: showAskRegion)
                         .frame(width: wide ? 290 : nil)
+                        .reportsSection(.margin, of: qID, to: tracker, in: Self.space)
                 }
 
                 QuestionNotes(setID: setID, qID: qID, wide: wide)
+                    .reportsSection(.notes, of: qID, to: tracker, in: Self.space)
             }
             .padding(.vertical, 28)
+            .coordinateSpace(.named(Self.space))
             .overlay(alignment: .bottom) {
                 // 题与题之间的分隔线，像笔记本上画的横线
                 Rectangle().fill(Color.secondary.opacity(0.2)).frame(height: 1)
