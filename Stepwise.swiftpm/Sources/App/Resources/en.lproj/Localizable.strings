@@ -543,7 +543,7 @@
 "键盘作答" = "Keyboard Answers";
 "隐私政策" = "Privacy Policy";
 "预先求解答案" = "Solve Answers in Advance";
-"默认用 Apple Pencil 手写作答；手写区下面的“键盘”随时可以唤出键盘打字。用笔点输入框时系统默认不弹键盘：在输入框上双击就会弹出。" = "By default you answer by handwriting with Apple Pencil. Tap “Keyboard” below the handwriting area to type at any time. When you tap a text field with Apple Pencil the system doesn’t show the keyboard by default: double-tap the field to bring it up.";
+"默认用 Apple Pencil 手写作答；手写区下面的“键盘”随时可以打字。系统键盘出不来时（有的 iPad 系统版本在 Swift Playgrounds 里运行时会这样），点输入框会出现 App 自带的输入面板：手写自动变成文字（中文、英文、数字），也可以点按键。" = "By default you answer by handwriting with Apple Pencil. Tap “Keyboard” below the handwriting area to type at any time. If the system keyboard doesn't appear (some iPadOS versions do this for apps run from Swift Playgrounds), tapping a text field brings up the app's own input panel: handwriting is turned into text automatically (Chinese, English, numbers), or you can tap keys.";
 "键盘" = "Keyboard";
 "收起键盘" = "Hide Keyboard";
 "默认存在 App 内，删除 App 时会一起删掉。可以选一个“文件”App 里的文件夹（iCloud 云盘或“我的 iPad”），题目、笔记、图片和手写笔迹都存在那里；更新或重新安装 App 后，重新选同一个文件夹就能读到原来的数据。选空文件夹会把现在的数据复制过去；选已有 Stepwise 数据的文件夹会改用那份数据。原来位置的数据不会删除。API Key、服务商、选的模型和常用模型、学习时间和周报、其他设置也会存在这个文件夹里（settings.json，API Key 没有加密，请不要把文件夹分享给别人）。" = "By default data is stored inside the app and deleted with it. You can choose a folder in the Files app (iCloud Drive or On My iPad) to store questions, notes, images and handwriting; after updating or reinstalling, choose the same folder again to get your data back. Choosing an empty folder copies your current data there; choosing a folder that already has Stepwise data switches to that data. Data at the original location is never deleted. API keys, providers, chosen and favorite models, study time, weekly reports and other settings are also stored in this folder (settings.json — API keys are not encrypted, so don't share the folder with others).";
@@ -850,3 +850,17 @@
 "先设为主窗口再聚焦" = "Make window key, then focus";
 "已拷贝" = "Copied";
 "拷贝结果" = "Copy result";
+
+/* 输入面板 */
+"符号" = "Symbols";
+"粘贴" = "Paste";
+"空格" = "Space";
+"换行" = "Return";
+"大写" = "Shift";
+"光标左移" = "Move cursor left";
+"光标右移" = "Move cursor right";
+"拖动输入面板" = "Drag the input panel";
+"收起输入面板" = "Hide the input panel";
+"清掉重写" = "Clear and rewrite";
+"在这里写字（中文、英文、数字都行），停笔后自动变成文字" = "Write here (Chinese, English or numbers); it turns into text when you stop";
+"没认出来：接着写清楚一点，或者点右上角清掉重写" = "Couldn't read that: keep writing more clearly, or tap the corner button to clear and rewrite";

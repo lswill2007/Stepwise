@@ -422,7 +422,7 @@ struct SettingsView: View {
             } header: {
                 Text("作答")
             } footer: {
-                Text("默认用 Apple Pencil 手写作答；手写区下面的“键盘”随时可以唤出键盘打字。用笔点输入框时系统默认不弹键盘：在输入框上双击就会弹出。")
+                Text("默认用 Apple Pencil 手写作答；手写区下面的“键盘”随时可以打字。系统键盘出不来时（有的 iPad 系统版本在 Swift Playgrounds 里运行时会这样），点输入框会出现 App 自带的输入面板：手写自动变成文字（中文、英文、数字），也可以点按键。")
             }
         }
     }

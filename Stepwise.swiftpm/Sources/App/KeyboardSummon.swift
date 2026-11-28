@@ -159,7 +159,7 @@ enum KeyboardSummon {
     }
 }
 
-private extension UIResponder {
+extension UIResponder {
     private static weak var found: UIResponder?
 
     /// 现在正在输入的输入框
@@ -190,6 +190,8 @@ private struct KeyboardSummonerView: UIViewRepresentable {
             super.didMoveToWindow()
             guard let window, tap == nil else { return }
             KeyboardSummon.start()
+            // 系统键盘出不来时，App 自己的输入面板顶上（见 InputPanel.swift）
+            InputPanelController.shared.start()
             let tap = SummonTap(target: self, action: #selector(doubleTapped(_:)))
             window.addGestureRecognizer(tap)
             self.tap = tap
