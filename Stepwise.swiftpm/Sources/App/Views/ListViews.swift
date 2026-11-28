@@ -381,6 +381,26 @@ extension FolderColor {
     }
 }
 
+extension FolderColor {
+    /// 文件夹图标上的颜色：同一个色相，调淡、调灰了一些，排在一起不抢眼（系统的原色太艳）。
+    /// 菜单里挑颜色的那排圆点还是用原色，好分辨
+    var iconColor: Color {
+        switch self {
+        case .red: return Ink.adaptive(light: (0.80, 0.47, 0.44), dark: (0.78, 0.48, 0.46))
+        case .orange: return Ink.adaptive(light: (0.84, 0.60, 0.40), dark: (0.80, 0.59, 0.42))
+        case .yellow: return Ink.adaptive(light: (0.82, 0.70, 0.36), dark: (0.80, 0.70, 0.42))
+        case .green: return Ink.adaptive(light: (0.47, 0.68, 0.50), dark: (0.48, 0.68, 0.52))
+        case .teal: return Ink.adaptive(light: (0.42, 0.67, 0.66), dark: (0.44, 0.67, 0.66))
+        case .cyan: return Ink.adaptive(light: (0.45, 0.68, 0.78), dark: (0.46, 0.67, 0.76))
+        case .blue: return Ink.adaptive(light: (0.45, 0.60, 0.82), dark: (0.48, 0.62, 0.82))
+        case .indigo: return Ink.adaptive(light: (0.54, 0.54, 0.80), dark: (0.57, 0.57, 0.82))
+        case .purple: return Ink.adaptive(light: (0.68, 0.53, 0.78), dark: (0.69, 0.55, 0.79))
+        case .pink: return Ink.adaptive(light: (0.84, 0.58, 0.68), dark: (0.80, 0.56, 0.66))
+        case .gray: return Ink.adaptive(light: (0.62, 0.63, 0.66), dark: (0.56, 0.57, 0.60))
+        }
+    }
+}
+
 /// 资料库里的一条（文件夹、笔记、白板、题集、收藏都用它）：平铺在栏底色上，不给每一行铺颜色。
 /// 文件夹的颜色只留在左边的小图标上；选中的一行是一块淡淡的圆角底色，拖东西到文件夹上时描一圈主色
 struct LibraryBar<Content: View>: View {
@@ -440,7 +460,7 @@ struct FolderBar: View {
     @State private var targeted = false
 
     var body: some View {
-        LibraryBar(selected: selected, targeted: targeted, symbol: .folder(folder.tint.color)) {
+        LibraryBar(selected: selected, targeted: targeted, symbol: .folder(folder.tint.iconColor)) {
             HStack(spacing: 6) {
                 Text(folder.name)
                     .font(.body.weight(selected ? .semibold : .medium))

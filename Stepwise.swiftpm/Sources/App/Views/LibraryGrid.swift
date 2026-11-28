@@ -77,7 +77,7 @@ private struct FlowChips: View {
                     store.setCollapsed(folder.id, false)
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "folder.fill").font(.callout).foregroundStyle(folder.tint.color)
+                        Image(systemName: "folder.fill").font(.callout).foregroundStyle(folder.tint.iconColor)
                         Text(folder.name).font(.callout.weight(.medium)).lineLimit(1)
                         Spacer(minLength: 2)
                         if let n = counts[folder.id], n > 0 {
