@@ -77,7 +77,7 @@ private struct FlowChips: View {
                     store.setCollapsed(folder.id, false)
                 } label: {
                     HStack(spacing: 8) {
-                        Circle().fill(folder.tint.color.gradient).frame(width: 12, height: 12)
+                        Image(systemName: "folder.fill").font(.callout).foregroundStyle(folder.tint.color)
                         Text(folder.name).font(.callout.weight(.medium)).lineLimit(1)
                         Spacer(minLength: 2)
                         if let n = counts[folder.id], n > 0 {
@@ -86,7 +86,8 @@ private struct FlowChips: View {
                     }
                     .padding(.horizontal, 12)
                     .frame(height: 40)
-                    .background(folder.tint.color.opacity(0.22), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .background(Ink.card, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(Ink.separator.opacity(0.6), lineWidth: 0.5))
                 }
                 .buttonStyle(.plain)
             }

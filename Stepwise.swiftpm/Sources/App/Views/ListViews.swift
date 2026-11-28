@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 左栏：资料库。收藏固定在最上面，下面是自己建的文件夹（一层层嵌套，每个一条荧光笔颜色的圆角条），
+/// 左栏：资料库。收藏固定在最上面，下面是自己建的文件夹（一层层嵌套缩进，颜色只在文件夹图标上），
 /// 笔记、白板、题集都可以放进任意一个文件夹，没放进文件夹的排在最外层
 struct SidebarView: View {
     @EnvironmentObject var store: AppStore
@@ -80,7 +80,8 @@ struct SidebarView: View {
                             startEdit(.newFolder(parent: nil))
                         } label: {
                             Label("新建文件夹", systemImage: "folder.badge.plus")
-                                .foregroundStyle(Color.accentColor)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
                         }
                         .listRowInsets(EdgeInsets(top: 6, leading: 18, bottom: 6, trailing: 16))
                         .selectionDisabled()
@@ -206,18 +207,18 @@ struct SidebarView: View {
 
     /// 全部：回到最外层，右边一格一格排出没放进文件夹的东西和最外层的文件夹
     private func allRow(selected: Bool) -> some View {
-        LibraryBar(color: .gray, depth: 0, selected: selected, symbol: .icon("square.grid.2x2")) {
+        LibraryBar(selected: selected, symbol: .icon("square.grid.2x2")) {
             Text("全部").font(.body.weight(selected ? .semibold : .medium))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onTapGesture { store.browseFolder(nil) }
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .listRowInsets(EdgeInsets(top: 3, leading: 10, bottom: 3, trailing: 10))
+        .listRowInsets(EdgeInsets(top: 1, leading: 10, bottom: 1, trailing: 10))
     }
 
     /// 收藏：固定在最上面的一条
     private var mistakeBookRow: some View {
-        LibraryBar(color: .yellow, depth: 0, selected: store.isMistakeBook, symbol: .tinted("star.fill", Ink.star)) {
+        LibraryBar(selected: store.isMistakeBook, symbol: .tinted("star.fill", Ink.star)) {
             HStack {
                 Text("收藏").font(.body.weight(store.isMistakeBook ? .semibold : .medium))
                 Spacer()
@@ -231,15 +232,15 @@ struct SidebarView: View {
         }
         .onTapGesture { store.openItem(AppStore.mistakeBookID) }
         .accessibilityAddTraits(.isButton)
-        .listRowInsets(EdgeInsets(top: 3, leading: 10, bottom: 6, trailing: 10))
+        .listRowInsets(EdgeInsets(top: 1, leading: 10, bottom: 10, trailing: 10))
     }
 
-    /// 一篇笔记、一块白板或一个题集：和文件夹一样是一条浅色的条，颜色跟着所在的文件夹，比文件夹再深一点
+    /// 一篇笔记、一块白板或一个题集：平铺的一行，跟着所在的文件夹缩进
     private func itemRow(_ item: LibraryItem, depth: Int, folder: Folder?) -> some View {
         // 拖到一篇笔记、一块白板或一个题集上：放进它所在的文件夹
         let place = folder?.id
         let selected = (store.selectedBoardID ?? store.selectedNoteID ?? store.selectedSetID) == item.id
-        return LibraryBar(color: folder?.tint.color ?? .gray, depth: depth, selected: selected, symbol: .icon(item.icon)) {
+        return LibraryBar(selected: selected, symbol: .icon(item.icon)) {
             switch item {
             case .set(let set):
                 SetRow(set: set, selected: selected, actions: actions)
@@ -254,7 +255,7 @@ struct SidebarView: View {
             store.openItem(item.id)
         }
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .listRowInsets(EdgeInsets(top: 3, leading: 10 + SidebarView.indent(depth), bottom: 3, trailing: 10))
+        .listRowInsets(EdgeInsets(top: 1, leading: 10 + SidebarView.indent(depth), bottom: 1, trailing: 10))
         .draggable(item.dragKey) {
             Label(item.title, systemImage: item.icon).padding(8)
         }
@@ -380,72 +381,53 @@ extension FolderColor {
     }
 }
 
-/// 资料库里的一条（文件夹、笔记、白板、题集、收藏都用它）：荧光笔一样的浅色圆角条，越深一层颜色越浓一点，但一直是浅色。
-/// 选中时左边出现一块深色，圆点（图标）反成白色，外面一圈同色的框
+/// 资料库里的一条（文件夹、笔记、白板、题集、收藏都用它）：平铺在栏底色上，不给每一行铺颜色。
+/// 文件夹的颜色只留在左边的小图标上；选中的一行是一块淡淡的圆角底色，拖东西到文件夹上时描一圈主色
 struct LibraryBar<Content: View>: View {
     enum Symbol {
-        /// 文件夹的彩色圆点
-        case dot
+        /// 文件夹：一个纯色的文件夹图标，颜色是自己选的那个
+        case folder(Color)
         /// 笔记、白板、题集的小图标
         case icon(String)
         /// 自己带颜色的图标（收藏的星）
         case tinted(String, Color)
     }
 
-    let color: Color
-    let depth: Int
     let selected: Bool
     var targeted = false
     let symbol: Symbol
     @ViewBuilder let content: () -> Content
 
-    /// 浅色有多浓：最外层最淡，每深一层浓一点，到头也还是浅色
-    static func strength(_ depth: Int) -> Double { min(0.16 + 0.07 * Double(max(depth, 0)), 0.44) }
-
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 11, style: .continuous)
-        HStack(spacing: 0) {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
             Group {
                 switch symbol {
-                case .dot:
-                    Circle()
-                        .fill(selected ? AnyShapeStyle(Color.white) : AnyShapeStyle(color.gradient))
-                        .frame(width: 13, height: 13)
+                case .folder(let color):
+                    Image(systemName: "folder.fill").foregroundStyle(color)
                 case .icon(let name):
-                    Image(systemName: name)
-                        .font(.callout)
-                        .foregroundStyle(selected ? AnyShapeStyle(Color.white) : AnyShapeStyle(.secondary))
+                    Image(systemName: name).foregroundStyle(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 case .tinted(let name, let tint):
-                    Image(systemName: name)
-                        .font(.callout)
-                        .foregroundStyle(selected ? Color.white : tint)
+                    Image(systemName: name).foregroundStyle(tint)
                 }
             }
-            .frame(width: 34)
-            .frame(maxHeight: .infinity)
-            .background {
-                if selected {
-                    ZStack { color; Color.black.opacity(0.3) }
-                }
-            }
+            .font(.callout)
+            .frame(width: 30)
             content()
-                .padding(.leading, selected ? 10 : 2)
+                .padding(.leading, 4)
                 .padding(.trailing, 10)
         }
-        .frame(minHeight: 42)
-        .background(color.opacity(Self.strength(depth) + (targeted ? 0.2 : 0)))
-        .clipShape(shape)
+        .padding(.leading, 4)
+        .frame(minHeight: 40)
+        .background(targeted ? Color.accentColor.opacity(0.12) : selected ? Color.primary.opacity(0.08) : Color.clear, in: shape)
         .overlay {
-            if selected || targeted {
-                shape.strokeBorder(color, lineWidth: 1.5)
-                shape.strokeBorder(Color.black.opacity(0.3), lineWidth: 1.5)
-            }
+            if targeted { shape.strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1.5) }
         }
         .contentShape(shape)
     }
 }
 
-/// 一个文件夹：左边彩色圆点，右边里面有几样东西和折叠箭头。点一下选中（右边排出里面的东西），点箭头展开 / 收起，按住出菜单
+/// 一个文件夹：左边带颜色的文件夹图标，右边里面有几样东西和折叠箭头。点一下选中（右边排出里面的东西），点箭头展开 / 收起，按住出菜单
 struct FolderBar: View {
     @EnvironmentObject var store: AppStore
     let folder: Folder
@@ -458,7 +440,7 @@ struct FolderBar: View {
     @State private var targeted = false
 
     var body: some View {
-        LibraryBar(color: folder.tint.color, depth: depth, selected: selected, targeted: targeted, symbol: .dot) {
+        LibraryBar(selected: selected, targeted: targeted, symbol: .folder(folder.tint.color)) {
             HStack(spacing: 6) {
                 Text(folder.name)
                     .font(.body.weight(selected ? .semibold : .medium))
@@ -498,7 +480,7 @@ struct FolderBar: View {
             actions.drop(items, folder.id)
         } isTargeted: { targeted = $0 }
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .listRowInsets(EdgeInsets(top: 3, leading: 10 + SidebarView.indent(depth), bottom: 3, trailing: 10))
+        .listRowInsets(EdgeInsets(top: 1, leading: 10 + SidebarView.indent(depth), bottom: 1, trailing: 10))
     }
 
     @ViewBuilder
@@ -557,7 +539,8 @@ struct BoardRow: View {
             }
             Spacer(minLength: 4)
             Menu { menuItems } label: {
-                Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+                Image(systemName: "ellipsis").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    .frame(width: 28, height: 24).contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .accessibilityLabel("白板操作")
@@ -598,7 +581,8 @@ struct NoteRow: View {
             }
             Spacer(minLength: 4)
             Menu { menuItems } label: {
-                Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+                Image(systemName: "ellipsis").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    .frame(width: 28, height: 24).contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .accessibilityLabel("笔记操作")
@@ -630,7 +614,8 @@ struct SetRow: View {
                 Text(set.title).font(.body.weight(selected ? .semibold : .medium)).lineLimit(2)
                 Spacer(minLength: 4)
                 Menu { menuItems } label: {
-                    Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+                    Image(systemName: "ellipsis").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    .frame(width: 28, height: 24).contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("题集操作")
