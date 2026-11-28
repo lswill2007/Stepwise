@@ -1245,7 +1245,8 @@ struct MarginNotes: View {
     @Binding var selection: UUID?
     /// 点了某个小标签（包括点已经选中的那个），用来重新显示圈选提问的蓝框
     var onSelect: (ChatMessage) -> Void = { _ in }
-    @State private var showCorrectDetail = false
+    /// “对了”的说明默认展开（说明一般不长），学生可以自己点“收起”
+    @State private var showCorrectDetail = true
     @State private var flash = false
     @AppStorage("solutionBelow") private var solutionBelow = false
     private var solutionInMargin: Bool { wide && !solutionBelow }
@@ -1279,7 +1280,7 @@ struct MarginNotes: View {
             // 新的批注到了：翻回最新一条，轻轻闪一下
             .onChange(of: items.last?.id) { _, newID in
                 selection = nil
-                showCorrectDetail = false
+                showCorrectDetail = true
                 guard newID != nil else { return }
                 withAnimation(.easeIn(duration: 0.15)) { flash = true }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -1305,7 +1306,7 @@ struct MarginNotes: View {
         }
     }
 
-    /// 哪些批注下面放“有疑问 / 没学过”：盖住的答案、收起的“对了”说明先不放
+    /// 哪些批注下面放“有疑问 / 没学过”：盖住的答案、被手动收起的“对了”说明先不放
     private func canFollowUp(_ m: ChatMessage) -> Bool {
         switch m.kind {
         case .verdictWrong, .hint, .chat: return true
@@ -1404,7 +1405,7 @@ struct MarginNotes: View {
     private func note(_ message: ChatMessage, in q: Question) -> some View {
         switch message.kind {
         case .verdictCorrect:
-            // 做对了只留一个红勾，点开再看说明
+            // 做对了：红勾下面直接展开说明（一般不长），可以点“收起”
             VStack(alignment: .leading, spacing: 8) {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { showCorrectDetail.toggle() }
