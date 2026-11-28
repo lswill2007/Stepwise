@@ -185,6 +185,7 @@ final class PadCanvasView: PKCanvasView {
         }
         watcher.onAllLifted = { [weak self] in
             guard let self else { return }
+            self.lastLift = CACurrentMediaTime()
             // 写的时候 PencilKit 不重画别处：抬笔后等它画完再拿掉垫在下面的截图
             if !self.redrawCovers.isEmpty { self.armCoverDeadline() }
             guard !self.deferredWork.isEmpty else { return }
@@ -192,6 +193,9 @@ final class PadCanvasView: PKCanvasView {
         }
         return watcher
     }()
+
+    /// 看笔悬在纸上方（Apple Pencil 悬停）：悬着就是马上要落笔
+    private lazy var hoverWatcher: InkHoverWatcher = InkHoverWatcher(target: self, action: #selector(hovered(_:)))
 
     /// 书写手势挂在哪个视图上（笔记的涂鸦层挂在下面的文字上），看触摸的也挂在那里
     private func syncTouchWatcher() {
@@ -201,6 +205,7 @@ final class PadCanvasView: PKCanvasView {
             target.blockScribbleInSubtree()
             InkSurfaces.add(target)
         }
+        if hoverWatcher.view !== target { target.addGestureRecognizer(hoverWatcher) }
         guard touchWatcher.view !== target else { return }
         target.addGestureRecognizer(touchWatcher)
     }
@@ -245,10 +250,10 @@ final class PadCanvasView: PKCanvasView {
     private var deferredWork: [() -> Void] = []
     private var flushScheduled = false
 
-    /// 没在写就马上做；正在写就等这一笔写完再做（到时候再读当时的笔迹，不会把刚写的一笔弄丢）
+    /// 没在写就马上做；正在写就等这一笔写完、PencilKit 把它放进笔迹再做（到时候再读当时的笔迹，不会把刚写的一笔弄丢）
     func whenIdle(_ work: @escaping () -> Void) {
         syncTouchWatcher()
-        if isStroking || !deferredWork.isEmpty {
+        if isStroking || awaitingCommit || !deferredWork.isEmpty {
             deferredWork.append(work)
             scheduleFlush()
         } else {
@@ -257,6 +262,17 @@ final class PadCanvasView: PKCanvasView {
     }
 
     @objc private func strokeGestureChanged(_ gesture: UIGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            reportedDuringEnd = false
+        case .ended, .cancelled:
+            lastLift = CACurrentMediaTime()
+            // 写字的工具才会多出一笔；PencilKit 结束这一笔时当场报告过了就不用等
+            if tool is PKInkingTool, !reportedDuringEnd { unreportedStrokeEnd = lastLift }
+            reportedDuringEnd = false
+        default:
+            break
+        }
         if [.ended, .cancelled, .failed].contains(gesture.state), !deferredWork.isEmpty { scheduleFlush() }
     }
 
@@ -268,9 +284,104 @@ final class PadCanvasView: PKCanvasView {
             guard let self else { return }
             self.flushScheduled = false
             guard !self.isStroking else { return }  // 抬笔（手）时还会再排
+            // 刚抬笔的一笔 PencilKit 还没放进笔迹：等它报告（报告时也会再排），这里隔一会儿再看一次，最多等 commitTimeout
+            guard !self.awaitingCommit else { self.scheduleFlush(); return }
             let work = self.deferredWork
             self.deferredWork = []
             work.forEach { $0() }
+        }
+    }
+
+    // MARK: 刚抬笔、PencilKit 还没把这一笔放进笔迹
+    //
+    // 抬笔以后 PencilKit 要过一会儿才把这一笔放进 drawing、报告笔迹变了（多数时候一两帧，有时一百多毫秒，
+    // 甚至等下一笔落下才报告上一笔）。这段时间里用代码给 drawing 赋值，刚写完的这一笔就没了：
+    // 在屏幕上画出来、一抬笔就消失（录屏里“4”的那一竖就是这样丢的）。所以抬笔以后要等 PencilKit 报告过（或者等够 commitTimeout）才算空闲
+
+    /// 最近一笔抬笔的时间，PencilKit 还没报告这一笔
+    private var unreportedStrokeEnd: CFTimeInterval?
+    /// PencilKit 在书写手势结束的那一下当场就报告了
+    private var reportedDuringEnd = false
+    /// PencilKit 一直不报告（这一笔被它丢掉了、橡皮没擦到东西）也不一直等
+    private static let commitTimeout: CFTimeInterval = 0.6
+
+    /// 抬笔了，PencilKit 还没把这一笔放进笔迹
+    var awaitingCommit: Bool {
+        guard let end = unreportedStrokeEnd else { return false }
+        guard CACurrentMediaTime() - end < Self.commitTimeout else {
+            unreportedStrokeEnd = nil
+            return false
+        }
+        return true
+    }
+
+    /// PencilKit 报告笔迹变了（canvasViewDrawingDidChange，不算代码换的）：抬了笔的那一笔已经放进笔迹。
+    /// 正在写下一笔时报告的是上一笔，正在写的这一笔由 isStroking 管着
+    func drawingReported() {
+        let state = drawingGestureRecognizer.state
+        if state == .ended || state == .cancelled { reportedDuringEnd = true }
+        unreportedStrokeEnd = nil
+        if !deferredWork.isEmpty { scheduleFlush() }
+    }
+
+    // MARK: 停笔以后再整理
+    //
+    // 整理笔画（笔的手感参数、去飞线）要用代码换掉整份笔迹。抬笔后马上换，正好撞上很快接着写的下一笔：
+    // PencilKit 正在换笔迹、重画的那一下落下的一笔，整笔都画不出来（录屏里 5 的横、8 的后半截就是这样没的）。
+    // 所以连着写的时候不动笔迹，等笔停下来（抬笔一会儿、笔也没悬在纸上）再一起整理
+
+    /// 最近一次抬笔（或手指）的时间
+    private var lastLift: CFTimeInterval = 0
+    /// 笔正悬在纸上方
+    private var isHovering = false
+    private var settleWork: [() -> Void] = []
+    private var settleScheduled = false
+
+    /// 抬笔后停多久算停下来
+    private var settleDelay: CFTimeInterval {
+        #if targetEnvironment(simulator)
+        // 模拟器测试：工具一笔一笔地画，中间隔得久，拉长了才能连着写几笔再整理
+        let test = UserDefaults.standard.double(forKey: "inkTestSettleDelay")
+        if test > 0 { return test }
+        #endif
+        return 0.45
+    }
+
+    /// 笔一直悬在纸上方，停这么久也算停下来了（在想下一笔写什么）
+    private static let hoverSettleDelay: CFTimeInterval = 1.2
+
+    /// 笔停下来了：没在写、刚写的一笔已经放进笔迹，抬笔有一会儿了，笔也没悬在纸上（悬着就是马上要写）
+    var isSettled: Bool {
+        guard !isStroking, !awaitingCommit else { return false }
+        let since = CACurrentMediaTime() - lastLift
+        return since >= settleDelay && (!isHovering || since >= max(settleDelay, Self.hoverSettleDelay))
+    }
+
+    /// 等笔停下来再做（换整理过的笔迹）
+    func whenSettled(_ work: @escaping () -> Void) {
+        syncTouchWatcher()
+        settleWork.append(work)
+        scheduleSettle()
+    }
+
+    private func scheduleSettle() {
+        guard !settleScheduled else { return }
+        settleScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            self.settleScheduled = false
+            guard !self.settleWork.isEmpty else { return }
+            guard self.isSettled else { self.scheduleSettle(); return }
+            let work = self.settleWork
+            self.settleWork = []
+            work.forEach { $0() }
+        }
+    }
+
+    @objc private func hovered(_ hover: UIHoverGestureRecognizer) {
+        switch hover.state {
+        case .began, .changed: isHovering = true
+        default: isHovering = false
         }
     }
 
@@ -558,6 +669,21 @@ final class PadCanvasView: PKCanvasView {
         inputAssistantItem.trailingBarButtonGroups = []
         return result
     }
+}
+
+/// 只看不拦：笔悬在纸上方。不挡 PencilKit 自己的悬停预览，也不挡别的手势
+final class InkHoverWatcher: UIHoverGestureRecognizer, UIGestureRecognizerDelegate {
+    override init(target: Any?, action: Selector?) {
+        super.init(target: target, action: action)
+        cancelsTouchesInView = false
+        delegate = self
+    }
+
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
 
 /// 只看不拦：记下现在有几支笔、几根能写字的手指落在纸上。自己从不生效，不影响别的手势
@@ -1189,13 +1315,17 @@ final class HandwritingModel: ObservableObject {
         }
     }
 
-    /// 一笔写完（或被取消）时调用：补上写的时候推迟的加长
+    /// 一笔写完（或被取消）时调用：补上写的时候推迟的加长。
+    /// 等 PencilKit 把刚写的这一笔放进笔迹再改画布大小，否则这一笔会在抬笔后消失
     func strokeEnded() {
         guard pendingHeight != nil else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, !self.strokeInProgress, let pending = self.pendingHeight else { return }
-            self.pendingHeight = nil
-            if pending > self.height { self.height = pending }
+            let apply = { [weak self] in
+                guard let self, !self.strokeInProgress, let pending = self.pendingHeight else { return }
+                self.pendingHeight = nil
+                if pending > self.height { self.height = pending }
+            }
+            if let canvas = self?.canvas { canvas.whenIdle(apply) } else { apply() }
         }
     }
 
@@ -1449,7 +1579,7 @@ struct NotebookCanvas: UIViewRepresentable {
         /// 下一笔写完时会连它一起放回来，蓝圈就一直留在纸上。认出来就再拿掉
         private var discardedCircles: [CircleKey] = []
 
-        private struct CircleKey: Equatable {
+        private struct CircleKey: Hashable {
             let created: Date
             let points: Int
             init(_ stroke: PKStroke) {
@@ -1481,6 +1611,8 @@ struct NotebookCanvas: UIViewRepresentable {
             guard let pad = canvasView as? PadCanvasView else { return }
             // 我们自己用代码换笔迹（整理后的笔画、撤销 / 重做）：model 已经在 replace 里更新了，不当成用户写的
             guard !applying else { return }
+            // 抬了笔的那一笔 PencilKit 已经放进笔迹了：这之后用代码换笔迹不会再把它弄丢
+            if !pad.isRefreshing { pad.drawingReported() }
             // 恢复的笔迹还没放进去，用户就开始写了：把恢复的笔迹和新写的合在一起
             if let pending = pad.pendingDrawing, penDown {
                 pad.pendingDrawing = nil
@@ -1539,56 +1671,148 @@ struct NotebookCanvas: UIViewRepresentable {
                 model.circled(stroke: stroke)
                 return
             }
-            // 飞线：Apple Pencil 落笔、抬笔的那一下偶尔报来一个离得很远的点，纸上就多出一条拉到远处的笔直细线。
-            // 刚写的这几笔里有的话，把飞出去的点拿掉（见 InkShape.withoutSpikes）
+            // 飞线（Apple Pencil 落笔、抬笔的那一下偶尔报来一个离得很远的点）、笔的手感参数（压力灵敏度、笔尖扁平度、稳定性）：
+            // 刚写的这几笔先记下来，等笔停下来再一起整理（见 tidy）。纸上、model 里先按写出来的样子记
             let oldCount = model.drawing.strokes.count
-            let inking = model.tools.tool == .pen || model.tools.tool == .marker
-            let despiked = byPen && inking && current.strokes.count > oldCount && pad.strokeHadPencil
-                ? Self.withoutSpikes(current, from: oldCount, scale: pad.zoomScale)?.drawing : nil
-            // 笔的手感参数（压力灵敏度、笔尖扁平度、稳定性）：把刚写的这一笔重新整理
-            let base = despiked ?? current
-            let shaped = byPen && model.tools.shapesPenStrokes && base.strokes.count == oldCount + 1
-                ? Self.shaped(base, tools: model.tools) : nil
-            if let target = shaped ?? despiked {
-                let before = model.drawing
-                // 先按纸上的样子记下；换成整理后的笔画时再记一次
-                model.drawingChanged(current)
-                DispatchQueue.main.async { [weak self] in
-                    pad.whenIdle { [weak self] in
-                        guard let self else { return }
-                        // PencilKit 晚报了这一笔、等到下一笔写完才轮到这里：纸上已经多了别的笔画，
-                        // 再换成当时整理好的样子会把后来写的弄丢，撤销记录最上面也不再是这一笔。这一笔就不整理了；
-                        // 飞线还是要拿掉，只动有飞线的那几笔。一次报来好几笔时也一样（撤销记录里不止一条）
-                        guard pad.paperDrawing == current, current.strokes.count == oldCount + 1 || despiked == nil else {
-                            if despiked != nil { self.removeSpikes(pad, from: oldCount) }
-                            return
-                        }
-                        if despiked != nil {
-                            // 带飞线的原样那一笔，PencilKit 以后要是又放回来（和圈出来问的圈一样），认出来再拿掉
-                            Self.withoutSpikes(current, from: oldCount, scale: pad.zoomScale)?.originals.forEach(self.discard)
-                            // 过一会儿逼画布整个重画一遍（见 repaintSoon）
-                            self.repaintSoon(pad)
-                        }
-                        // 整笔就是一条飞线，拿掉以后和写之前一样：放回写之前的笔迹，不留撤销记录
-                        guard target.strokes.count > before.strokes.count else {
-                            self.replace(pad, with: before, undoTo: before, droppingPencilKitUndo: true, registersUndo: false)
-                            return
-                        }
-                        // 先换成整理后的笔画，再把 PencilKit 记下的“加了原来那一笔”拿掉：
-                        // 以前先撤销再放回，中间有一两帧这一笔不见了，写完一笔字就闪一下。
-                        // 原来那一笔已经不在纸上，撤销它什么也不会改，只是从撤销记录里拿掉
-                        self.replace(pad, with: target, undoTo: before, droppingPencilKitUndo: true)
-                    }
+            if byPen, current.strokes.count > oldCount {
+                let inking = model.tools.tool == .pen || model.tools.tool == .marker
+                let despike = inking && pad.strokeHadPencil
+                let shape = model.tools.shapesPenStrokes
+                if despike || shape {
+                    untidy.append(contentsOf: current.strokes[oldCount...].map {
+                        TidyItem(key: CircleKey($0), despike: despike, shape: shape)
+                    })
+                    if untidy.count > 400 { untidy.removeFirst(untidy.count - 400) }
+                    scheduleTidy(pad)
                 }
-                return
             }
             model.drawingChanged(current)
             dropReturnedCircle()
         }
 
+        // MARK: 停笔以后整理刚写的笔画
+        //
+        // 以前每写完一笔马上换成整理过的样子。换笔迹要把整份笔迹交给 PencilKit，正好撞上很快接着写的下一笔：
+        // 下一笔还没放进笔迹就被换掉（写出来、一抬笔就消失），或者落笔时 PencilKit 正在换、整笔画不出来 ——
+        // 连着写数字时“4 少一竖、5 少一横”就是这么来的。现在连着写的时候一笔也不动，笔停下来再把这几笔一起换掉
+
+        /// 写下以后还没整理的一笔：要不要去飞线、要不要按笔的手感参数重新生成（看写的时候用的工具）
+        private struct TidyItem {
+            let key: CircleKey
+            let despike: Bool
+            let shape: Bool
+        }
+
+        private var untidy: [TidyItem] = []
+        private var tidyQueued = false
+
+        private func scheduleTidy(_ pad: PadCanvasView) {
+            guard !tidyQueued else { return }
+            tidyQueued = true
+            pad.whenSettled { [weak self, weak pad] in
+                guard let self else { return }
+                self.tidyQueued = false
+                guard let pad else { self.untidy = []; return }
+                self.tidy(pad)
+            }
+        }
+
+        /// 笔停下来了：刚写的这几笔去掉飞线、按笔的手感参数重新生成，一次换上去。
+        /// 撤销照样一笔一笔地撤：PencilKit 记的“加了原来那一笔”拿掉，换成自己记的，每一步撤掉一笔
+        private func tidy(_ pad: PadCanvasView) {
+            let items = untidy
+            untidy = []
+            let shown = pad.paperDrawing
+            guard !items.isEmpty, !shown.strokes.isEmpty else { return }
+            var wanted: [CircleKey: TidyItem] = [:]
+            for item in items { wanted[item.key] = item }
+            // 纸上还在的这几笔（擦掉了的不管）
+            let found = shown.strokes.indices.filter { wanted[CircleKey(shown.strokes[$0])] != nil }
+            guard let first = found.first else { return }
+            // 这几笔连成纸上最后一段（后面没有别的笔画）：撤销记录最上面就是 PencilKit 记的这几笔，能换成自己记的一笔一步。
+            // 不是的话（中间框选挪过、后面又写了不整理的笔画）笔的手感就不整理了（撤销记不对），飞线照样拿掉
+            let isTail = found.count == shown.strokes.count - first
+            var strokes = shown.strokes
+            var originals: [PKStroke] = []
+            var changed = false
+            for i in found {
+                guard let item = wanted[CircleKey(strokes[i])] else { continue }
+                var stroke = strokes[i]
+                if item.despike, let cleaned = Self.withoutSpikes(stroke, scale: pad.zoomScale) {
+                    originals.append(stroke)
+                    stroke = cleaned
+                    changed = true
+                }
+                if item.shape, isTail, let reshaped = Self.shaped(stroke, tools: model.tools) {
+                    stroke = reshaped
+                    changed = true
+                }
+                strokes[i] = stroke
+            }
+            guard changed else { return }
+            var target = shown
+            target.strokes = strokes
+            // 带飞线的原样那一笔，PencilKit 以后要是又放回来（和圈出来问的圈一样），认出来再拿掉；
+            // 过一会儿逼画布整个重画一遍（见 repaintSoon）
+            originals.forEach(discard)
+            if !originals.isEmpty { repaintSoon(pad) }
+            // 换之前垫一张截图（先藏着）：PencilKit 重画好之前又落笔写下一笔时露出来，刚写的字也不会消失。
+            // 变了的那几笔在截图上换成新的样子，露出来时和画布上的对得上，不会糊
+            pad.coverWhileRedrawing(visible: pad.showsCoverWhileReshaping, changed: Self.changedBounds(shown, target), becoming: target)
+            guard isTail, let manager = pad.undoManager else {
+                // 只拿掉了飞线：别的笔画原样留着，撤销记录不动
+                applying = true
+                pad.paperDrawing = target
+                applying = false
+                model.drawingChanged(target)
+                return
+            }
+            applying = true
+            pad.paperDrawing = target
+            // 再把 PencilKit 记下的“加了原来那一笔”拿掉：原来的那几笔已经不在纸上，撤销它们什么也不会改，只是从撤销记录里拿掉。
+            // 撤了以后纸上变了（那一步不是这几笔的），马上重做回去、不再往下拿
+            var dropped = 0
+            while dropped < found.count, manager.canUndo,
+                  let name = manager.undoActionName.nilIfEmpty, name == model.tools.pencilKitStrokeUndoName {
+                let before = pad.drawing
+                manager.undo()
+                if pad.drawing != before {
+                    manager.redo()
+                    break
+                }
+                dropped += 1
+            }
+            applying = false
+            model.drawingChanged(target)
+            // 自己记撤销：从写这几笔之前开始，每一步多一笔
+            let kept = Array(shown.strokes[..<first])
+            let tail = Array(strokes[first...])
+            let states = (0...tail.count).map { PKDrawing(strokes: kept + tail.prefix($0)) }
+            registerSteps(on: manager, pad, states)
+        }
+
+        /// 记下一串撤销：撤一次回到上一个样子（少一笔），重做再放回来。每一步单独成组，撤销一次只撤一笔。
+        /// 撤销管理器整个窗口共用：这一轮已经有别的改动开着组，就只能并在那一组里
+        private func registerSteps(on manager: UndoManager, _ pad: PadCanvasView, _ states: [PKDrawing]) {
+            guard states.count > 1 else { return }
+            let separate = manager.groupingLevel == 0
+            let byEvent = manager.groupsByEvent
+            if separate { manager.groupsByEvent = false }
+            for k in 1..<states.count {
+                if separate { manager.beginUndoGrouping() }
+                let previous = states[k - 1], drawing = states[k]
+                // 不要拉着画布不放（关掉的页面、白板的画布一直留在内存里）
+                manager.registerUndo(withTarget: self) { [weak pad] coordinator in
+                    guard let pad else { return }
+                    coordinator.replace(pad, with: previous, undoTo: drawing)
+                }
+                if separate { manager.endUndoGrouping() }
+            }
+            if separate { manager.groupsByEvent = byEvent }
+        }
+
         /// 用代码换掉画布上的笔迹，PencilKit 不会记撤销，自己记：撤销回到写这一笔之前，重做再放回来
-        private func replace(_ canvasView: PadCanvasView, with drawing: PKDrawing, undoTo previous: PKDrawing,
-                             droppingPencilKitUndo: Bool = false, registersUndo: Bool = true) {
+        private func replace(_ canvasView: PadCanvasView, with drawing: PKDrawing, undoTo previous: PKDrawing) {
             let undoManager = canvasView.undoManager
             // 换之前垫一张截图（先藏着）：PencilKit 重画好之前又落笔写下一笔时露出来，刚写的字也不会消失。
             // 变了的那几笔在截图上换成新的样子，露出来时和画布上的对得上，不会糊
@@ -1596,34 +1820,13 @@ struct NotebookCanvas: UIViewRepresentable {
                                            becoming: drawing)
             applying = true
             canvasView.paperDrawing = drawing
-            if droppingPencilKitUndo, let undoManager, undoManager.canUndo {
-                if let name = undoManager.undoActionName.nilIfEmpty { model.tools.pencilKitStrokeUndoName = name }
-                undoManager.undo()
-            }
             applying = false
             model.drawingChanged(drawing)
-            guard registersUndo else { return }
             // 撤销记录在整个窗口共用的撤销管理器里：不要拉着画布不放（关掉的页面、白板的画布一直留在内存里）
             undoManager?.registerUndo(withTarget: self) { [weak canvasView] coordinator in
                 guard let canvasView else { return }
                 coordinator.replace(canvasView, with: previous, undoTo: drawing)
             }
-        }
-
-        /// 飞线晚了一步才轮到处理（后面又写了别的）：只把那几笔里飞出去的点拿掉，别的笔画原样留着，撤销记录不动
-        private func removeSpikes(_ canvasView: PadCanvasView, from start: Int) {
-            let shown = canvasView.paperDrawing
-            guard let (cleaned, originals) = Self.withoutSpikes(shown, from: min(start, shown.strokes.count),
-                                                                scale: canvasView.zoomScale) else { return }
-            // PencilKit 心里还记着带飞线的原样那一笔，下一笔写完时可能连它一起放回来：认出来再拿掉（和圈出来问的圈一样）
-            originals.forEach(discard)
-            canvasView.coverWhileRedrawing(visible: canvasView.showsCoverWhileReshaping,
-                                           changed: Self.changedBounds(shown, cleaned), becoming: cleaned)
-            applying = true
-            canvasView.paperDrawing = cleaned
-            applying = false
-            model.drawingChanged(cleaned)
-            repaintSoon(canvasView)
         }
 
         /// 拿掉飞线以后，过一会儿逼 PencilKit 把整块画布重画一遍。
@@ -1634,32 +1837,18 @@ struct NotebookCanvas: UIViewRepresentable {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak canvasView] in canvasView?.refreshRendering() }
         }
 
-        /// 第 start 笔以后的笔画里飞出去的点拿掉（见 InkShape.withoutSpikes），整笔都是飞线的拿掉这一笔；没有飞线返回 nil。
-        /// scale：画布的缩放，远近、快慢都按屏幕上的算。originals：改动过的那几笔原来的样子
-        static func withoutSpikes(_ drawing: PKDrawing, from start: Int, scale: CGFloat) -> (drawing: PKDrawing, originals: [PKStroke])? {
-            var strokes = drawing.strokes
-            guard start >= 0, start < strokes.count else { return nil }
+        /// 一笔里飞出去的点拿掉（见 InkShape.withoutSpikes）；没有飞线返回 nil。
+        /// scale：画布的缩放，远近、快慢都按屏幕上的算
+        static func withoutSpikes(_ stroke: PKStroke, scale: CGFloat) -> PKStroke? {
             let zoom = scale > 0 ? scale : 1
-            var originals: [PKStroke] = []
-            for i in (start..<strokes.count).reversed() {
-                let stroke = strokes[i]
-                let points = Array(stroke.path)
-                let samples = points.map {
-                    InkShape.Sample(location: CGPoint(x: $0.location.x * zoom, y: $0.location.y * zoom), time: $0.timeOffset)
-                }
-                guard let keep = InkShape.withoutSpikes(samples) else { continue }
-                originals.append(stroke)
-                if keep.isEmpty {
-                    strokes.remove(at: i)
-                } else {
-                    let path = PKStrokePath(controlPoints: keep.map { points[$0] }, creationDate: stroke.path.creationDate)
-                    strokes[i] = PKStroke(ink: stroke.ink, path: path, transform: stroke.transform, mask: stroke.mask)
-                }
+            let points = Array(stroke.path)
+            let samples = points.map {
+                InkShape.Sample(location: CGPoint(x: $0.location.x * zoom, y: $0.location.y * zoom), time: $0.timeOffset)
             }
-            guard !originals.isEmpty else { return nil }
-            var result = drawing
-            result.strokes = strokes
-            return (result, originals)
+            // 去掉以后至少还剩两个点（整笔绝不删掉）
+            guard let keep = InkShape.withoutSpikes(samples), keep.count >= 2 else { return nil }
+            let path = PKStrokePath(controlPoints: keep.map { points[$0] }, creationDate: stroke.path.creationDate)
+            return PKStroke(ink: stroke.ink, path: path, transform: stroke.transform, mask: stroke.mask)
         }
 
         /// 两份笔迹里不一样的笔画占的地方（前面一样的笔画跳过）；变的太多就不算（返回 nil）
@@ -1676,9 +1865,8 @@ struct NotebookCanvas: UIViewRepresentable {
             return changed.reduce(CGRect.null) { $0.union($1.renderBounds) }
         }
 
-        /// 按笔的手感参数重新生成最后一笔
-        static func shaped(_ drawing: PKDrawing, tools: InkTools) -> PKDrawing? {
-            guard let stroke = drawing.strokes.last else { return nil }
+        /// 按笔的手感参数重新生成一笔（写下的时间、点数不变）
+        static func shaped(_ stroke: PKStroke, tools: InkTools) -> PKStroke? {
             let original = Array(stroke.path)
             guard original.count > 1 else { return nil }
             let points = original.map { InkShape.Point(location: $0.location, force: $0.force, size: $0.size.width) }
@@ -1693,9 +1881,7 @@ struct NotebookCanvas: UIViewRepresentable {
                                      opacity: p.opacity, force: p.force, azimuth: p.azimuth, altitude: p.altitude)
             }
             let path = PKStrokePath(controlPoints: newPoints, creationDate: stroke.path.creationDate)
-            var result = drawing
-            result.strokes[result.strokes.count - 1] = PKStroke(ink: stroke.ink, path: path, transform: stroke.transform, mask: stroke.mask)
-            return result
+            return PKStroke(ink: stroke.ink, path: path, transform: stroke.transform, mask: stroke.mask)
         }
 
         // iPadOS 17.0–17.4
