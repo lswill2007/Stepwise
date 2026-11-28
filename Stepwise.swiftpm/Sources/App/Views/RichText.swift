@@ -390,18 +390,160 @@ enum MathTemplate {
       return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
-    // 模型常把表格列格式里的竖线写成 \|（Markdown 表格里转义竖线的习惯），KaTeX 不认，整段会报错变红：改回 |
+    // KaTeX 没有、模型又常写的命令（多是别的宏包或 MathJax 的）：换成 KaTeX 认识的写法，不让整段公式报错
+    var MACROS = {
+      "\\celsius": "\\degree\\text{C}", "\\degreeCelsius": "\\degree\\text{C}", "\\textcelsius": "\\degree\\text{C}",
+      "\\textdegree": "\\degree", "\\ohm": "\\Omega", "\\micro": "\\mu", "\\upmu": "\\mu", "\\textmu": "\\mu", "\\uppi": "\\pi",
+      "\\angstrom": "\\text{Å}", "\\permil": "\\text{‰}", "\\textperthousand": "\\text{‰}", "\\euro": "\\text{€}",
+      "\\textdollar": "\\$", "\\textbackslash": "\\backslash",
+      "\\unit": "\\mathrm{#1}", "\\si": "\\mathrm{#1}", "\\SI": "#1\\,\\mathrm{#2}", "\\num": "#1",
+      "\\xlongrightarrow": "\\xrightarrow{#1}", "\\xlongleftarrow": "\\xleftarrow{#1}", "\\xlongleftrightarrow": "\\xleftrightarrow{#1}",
+      "\\longequal": "=\\!=", "\\joinrel": "\\mathrel{\\mkern-3mu}",
+      "\\mbox": "\\text{#1}", "\\textsc": "\\text{#1}", "\\textsuperscript": "^{\\text{#1}}", "\\textsubscript": "_{\\text{#1}}",
+      "\\label": "\\@secondoftwo{#1}{}", "\\require": "\\@secondoftwo{#1}{}", "\\vspace": "\\@secondoftwo{#1}{}",
+      "\\ref": "\\text{(#1)}", "\\eqref": "\\text{(#1)}",
+      "\\dif": "\\mathrm{d}", "\\dd": "\\mathrm{d}", "\\abs": "\\left|#1\\right|", "\\norm": "\\left\\|#1\\right\\|",
+      "\\dv": "\\frac{\\mathrm{d}#1}{\\mathrm{d}#2}", "\\pdv": "\\frac{\\partial #1}{\\partial #2}",
+      "\\vb": "\\mathbf{#1}", "\\va": "\\vec{\\mathbf{#1}}", "\\vu": "\\hat{\\mathbf{#1}}",
+      "\\grad": "\\nabla", "\\curl": "\\nabla\\times", "\\expval": "\\langle #1\\rangle", "\\qq": "\\quad\\text{#1}\\quad",
+      "\\Q": "\\mathbb{Q}", "\\mathbbm": "\\mathbb{#1}", "\\mathds": "\\mathbb{#1}", "\\textbb": "\\mathbb{#1}",
+      "\\mathbold": "\\boldsymbol{#1}", "\\overbar": "\\overline{#1}", "\\dddot": "\\overset{\\boldsymbol{\\cdot\\!\\cdot\\!\\cdot}}{#1}",
+      "\\overarc": "\\overset{\\frown}{#1}", "\\wideparen": "\\overset{\\frown}{#1}", "\\widearc": "\\overset{\\frown}{#1}",
+      "\\arc": "\\overset{\\frown}{#1}", "\\overparen": "\\overset{\\frown}{#1}", "\\underparen": "\\underset{\\smile}{#1}",
+      "\\parallelogram": "\\text{▱}", "\\divides": "\\mid", "\\cross": "\\times", "\\circled": "\\textcircled{#1}",
+      "\\enclose": "\\@secondoftwo{#1}{\\boxed{#2}}", "\\multicolumn": "\\@secondoftwo{#1#2}{#3}", "\\cline": "\\@secondoftwo{#1}{\\hline}",
+      "\\pmatrix": "\\begin{pmatrix}#1\\end{pmatrix}", "\\matrix": "\\begin{matrix}#1\\end{matrix}",
+      "\\cases": "\\begin{cases}#1\\end{cases}", "\\eqalign": "\\begin{aligned}#1\\end{aligned}",
+      "\\hfill": "\\quad", "\\par": "", "\\bigskip": "", "\\medskip": "", "\\smallskip": "", "\\centering": "", "\\noindent": "",
+      "\\strut": "", "\\boldmath": "", "\\mit": "", "\\sl": "", "\\sc": "", "\\em": "", "\\oldstyle": ""
+    };
+    ["lcm", "arccot", "arcsec", "arccsc", "sgn", "rank", "tr", "diag", "Var", "Cov", "sech", "csch", "arsinh", "arcosh", "artanh"].forEach(function (n) {
+      MACROS["\\" + n] = "\\operatorname{" + n + "}";
+    });
+
+    // 后面直接跟上下标、撇号会让 KaTeX 整段报错的空白命令（如 25\,^\circ\mathrm{C}）
+    var SPACE_CMD = /^\\(?:[,;:!>]|quad|qquad|enspace|enskip|thinspace|medspace|thickspace|negthinspace|negmedspace|negthickspace|relax|nobreak|allowbreak)$/;
+    // 只能独占一行的环境和 \tag：写在行内公式里也按独立公式排
+    var DISPLAY_ONLY = /\\begin\{(?:align|alignat|gather|equation|split|multline|eqnarray|CD)\*?\}|\\tag\*?\s*\{/;
+    // 排不出来、只好显示原文的公式个数（Tools/check_math.js 检查用）
+    var MATH_FAILS = 0;
+
+    var KNOWN_CMD = {};
+    function knownCmd(name) {
+      if (name in KNOWN_CMD) return KNOWN_CMD[name];
+      var ok = ("\\" + name) in MACROS;
+      if (!ok) {
+        try { katex.renderToString("\\" + name, { throwOnError: true, strict: "ignore" }); ok = true; }
+        catch (e) { ok = !/Undefined control sequence/.test(String(e && e.message)); }
+      }
+      return (KNOWN_CMD[name] = ok);
+    }
+
+    // 把模型常见的、KaTeX 不认的写法改成它认的（不改变意思）
     function fixTex(tex) {
-      return tex.replace(/\\begin\{(array|tabular)\}\{([^}]*)\}/g, function (m, env, spec) {
-        return "\\begin{" + env + "}{" + spec.replace(/\\\|/g, "|") + "}";
+      // JSON 转义弄坏的命令：\frac 的 \f 成了换页符、\beta 的 \b 成了退格符、\times 的 \t 成了制表符、\rho 的 \r 成了回车
+      tex = tex.replace(/\u000c/g, "\\f").replace(/\u0008/g, "\\b")
+        .replace(/\t(?=(?:imes|ext|extbf|heta|an|riangle|frac|au|ilde|herefore|o)(?![a-zA-Z]))/g, "\\t")
+        .replace(/\r(?=(?:ho|ight|ightarrow|angle)(?![a-zA-Z]))/g, "\\r");
+      // 反斜杠全写成了两个（\\frac、25\\,^\\circ）：没有一个正常的命令，又有 \\ 加命令名，整段还原
+      if (!/(^|[^\\])(\\\\)*\\[a-zA-Z]/.test(tex)) {
+        var doubled = false;
+        tex.replace(/\\\\([a-zA-Z]{2,})/g, function (m, n) { if (knownCmd(n)) doubled = true; return m; });
+        if (doubled) tex = tex.replace(/\\\\/g, "\\");
+      }
+      tex = tex.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+      // \text{…} 里的 _ ^ & 是普通字符；间隔号（kg·m）在文字里 KaTeX 排不了，换成公式里的点；^\circ 是度
+      tex = tex.replace(/\\(text|textbf|textit|textrm|textsf|texttt|textnormal|textup|mbox)\s*\{([^{}$]*)\}/g, function (m, cmd, body) {
+        body = body.replace(/\^\s*(?:\\circ(?![a-zA-Z])|\{\s*\\circ\s*\})\s*/g, "°");
+        return "\\" + cmd + "{" + body.replace(/\\[^]|[_^&·⋅]/g, function (c) {
+          return c === "_" ? "\\_" : c === "&" ? "\\&" : c === "^" ? "\\textasciicircum{}" : c === "·" || c === "⋅" ? "$\\cdot$" : c;
+        }) + "}";
       });
+      tex = tex.replace(/\\DeclareMathOperator\*?\s*\{\s*(\\[a-zA-Z]+)\s*\}\s*\{([^{}]*)\}/g, "\\def$1{\\operatorname{$2}}");
+      var defs = /\\(?:def|gdef|edef|xdef|newcommand|renewcommand|providecommand)(?![a-zA-Z])/.test(tex);
+      // 一个个命令看过去（\\ 是一个整体，\\,^ 里的逗号不是 \,）
+      tex = tex.replace(/\\(?:[a-zA-Z]+|[^])|[%#]/g, function (m, at, all) {
+        // 百分号是 TeX 的注释，后面的内容会悄悄丢掉；# 只在定义命令时有用
+        if (m === "%") return "\\%";
+        // （反斜杠和 # 分开写：这段代码放在 Swift 的原始字符串里，连着写会被 Swift 当成转义，整页脚本就坏了）
+        if (m === "#") return defs ? "#" : "\\" + "#";
+        if (SPACE_CMD.test(m) && /^\s*[\^_']/.test(all.slice(at + m.length))) return m + "{}";
+        return m;
+      });
+      tex = tex.replace(/(\\hspace\*?\s*\{[^{}]*\})(?=\s*[\^_'])/g, "$1{}");
+      // KaTeX 没有的环境换成有的
+      tex = tex.replace(/\\(begin|end)\{tabular\}/g, "\\$1{array}")
+        .replace(/\\(begin|end)\{multline(\*?)\}/g, "\\$1{gather$2}")
+        .replace(/\\(?:begin|end)\{(?:center|flushleft|flushright)\}/g, "");
+      if (/\\begin\{eqnarray\*?\}/.test(tex)) {
+        tex = tex.replace(/\\(begin|end)\{eqnarray\*?\}/g, "\\$1{aligned}").replace(/&\s*(=|<|>|\\[a-zA-Z]+)\s*&/g, "&$1");
+      }
+      // 模型常把表格列格式里的竖线写成 \|（Markdown 表格里转义竖线的习惯），KaTeX 不认：改回 |
+      return tex.replace(/\\begin\{array\}\{([^}]*)\}/g, function (m, spec) {
+        return "\\begin{array}{" + spec.replace(/\\\|/g, "|") + "}";
+      });
+    }
+
+    // 没合上的 {、\left、\begin{…} 在末尾补上
+    function closeOpen(tex) {
+      var stack = [];
+      tex.replace(/\\(?:begin|end)\{([a-zA-Z*]+)\}|\\(?:left|right)(?![a-zA-Z])|\\[^]|[{}]/g, function (m, env) {
+        var open = m === "{" || m === "\\left" || m.indexOf("\\begin") === 0;
+        if (open) { stack.push(m === "{" ? "}" : m === "\\left" ? "\\right." : "\\end{" + env + "}"); return m; }
+        var close = m === "}" ? "}" : m === "\\right" ? "\\right." : m.indexOf("\\end") === 0 ? m : null;
+        if (close && stack.length && stack[stack.length - 1] === close) stack.pop();
+        return m;
+      });
+      return tex + stack.reverse().join("");
+    }
+
+    // KaTeX 报错了：按错误改一处再试。每种改法只用一次；没有办法了返回 null
+    function repair(tex, msg, macros, used) {
+      var m, pos = (m = msg.match(/at position (\d+)/)) ? m[1] - 1 : -1;
+      function once(key) { if (used[key]) return false; used[key] = 1; return true; }
+      // 不认识的命令：只把这个命令显示成它的名字，公式其余部分照常排
+      // （\operatorname 在 \text{…} 里不能用，那里换成 \text）
+      if ((m = msg.match(/Undefined control sequence: (\\[a-zA-Z@]+)/)) || (/text mode/.test(msg) && used.last && (m = [0, used.last]))) {
+        used[m[1]] = (used[m[1]] || 0) + 1;
+        if (used[m[1]] > 2) return null;
+        used.last = m[1];
+        macros[m[1]] = (used[m[1]] === 1 && !knownCmd(m[1].slice(1)) ? "\\operatorname{" : "\\text{") + m[1].slice(1).replace(/@/g, "") + "}";
+        return tex;
+      }
+      if (/unknown type/.test(msg) && once("script")) return tex.replace(/(\\[a-zA-Z]+|\\[^a-zA-Z]|\})(\s*[\^_'])/g, "$1{}$2");
+      if (/Limit controls/.test(msg) && once("limits")) return tex.replace(/\\(?:no)?limits(?![a-zA-Z])/g, "");
+      if ((m = msg.match(/No such environment: ([a-zA-Z*]+)/)) && once("env" + m[1])) {
+        return tex.split("\\begin{" + m[1] + "}").join("").split("\\end{" + m[1] + "}").join("").replace(/\\item(?![a-zA-Z])/g, "\\\\ ");
+      }
+      if (/Double (super|sub)script/.test(msg) && pos >= 0 && once("double")) return tex.slice(0, pos) + "{}" + tex.slice(pos);
+      if (/Expected 'EOF', got '&'/.test(msg) && tex.indexOf("\\begin{") < 0 && once("amp")) {
+        // 没写环境的多行对齐：包进 aligned；单独一个 & 当普通字符
+        if (/\\\\|&\s*=/.test(tex)) return "\\begin{aligned}" + tex + "\\end{aligned}";
+        return tex.replace(/\\[^]|&/g, function (c) { return c === "&" ? "\\&" : c; });
+      }
+      if (/Expected 'EOF', got '\}'/.test(msg) && pos >= 0 && tex.charAt(pos) === "}") {
+        used.brace = (used.brace || 0) + 1;
+        if (used.brace <= 3) return tex.slice(0, pos) + tex.slice(pos + 1);
+      }
+      if (/Expected 'EOF', got '\\right'/.test(msg) && once("right")) return "\\left." + tex;
+      if (/Expected 'EOF', got '\\end'/.test(msg) && pos >= 0 && once("end")) return tex.slice(0, pos) + tex.slice(pos).replace(/^\\end\{[^}]*\}/, "");
+      if (/Expected group after/.test(msg) && once("group")) return tex.replace(/([\^_])(\s*)$/, "$1{}$2").replace(/([\^_])(\s*[}&\\])/g, "$1{}$2");
+      if (/end of input|got 'EOF'/.test(msg) && once("close")) { var closed = closeOpen(tex); if (closed !== tex) return closed; }
+      return null;
     }
 
     function math(tex, display) {
       if (READY && window.katex) {
-        try {
-          return katex.renderToString(fixTex(tex), { displayMode: display, throwOnError: false, strict: "ignore", output: "html" });
-        } catch (e) {}
+        var t = fixTex(tex), macros = Object.assign({}, MACROS), used = {};
+        for (var k = 0; k < 16 && t != null; k++) {
+          try {
+            return katex.renderToString(t, { displayMode: display, throwOnError: true, strict: "ignore", output: "html", macros: macros });
+          } catch (e) {
+            var msg = String((e && e.message) || e);
+            if (!display && /display/.test(msg)) display = true; else t = repair(t, msg, macros, used);
+          }
+        }
+        MATH_FAILS++;
       }
       return '<span class="tex">' + esc(display ? "$$" + tex + "$$" : "$" + tex + "$") + "</span>";
     }
@@ -420,7 +562,7 @@ enum MathTemplate {
       });
       // 行内公式用 \u0002 标记，独立公式用 \u0003 标记（独立公式两侧不再额外换行）
       // 公式里放回 \$（KaTeX 的美元符号命令），正文里放回 $
-      function put(t, d) { maths.push([t.replace(/\u0004/g, "\\$"), d]); var k = d ? "\u0003" : "\u0002"; return k + (maths.length - 1) + k; }
+      function put(t, d) { d = d || DISPLAY_ONLY.test(t); maths.push([t.replace(/\u0004/g, "\\$"), d]); var k = d ? "\u0003" : "\u0002"; return k + (maths.length - 1) + k; }
       // 转义的美元符号 \$（如 \$50）是金额不是公式边界：先换成 \u0004 藏起来（\\$ 是换行加公式边界，不算）
       src = src.replace(/(?<!\\)((?:\\\\)*)\\\$/g, "$1\u0004");
       src = src

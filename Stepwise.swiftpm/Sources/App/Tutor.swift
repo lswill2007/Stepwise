@@ -723,14 +723,23 @@ enum Tutor {
             ("\\leqslant", "≤"), ("\\geqslant", "≥"), ("\\leq", "≤"), ("\\geq", "≥"), ("\\le", "≤"), ("\\ge", "≥"),
             ("\\neq", "≠"), ("\\ne", "≠"), ("\\pm", "±"), ("\\infty", "∞"), ("\\pi", "π"), ("\\alpha", "α"),
             ("\\beta", "β"), ("\\theta", "θ"), ("\\angle", "∠"), ("\\triangle", "△"), ("\\circ", "°"),
-            ("\\sqrt", "√"), ("\\in", "∈"), ("\\rightarrow", "→"), ("\\to", "→"), ("\\quad", " "), ("\\,", " "),
+            ("\\sqrt", "√"), ("\\int", "∫"), ("\\in", "∈"), ("\\rightarrow", "→"), ("\\to", "→"), ("\\quad", " "), ("\\,", " "),
+            ("\\;", " "), ("\\:", " "), ("\\>", " "), ("\\!", ""),
             ("$$", " "), ("$", ""), ("\\(", ""), ("\\)", ""), ("\\[", ""), ("\\]", "")
         ]
-        for (a, b) in replacements { s = s.replacingOccurrences(of: a, with: b) }
+        for (a, b) in replacements {
+            // 以字母结尾的命令后面不能还是字母：\in 不能把 \int、\inf 的开头换掉
+            if a.last?.isLetter == true {
+                s = s.replacingOccurrences(of: NSRegularExpression.escapedPattern(for: a) + "(?![A-Za-z])",
+                                           with: NSRegularExpression.escapedTemplate(for: b), options: .regularExpression)
+            } else {
+                s = s.replacingOccurrences(of: a, with: b)
+            }
+        }
         s = s.replacingOccurrences(of: "\\\\[dt]?frac\\{([^{}]*)\\}\\{([^{}]*)\\}", with: "$1/$2", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\\\[dt]?frac(\\d)(\\d)", with: "$1/$2", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\\\(ce|text|mathrm|mathbf|vec|overline|boldsymbol)\\{([^{}]*)\\}", with: "$2", options: .regularExpression)
-        s = s.replacingOccurrences(of: "\\\\(sin|cos|tan|cot|sec|csc|log|ln|lg|lim|max|min|exp)(?![A-Za-z])", with: "$1", options: .regularExpression)
+        s = s.replacingOccurrences(of: "\\\\(arcsin|arccos|arctan|sinh|cosh|tanh|sin|cos|tan|cot|sec|csc|log|ln|lg|lim|max|min|exp|det|gcd)(?![A-Za-z])", with: "$1", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\\\[a-zA-Z]+", with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: "[{}]", with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\*\\*", with: "", options: .regularExpression)

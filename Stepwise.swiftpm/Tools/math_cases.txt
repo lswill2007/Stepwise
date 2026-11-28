@@ -1,0 +1,663 @@
+25\,^\circ\mathrm{C}
+25\;^\circ C
+25\:^\circ C
+25\>^2
+25\!^2
+25\quad^2
+25\qquad^2
+25\enspace^2
+25\ ^\circ C
+25~^\circ C
+x\,_1
+\,^{14}_{6}\mathrm{C}
+25\thinspace^2
+25\medspace^2
+25\thickspace^2
+25\negthinspace^2
+25\hspace{1em}^2
+25\kern1em^2
+25\mskip3mu^2
+25\nobreak^2
+25\allowbreak^2
+25\relax^2
+x\limits^2
+\displaystyle^2
+25^\circ\text{C}
+25\,\mathrm{^\circ C}
+25\,\text{°C}
+25\,\text{℃}
+25℃
+25°C
+25\degree
+25\celsius
+25\,\degreeCelsius
+25\textdegree C
+25\textcelsius
+5\ohm
+5\,\Omega
+5\micro m
+5\,\mu\text{m}
+5\,\text{μm}
+5\,\upmu\mathrm{m}
+\uppi
+5\AA
+5\angstrom
+5‰
+5\permil
+5\textperthousand
+50\%
+\$50
+¥50
+\yen 50
+€50
+\euro 50
+\pounds 50
+\unit{m/s}
+\SI{5}{m/s}
+\si{m/s}
+\num{1.2e3}
+\qty{5}{m}
+\pu{1.2e3 kJ/mol}
+\ce{H2O}
+\ce{2H2 + O2 ->[点燃] 2H2O}
+\ce{CaCO3 v}
+\ce{^{14}_{6}C}
+\ce{Fe^3+}
+\ce{A <=> B}
+\ce{2KClO3 ->[MnO2][\Delta] 2KCl + 3O2 ^}
+\xrightarrow{\Delta}
+\xrightarrow[\text{催化剂}]{\text{高温}}
+\overset{\Delta}{=}
+\xlongequal{\Delta}
+\xlongequal[\text{催化剂}]{\text{高温}}
+\xlongrightarrow{a}
+\xlongleftarrow{a}
+\xlongleftrightarrow{a}
+\xrightleftharpoons{a}
+\rightleftharpoons
+\stackrel{点燃}{=\!=\!=}
+\stackrel{\text{点燃}}{=\!=\!=}
+\xlongequal{}
+速度 = \frac{路程}{时间}
+\text{速度}=\frac{\text{路程}}{\text{时间}}
+\mathrm{速度}
+\mbox{速度}
+\hbox{速度}
+\fbox{速度}
+\boxed{x=1}
+\colorbox{yellow}{x}
+\textcolor{red}{x}
+\color{red}x
+{\color{red} x}
+\underbrace{a+b}_{c}
+\overbrace{a+b}^{c}
+\cancel{x}
+\bcancel{x}
+\xcancel{x}
+\sout{x}
+\phantom{x}
+\smash{x}
+\raisebox{1em}{x}
+\rule{1em}{1em}
+x=1\tag{1}
+x=1\tag*{(1)}
+x=1\label{eq1}
+\ref{eq1}
+\eqref{eq1}
+x=1\nonumber
+x=1\notag
+x=1\qquad\text{①}
+x=1\quad①
+\textcircled{1}
+\textcircled{\small 1}
+\circled{1}
+\ding{172}
+\checkmark
+\times
+\cross
+\#\&\_\{\}\|
+\backslash
+\textbackslash
+\lbrace x\rbrace
+\langle x\rangle
+\lvert x\rvert
+\lVert x\rVert
+\lceil x\rceil\lfloor x\rfloor
+\left\{ x \right.
+\left. f \right|_{x=0}
+\Big|\bigg(\Bigg[
+\left( \frac ab \middle| c \right)
+a\lt b\gt c
+a<b>c
+a\le b\ge c\leqslant d\geqslant e
+a &lt; b
+\dfrac12\tfrac12\cfrac12
+\genfrac{}{}{0pt}{}{a}{b}
+\sqrt[3]{x}
+\root 3 \of x
+\surd
+x^2^3
+x_1_2
+x'^2
+x^{\prime}
+f''(x)
+{}^{14}_{6}\mathrm{C}
+_6^{14}C
+^{14}C
+\lim\limits_{x\to0}
+\sum\limits_{i=1}^n
+\int\nolimits_a^b
+\displaystyle\sum
+\textstyle\scriptstyle
+\large x\Large x\small x\tiny x\normalsize x\huge x
+\bf x
+\rm d
+\it x
+\cal A
+\mathscr{A}\mathfrak{A}\mathcal{A}
+\mathbb{R}\R\N\Z\Q\C
+\empty\varnothing\emptyset\O
+\d x
+\dif x
+\dd x
+\dv{y}{x}
+\pdv{y}{x}
+\abs{x}
+\norm{x}
+\vb{F}
+\vu{F}
+\va{F}
+\grad f
+\curl F
+\ket{a}\bra{b}\braket{a|b}
+\expval{A}
+\eval{f}_0^1
+\qq{and}
+\mathrm{d}x
+\operatorname{sgn}x
+\operatorname*{arg\,max}_x
+\argmax
+\arg\max
+\DeclareMathOperator{\sgn}{sgn}\sgn x
+\newcommand{\RR}{\mathbb{R}}\RR
+\def\a{1}\a
+\require{cancel}\cancel{x}
+\require{mhchem}\ce{H2O}
+\bbox[yellow]{x}
+\enclose{circle}{1}
+\style{color:red}{x}
+\class{a}{x}
+\unicode{x2460}
+\char"2460
+①②③
+Ⅰ Ⅱ Ⅲ
+\mathrm{I}
+\Rmnum{1}
+\romannumeral 1
+\textsuperscript{2}
+\textsubscript{2}
+x\newline y
+a\\b
+a\\[2ex]b
+a\par b
+\hfill x
+\vspace{1em}x
+\bigskip x
+\centering x
+\noindent x
+\textbf{x}\textit{x}\textrm{x}\textsf{x}\texttt{x}\textup{x}\textnormal{x}\textsc{x}\emph{x}
+\underline{x}\overline{x}
+\widehat{ABC}\widetilde{x}
+\overleftarrow{AB}\overleftrightarrow{AB}\overrightarrow{AB}\vec{AB}
+\overrightharpoon{AB}
+\mathring{x}\acute{x}\grave{x}\breve{x}\check{x}\tilde{x}\hat{x}\bar{x}
+\dot{x}\ddot{x}\dddot{x}\ddddot{x}
+\hbar\ell\Re\Im\aleph\infty\partial\nabla
+\iint\iiint\oint\oiint\oiiint
+\prod\coprod\bigcup\bigcap\bigoplus
+\max\min\sup\inf\log_2\ln\lg\exp\sin\arcsin\sinh\det\gcd
+\lcm(a,b)
+\arccot x\arcsec x\arccsc x\sech x\csch x
+\tg x\ctg x\cth x\sh x\ch x\th x
+\sgn x
+\rank A
+\tr A
+\diag A
+\Var X
+\Cov(X,Y)
+\E X
+\P(A)
+\Pr(A)
+a\mod b
+a\bmod b
+a\pmod b
+\binom nk\tbinom nk\dbinom nk
+n\choose k
+a\over b
+a\atop b
+\substack{a\\b}
+\overset{a}{b}\underset{a}{b}
+\overset{\frown}{AB}
+\overarc{AB}
+\wideparen{AB}
+\widearc{AB}
+\arc{AB}
+\parallelogram ABCD
+\Box ABCD
+\square\blacksquare\Diamond\lozenge
+\odot O
+\triangle ABC\angle A\measuredangle A\sphericalangle A
+\parallel\nparallel\perp
+\sim\simeq\cong\approx\equiv\propto
+\backsim
+\because\therefore
+\Rightarrow\implies\iff\Leftrightarrow\mapsto\to\gets
+\notin\not\subset\subsetneqq\subsetneq\nsubseteq\complement
+\complement_U A
+\land\lor\lnot\neg\forall\exists\nexists\in\ni
+\ne\neq\ll\gg\pm\mp\div\cdot\ast\star\circ\bullet\oplus\otimes
+\cdots\ldots\dots\vdots\ddots\dotsc\dotsb
+\mathellipsis
+\varDelta\varGamma\varOmega
+\Delta H
+\mathrm{\Delta}H
+\triangle H
+\epsilon\varepsilon\phi\varphi\theta\vartheta\rho\varrho\kappa\varkappa
+\Alpha\Beta\Epsilon\Zeta\Eta\Iota\Kappa\Mu\Nu\Omicron\Rho\Tau\Chi\omicron
+\bm{F}\boldsymbol{F}\mathbf{F}\pmb{F}\mathit{F}\mathsf{F}\mathtt{F}\mathnormal{F}
+\boldmath F
+\mathbold{F}
+\bold{F}
+\vec{\mathbf{F}}
+\overrightarrow{F}
+\begin{cases}x=1\\y=2\end{cases}
+\begin{aligned}a&=b\\c&=d\end{aligned}
+\begin{align}a&=b\\c&=d\end{align}
+\begin{align*}a&=b\\c&=d\end{align*}
+\begin{equation}a=b\end{equation}
+\begin{equation*}a=b\end{equation*}
+\begin{gather}a=b\\c=d\end{gather}
+\begin{gathered}a=b\\c=d\end{gathered}
+\begin{split}a&=b\\c&=d\end{split}
+\begin{multline}a=b\\c=d\end{multline}
+\begin{eqnarray}a&=&b\\c&=&d\end{eqnarray}
+\begin{eqnarray*}a&=&b\end{eqnarray*}
+\begin{alignat}{2}a&=b&c&=d\end{alignat}
+\begin{array}{c|c}a&b\\\hline c&d\end{array}
+\begin{array}{\|c\|c\|}a&b\end{array}
+\begin{array}{ll}a&b\\\cline{1-2} c&d\end{array}
+\begin{array}{c}\multicolumn{1}{c}{a}\end{array}
+\begin{tabular}{c|c}a&b\\\hline c&d\end{tabular}
+\begin{matrix}a&b\\c&d\end{matrix}
+\begin{pmatrix}a&b\\c&d\end{pmatrix}
+\begin{bmatrix}a&b\\c&d\end{bmatrix}
+\begin{vmatrix}a&b\\c&d\end{vmatrix}
+\begin{Vmatrix}a&b\\c&d\end{Vmatrix}
+\begin{Bmatrix}a&b\\c&d\end{Bmatrix}
+\begin{smallmatrix}a&b\\c&d\end{smallmatrix}
+\begin{rcases}a\\b\end{rcases}
+\begin{dcases}a\\b\end{dcases}
+\begin{subarray}{c}a\\b\end{subarray}
+\begin{CD}A @>a>> B\end{CD}
+\begin{center}a\end{center}
+\begin{enumerate}\item a\end{enumerate}
+\begin{itemize}\item a\end{itemize}
+\left\{\begin{array}{l}x=1\\y=2\end{array}\right.
+\left\{\begin{aligned}x&=1\\y&=2\end{aligned}\right.
+a=b \\ c=d
+a&=b
+a = b \quad (x > 0)
+（x+1）
+x，y
+x＋y＝z
+x×y÷z
+x≤y≥z≠w
+π α β θ
+x²+y³
+√2
+∠A=90°
+△ABC
+AB⊥CD，AB∥CD
+∵a ∴b
+a·b
+a→b
+a⇌b
+A∩B∪C
+x∈A
+∞
+½
+m/s²
+1.5×10³
+−5
+5–3
+“x”
+x‘
+x…y
+x％
+x～y
+x﹣y
+x﹢y
+x∶y
+x：y
+x﹤y﹥z
+x⩽y⩾z
+a∽b
+a≌b
+a≈b
+⊙O
+▱ABCD
+⌒
+\overset{⌒}{AB}
+\text{⌒}
+∁_U A
+ℝ ℕ ℤ
+x̄
+ΔH
+Ω
+μ
+℉
+㎝ ㎡ ㎏
+\text{m/s}^2
+\mathrm{m\cdot s^{-1}}
+\text{kg·m}
+3\ \text{N}
+3~\mathrm{N}
+3\text{ N}
+\mathrm{kW\cdot h}
+\text{J/(kg·℃)}
+\mathrm{J/(kg\cdot{}^\circ C)}
+\mathrm{J/(kg\cdot^\circ C)}
+\mathrm{J/(kg\cdot ℃)}
+4.2\times10^3\,\mathrm{J/(kg\cdot\!^\circ C)}
+k\,\mathrm{min}^{-1}
+T-25\,^\circ\!\mathrm{C}
+20\,{}^{\circ}\mathrm{C}
+20^{\circ}C
+20^\circ
+20^o
+20^{o}C
+20^{\text{o}}
+\frac{dT}{dt}=-k(T-T_0)
+\frac{\mathrm dT}{\mathrm dt}
+\left|\frac{dT_1}{dt}\right|:\left|\frac{dT_2}{dt}\right|=2:1
+x \in [0, 1)
+\{x\mid x>0\}
+\{x|x>0\}
+\{x:x>0\}
+\vert x\vert
+|x|
+\|x\|
+a\!\!\!/
+\not=
+\not\equiv
+a\quad b\qquad c\,d\;e\:f\!g\ h~i
+\hspace{1em}
+\hspace*{1em}
+\hskip1em
+\mspace{3mu}
+\phantom{-}1
+\vphantom{\frac12}
+\hphantom{x}
+\mathstrut
+\strut
+\limits
+\nolimits
+x\limits_1
+\tiny
+\,
+\;
+~
+\\
+\ 
+{}
+\frac{1}{2
+\frac{1}{2}}
+\left( x
+x \right)
+\begin{aligned} a&=b
+\end{aligned}
+x^
+x_
+x^{}
+\sqrt{}
+\frac{}{}
+\text{}
+\text{a_b}
+\text{50%}
+\text{a & b}
+\text{a # b}
+\text{x^2}
+\text{$x$}
+\text{\$5}
+\text{~}
+\text{a\\b}
+\mathrm{a b}
+\mathrm{a\ b}
+50%
+a # b
+a & b
+a ~ b
+a \& b
+\\frac{1}{2}
+\\times
+x \\cdot y
+\\text{m}
+\\,
+a\;b
+25\\,^\\circ\\mathrm{C}
+\\begin{cases}x=1\\\\y=2\\end{cases}
+\ lpha
+	imes
+rac{1}{2}
+eta
+\Omega\;^{-1}
+10\,^{-3}
+\mathrm{mol}\,\mathrm{L}^{-1}
+\mathrm{mol\cdot L^{-1}}
+\mathrm{mol}\cdot\mathrm{L}\,^{-1}
+\mathrm{H}\,^{+}
+\mathrm{H}^{+}
+c(\mathrm{H^+})
+\mathrm{pH}
+K_\mathrm{sp}
+K_{sp}
+E_\text{k}
+E_k
+v_0t+\frac12at^2
+\vec a\cdot\vec b
+\overrightarrow{AB}\cdot\overrightarrow{AC}
+\boldsymbol{a}\cdot\boldsymbol{b}
+\mathbf{a}\times\mathbf{b}
+C_n^k
+\mathrm{C}_n^k
+A_n^k
+\mathrm{A}_n^m
+P(A|B)
+P(A\mid B)
+\bar{x}
+\overline{AB}
+\hat{y}=\hat{b}x+\hat{a}
+\sigma^2
+\chi^2
+N(\mu,\sigma^2)
+X\sim B(n,p)
+\complement_{\mathbb R}A
+\log_a^b
+\log_{a}{b}
+\lg 2
+\ln e
+\mathrm{e}^x
+e^{i\pi}
+\sin^2x+\cos^2x=1
+\tan^{-1}x
+\int_0^1 x\,dx
+\int_0^1 x\,\mathrm{d}x
+\left.\frac{x^2}{2}\right|_0^1
+\Big|_0^1
+\lim_{x\to\infty}
+\lim_{n\rightarrow+\infty}
+\sum_{k=1}^{n}k
+\prod_{i=1}^n
+f:A\to B
+f\colon A\to B
+a\equiv b\pmod{m}
+a\mid b
+a\nmid b
+a\divides b
+\gcd(a,b)
+\lfloor x\rfloor
+[x]
+\{x\}
+n!
+\binom{n}{k}
+\frac{n!}{k!(n-k)!}
+a_{n+1}
+a_n+1
+S_{\triangle ABC}
+S_{△ABC}
+\angle ABC=90^\circ
+\angle ABC=90°
+\widehat{AB}
+\overset{\LARGE{\frown}}{AB}
+\stackrel\frown{AB}
+\overparen{AB}
+\underparen{AB}
+\parallel
+AB\mathrel{/\!/}CD
+AB//CD
+AB\mathrel{\rlap{\,/}{=}}CD
+\underline{\parallel}
+\equalparallel
+\xlongequal{\quad}
+\stackrel{\text{def}}{=}
+\triangleq
+\coloneqq
+:=
+\doteq
+\fallingdotseq
+\risingdotseq
+\thickapprox
+\approxeq
+\nless\ngtr\nleq\ngeq
+\lessgtr\gtrless
+\varpropto
+\Longrightarrow\Longleftrightarrow\longmapsto\hookrightarrow
+\nRightarrow\nLeftarrow\nLeftrightarrow
+\uparrow\downarrow\updownarrow\Uparrow\Downarrow
+\nearrow\searrow\swarrow\nwarrow
+\leftrightarrows\rightleftarrows
+\leftrightharpoons
+\rightharpoonup\leftharpoondown
+\circlearrowleft\circlearrowright
+\curvearrowleft\curvearrowright
+\bigstar\spadesuit\heartsuit\diamondsuit\clubsuit
+\flat\natural\sharp
+\dagger\ddagger\S\P\copyright
+\textregistered
+\degree
+\celsius
+\textmu
+\mho
+\hslash
+\eth
+\Bbbk
+\Finv\Game
+\beth\gimel\daleth
+\wp
+\imath\jmath
+\ell
+\top\bot
+\vdash\dashv\models
+\vDash
+\owns
+\smallsetminus\setminus
+\triangleleft\triangleright
+\bigtriangleup\bigtriangledown
+\blacktriangle\blacktriangledown\blacktriangleleft\blacktriangleright
+\vartriangle\triangledown
+\wr\amalg\uplus\sqcup\sqcap
+\bigsqcup\biguplus\bigvee\bigwedge\bigodot\bigotimes
+\varlimsup\varliminf\varinjlim\varprojlim
+\injlim\projlim
+\liminf\limsup
+\Biggl(\Biggr)
+\bigl(\bigr)\bigm|
+\lgroup\rgroup\lmoustache\rmoustache
+\ulcorner\urcorner\llcorner\lrcorner
+\llbracket x\rrbracket
+\lBrace x\rBrace
+\mathclap{x}\mathllap{x}\mathrlap{x}
+\rlap{x}\llap{x}\clap{x}
+\tooltip{x}{y}
+\verb|x|
+\mathchoice{a}{b}{c}{d}
+\pmatrix{a&b\cr c&d}
+\matrix{a&b\cr c&d}
+\cases{a&b\cr c&d}
+\eqalign{a&=b\cr c&=d}
+\displaylines{a\cr b}
+\frac{a}{b}\limits
+\mathop{x}\limits^a
+\mathbin{+}\mathrel{=}\mathord{x}\mathopen{(}\mathclose{)}\mathpunct{,}\mathinner{x}
+\textstyle\sum
+\scriptscriptstyle x
+\underbar{x}
+\overbar{x}
+\underrightarrow{x}\underleftarrow{x}\underleftrightarrow{x}
+\overlinesegment{AB}\underlinesegment{AB}
+\overgroup{AB}\undergroup{AB}
+\utilde{AB}
+\xleftarrow{a}\xLeftarrow{a}\xRightarrow{a}\xleftrightarrow{a}\xLeftrightarrow{a}\xhookrightarrow{a}\xmapsto{a}\xtwoheadrightarrow{a}\xrightharpoonup{a}\xtofrom{a}
+\xlongequal{a}
+\longequal
+=\joinrel=
+=\mathrel{\mkern-3mu}=
+\Longleftarrow
+\leadsto
+\rightsquigarrow
+\dashrightarrow
+\twoheadrightarrow
+\multimap
+\pitchfork
+\between
+\Subset\Supset\sqsubset\sqsupset\sqsubseteq
+\preceq\succeq\prec\succ
+\lhd\rhd\unlhd\unrhd
+\Join\bowtie
+\ltimes\rtimes
+\intercal
+\diagup\diagdown
+\maltese
+\yen\checkmark\circledR\circledS
+\Bbb R
+\mathbbm{1}
+\mathds{1}
+\mathbb{1}
+\mathbb{k}
+\mathcal{l}
+\textbb{R}
+\frak{A}
+\oldstyle 1
+\mit x
+\sf x\tt x
+\sl x
+\sc x
+\em x
+\textdollar\textunderscore\textbar\textasciitilde\textasciicircum\textless\textgreater\textbraceleft\textendash\textemdash\textquoteleft\textquotedblleft\textellipsis\textbullet\textdagger
+\text{\textdegree C}
+\text{\degree C}
+\text{$^\circ$C}
+\text{^\circ C}
+\textdegree\text{C}
+{}^{\circ}\mkern-1mu\mathrm{C}
+^\circ\!C
+\,^\circ\!\mathrm C
+\;\!^\circ
+\,\!^\circ
+\,\,^\circ
+\quad\,^2
+\,\mathrm{^{\circ}C}
+\,\prime
+x\,'
+x\;'
+x\,^\prime
