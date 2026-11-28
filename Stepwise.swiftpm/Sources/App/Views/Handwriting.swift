@@ -78,6 +78,8 @@ final class PadCanvasView: PKCanvasView {
     var pendingDrawing: PKDrawing?
     /// 正在重新放入笔迹（不是用户在写），这时的变化不算
     private(set) var isRefreshing = false
+    /// 最后挂上来的是哪一份笔迹（见 HandwritingModel.attach）
+    weak var inkOwner: AnyObject?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -286,6 +288,39 @@ final class PadCanvasView: PKCanvasView {
             self.isRefreshing = false
         }
     }
+
+    /// 擦掉画布上的全部笔迹（擦掉全部、清空重做）。
+    ///
+    /// 直接把笔迹换成空的，真机上 PencilKit 有时不重画：擦掉的字还留在屏幕上，等下一笔落下才一起消失。
+    /// 先拿掉垫着的截图（里面还有擦掉的字）和等着做的换笔迹，换成空的，过一会儿再逼它重画一遍。
+    /// 空的笔迹再换成空的 PencilKit 可能当成没变：中间先放一笔看不见的，保证它真的重画
+    func eraseAll() {
+        // 等着做的换笔迹（整理笔锋、放回恢复的笔迹……）都是对着擦掉之前的字的，做了会把擦掉的字放回来
+        deferredWork = []
+        removeRedrawCover()
+        pendingDrawing = nil
+        isRefreshing = true
+        paperDrawing = PKDrawing()
+        isRefreshing = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.whenIdle { [weak self] in
+                guard let self, self.pendingDrawing == nil, self.drawing.strokes.isEmpty else { return }
+                self.removeRedrawCover()
+                self.isRefreshing = true
+                self.drawing = Self.invisibleDot
+                self.drawing = PKDrawing()
+                self.isRefreshing = false
+            }
+        }
+    }
+
+    /// 一笔看不见的点：只用来让 PencilKit 觉得笔迹变了
+    private static let invisibleDot: PKDrawing = {
+        let point = PKStrokePoint(location: CGPoint(x: 1, y: 1), timeOffset: 0, size: CGSize(width: 1, height: 1),
+                                  opacity: 0, force: 1, azimuth: 0, altitude: .pi / 2)
+        let stroke = PKStroke(ink: PKInk(.pen, color: .clear), path: PKStrokePath(controlPoints: [point], creationDate: Date()))
+        return PKDrawing(strokes: [stroke])
+    }()
 
     // MARK: 收起、拉出栏时垫一张截图
     //
@@ -1012,6 +1047,9 @@ final class HandwritingModel: ObservableObject {
     var strokeCount: Int { drawing.strokes.count }
     /// 当前显示在屏幕上的画布
     weak var canvas: PadCanvasView?
+    /// 挂过这份笔迹的所有画布。SwiftUI 重建视图时，旧画布可能还在屏幕上留一会儿，同时有两块画布挂着同一份笔迹：
+    /// 擦掉全部只擦 canvas 那一块的话，另一块上的字还在，在它上面再写一笔，擦掉的字就跟着回来了
+    private let attachedCanvases = NSHashTable<PadCanvasView>.weakObjects()
 
     /// 笔迹属于哪道题；为 nil 时不保存
     private let questionID: UUID?
@@ -1039,6 +1077,8 @@ final class HandwritingModel: ObservableObject {
     /// 新建或重建画布时调用：放入笔迹、应用当前工具
     func attach(_ canvas: PadCanvasView) {
         self.canvas = canvas
+        canvas.inkOwner = self
+        attachedCanvases.add(canvas)
         tools.eraserRelay.register(self)
         // 没有要恢复的笔迹就不用等画布排好版
         canvas.pendingDrawing = drawing.strokes.isEmpty ? nil : drawing
@@ -1217,13 +1257,20 @@ final class HandwritingModel: ObservableObject {
         }
     }
 
+    /// 擦掉全部笔迹。马上擦，不等“抬笔”：按钮在画布外面，这时不会正在写；
+    /// 等抬笔的话，万一画布以为还有手指按着，就要等下一笔写完才擦掉。
+    /// 手写区保持现在的长度：缩回最短的话，PencilKit 换笔迹的同时画布在变小，
+    /// 真机上它重画到一半就停下（擦掉的字留在屏幕上，下一笔落下才消失）；接着往下写又马上自动加长回去
     func clear() {
+        pendingHeight = nil
         drawing = PKDrawing()
         storedDrawing = nil
-        canvas?.pendingDrawing = nil
-        canvas?.paperDrawing = PKDrawing()
-        isEmpty = true
-        height = Self.minHeight
+        if !isEmpty { isEmpty = true }
+        // 挂着这份笔迹的画布都擦掉（SwiftUI 重建视图时旧画布可能还在屏幕上）
+        canvas?.eraseAll()
+        for other in attachedCanvases.allObjects where other !== canvas && other.inkOwner === self {
+            other.eraseAll()
+        }
         saveNow()
     }
 
