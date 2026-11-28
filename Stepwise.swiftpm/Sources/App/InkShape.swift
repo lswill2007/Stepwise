@@ -113,9 +113,11 @@ extension InkShape {
     }
 
     /// 一步跨出去至少这么远才可能是飞线
-    static let spikeMinJump: CGFloat = 80
-    /// 手写不出这么快的一步（每秒多少 pt；约每秒两米多，Apple Pencil 每秒报 240 个点，正常写字相邻两点只隔几 pt）
-    static let spikeMinSpeed: CGFloat = 12_000
+    static let spikeMinJump: CGFloat = 120
+    /// 手写不出这么快的一步（每秒多少 pt；约每秒六米。见过的飞线是十万以上；甩得再快的一笔也就每秒两三米）
+    static let spikeMinSpeed: CGFloat = 25_000
+    /// 两个点的时间一样、算不出快慢时，要跨得更远才算
+    static let spikeMinJumpUntimed: CGFloat = 240
     /// 飞出去的那一头最多几个点
     static let spikeMaxPoints = 3
 
@@ -126,9 +128,12 @@ extension InkShape {
     /// 笔画的其余部分都在另一头正常地写着（或者跨出去马上又跨回来）。很快地划一条长线不会被认成飞线：
     /// 那样每一步都差不多长，不是只有孤零零的一步。
     ///
-    /// 返回要留下的点的下标；没有飞线返回 nil；整笔留不下东西（就是一条飞线）返回空数组
+    /// 宁可留着一条飞线，也不能动写对了的笔画：整笔绝不删掉，去掉飞出去的点以后剩不下一笔像样的（不到两个点），
+    /// 或者这一笔本来就只有两三个点（很快地划一条直线，PencilKit 只留两三个点，和飞线分不出来），都原样留着。
+    ///
+    /// 返回要留下的点的下标；没有飞线（或者拿不准）返回 nil
     static func withoutSpikes(_ points: [Sample]) -> [Int]? {
-        guard points.count >= 2 else { return nil }
+        guard points.count >= 4 else { return nil }
         var keep = Array(points.indices)
         var changed = false
         // 一次去掉一处，去掉以后再从头看；一笔里最多也就两三处
@@ -137,8 +142,8 @@ extension InkShape {
             keep.removeSubrange(cut)
             changed = true
         }
-        guard changed else { return nil }
-        return keep.count >= 2 ? keep : []
+        guard changed, keep.count >= 2 else { return nil }
+        return keep
     }
 
     /// 找一处飞线：返回要去掉的那几个点
@@ -150,7 +155,7 @@ extension InkShape {
             let l = length(i)
             guard l >= spikeMinJump else { return false }
             let dt = CGFloat(p[i + 1].time - p[i].time)
-            return dt <= 0 || l / dt >= spikeMinSpeed
+            return dt > 0 ? l / dt >= spikeMinSpeed : l >= spikeMinJumpUntimed
         }
         /// 这几个点挤在一起（相对跨出去的那一步来说）
         func compact(_ range: ClosedRange<Int>, against jump: CGFloat) -> Bool {

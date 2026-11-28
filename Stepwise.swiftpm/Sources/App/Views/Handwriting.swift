@@ -28,6 +28,49 @@ extension DrawingStore {
     }
 }
 
+/// 不让“随手写”在手写的地方开始。
+///
+/// 打开了“随手写”时，笔落下的地方附近有输入框（手写区下面的打字框、提问框；输入框正聚焦着时范围更大），
+/// 系统会把这一笔当成往输入框里写字拿走：纸上这一笔就没了，看起来像断触、写几笔少一笔。
+/// 系统落笔前会问落笔处的视图（连同它的各层父视图）让不让开始，这里一律说不让
+final class ScribbleBlocker: NSObject, UIScribbleInteractionDelegate {
+    static let shared = ScribbleBlocker()
+
+    func scribbleInteraction(_ interaction: UIScribbleInteraction, shouldBeginAt location: CGPoint) -> Bool { false }
+}
+
+extension UIView {
+    /// 笔落在这个视图上时，不当成“随手写”。系统只问落笔时真正命中的那一层视图，不看它的父视图：
+    /// 要连里面的每一层都挂上（blockScribbleInSubtree），或者在 hitTest 里给命中的那一层挂上
+    func blockScribble() {
+        guard !interactions.contains(where: { $0 is UIScribbleInteraction }) else { return }
+        addInteraction(UIScribbleInteraction(delegate: ScribbleBlocker.shared))
+    }
+
+    /// 这个视图连同里面的每一层都不让“随手写”开始
+    func blockScribbleInSubtree() {
+        blockScribble()
+        subviews.forEach { $0.blockScribbleInSubtree() }
+    }
+}
+
+/// 能手写的那些视图（画布，和笔记涂鸦层挂书写手势的文字视图）。别的全窗口手势用它认出“这一下是在写字”，不去碰
+enum InkSurfaces {
+    private static let views = NSHashTable<UIView>.weakObjects()
+
+    static func add(_ view: UIView) { views.add(view) }
+
+    /// 这个视图在手写的地方里面
+    static func contains(_ view: UIView?) -> Bool {
+        var current = view
+        while let v = current {
+            if v is PKCanvasView || views.contains(v) { return true }
+            current = v.superview
+        }
+        return false
+    }
+}
+
 /// 框选后画布会成为第一响应者（用于剪切 / 拷贝 / 撤销），这里阻止它顺带弹出键盘
 final class PadCanvasView: PKCanvasView {
     private let noKeyboard = UIView(frame: .zero)
@@ -38,6 +81,7 @@ final class PadCanvasView: PKCanvasView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        blockScribble()
         observePageMoves()
         // 每一笔写完时，把写的时候推迟的换笔迹补上
         drawingGestureRecognizer.addTarget(self, action: #selector(strokeGestureChanged(_:)))
@@ -46,6 +90,7 @@ final class PadCanvasView: PKCanvasView {
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+        blockScribble()
         observePageMoves()
         drawingGestureRecognizer.addTarget(self, action: #selector(strokeGestureChanged(_:)))
         drawingGestureRecognizer.addTarget(self, action: #selector(trackAskOutline(_:)))
@@ -148,13 +193,27 @@ final class PadCanvasView: PKCanvasView {
 
     /// 书写手势挂在哪个视图上（笔记的涂鸦层挂在下面的文字上），看触摸的也挂在那里
     private func syncTouchWatcher() {
-        guard let target = drawingGestureRecognizer.view, touchWatcher.view !== target else { return }
+        guard let target = drawingGestureRecognizer.view else { return }
+        // 笔记的涂鸦层：笔落在下面的文字上，那里（连同里面每一层）也不让“随手写”开始
+        if !target.isDescendant(of: self) {
+            target.blockScribbleInSubtree()
+            InkSurfaces.add(target)
+        }
+        guard touchWatcher.view !== target else { return }
         target.addGestureRecognizer(touchWatcher)
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
         syncTouchWatcher()
+        blockScribbleInSubtree()
+    }
+
+    /// 系统决定这一笔归不归“随手写”时，会先做一次命中测试，只问命中的那一层视图：命中的是谁就给谁挂上“不让”
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        hit?.blockScribble()
+        return hit
     }
 
     // MARK: 写字时手掌、别的手指不滚动、不缩放画布
@@ -171,6 +230,8 @@ final class PadCanvasView: PKCanvasView {
     }
 
     private func pencilTouchedDown() {
+        // 开始手写了：之前要过屏幕键盘的输入框不再跟着每一笔去要键盘（那会在写字时动输入框和键盘）
+        KeyboardSummon.writingBegan()
         for gesture in [panGestureRecognizer, pinchGestureRecognizer].compactMap({ $0 })
         where gesture.state == .began || gesture.state == .changed {
             // 关掉再打开会取消正在进行的手势

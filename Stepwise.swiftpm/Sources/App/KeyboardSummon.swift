@@ -82,14 +82,18 @@ enum KeyboardSummon {
     /// 让这个输入框弹出屏幕键盘
     static func summon(_ input: UIView) {
         start()
-        wanted = input
         rescues = 0
         expectKeyboard()
         if !input.isFirstResponder {
             input.becomeFirstResponder()
         } else if !keyboardVisible {
-            input.reloadInputViews()
+            // 这次输入是用笔点开的，系统一直记着“这个输入框在用笔写”：光改回来不够，
+            // 结束这次输入、马上重新开始一次（两步紧挨着，界面还没来得及当成“不输入了”）
+            input.resignFirstResponder()
+            expectKeyboard()
+            input.becomeFirstResponder()
         }
+        wanted = input
         ensure(input)
     }
 
@@ -117,6 +121,12 @@ enum KeyboardSummon {
             input.reloadInputViews()
             if tries > 1 { ensure(input, tries: tries - 1) }
         }
+    }
+
+    /// 笔落在手写的地方开始写字了：不再替之前的输入框要键盘，写字的时候不动输入框和键盘
+    static func writingBegan() {
+        wanted = nil
+        adoptNextUntil = .distantPast
     }
 
     /// 笔碰了一下屏幕（点别的按钮、挪光标）：要了键盘的输入框还在输入，就别让键盘缩回去
@@ -209,6 +219,11 @@ private final class SummonTap: UITapGestureRecognizer, UIGestureRecognizerDelega
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
+    /// 落在手写的地方的笔和手指一概不看：写字的每一笔都和这个手势无关
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        !InkSurfaces.contains(touch.view)
+    }
+
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesEnded(touches, with: event)
         if touches.contains(where: { $0.type == .pencil }) {
@@ -221,5 +236,6 @@ private final class SummonTap: UITapGestureRecognizer, UIGestureRecognizerDelega
 enum KeyboardSummon {
     static func summonNextFocus() {}
     static func summonCurrentIfHeldBack() -> Bool { false }
+    static func writingBegan() {}
 }
 #endif
